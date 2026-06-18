@@ -4,8 +4,8 @@ Status: 🔬 study / feasibility. Next phase of the autotuner: reuse the SITL
 tuning method to tune a **real** flight controller held in a physical test rig,
 driven over the live GCS link. Builds on the autotune stack
 (`software/src/autotune/`), the source state machine
-([gcs-source-state-machine.md](gcs-source-state-machine.md)), and the
-[time-sync](../../../docs/telemetry/time_sync.md) work.
+([gcs-source-state-machine.md](../journal/shipped/gcs-source-state-machine.md)), and the
+[time-sync](../../../navlink/docs/reference/messages/time_sync.md) work.
 
 ## Context & goal
 

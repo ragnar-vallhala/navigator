@@ -15,10 +15,10 @@ Five sections:
 5. **Maintenance rules** — how this doc stays honest.
 
 Cross-references:
-- [`docs/in-app-sim.md`](../../docs/in-app-sim.md) — the embedded SITL design.
-- [`docs/telemetry/`](../../docs/telemetry/) — wire format authority.
-- [`docs/coordinate_ref.md`](../../docs/coordinate_ref.md) — NED conventions.
-- [`roadmap/`](roadmap/) — forward-looking GCS feature designs.
+- [`journal/changelog/gcs-in-app-simulator-and-world-collision.md`](../journal/changelog/gcs-in-app-simulator-and-world-collision.md) — the embedded SITL design (`vsim_d` daemon).
+- [`navlink/docs/reference/messages/`](../../../navlink/docs/reference/messages/) — wire format authority.
+- [`docs/reference/coordinate_ref.md`](../../../docs/reference/coordinate_ref.md) — NED conventions.
+- [`journal/shipped/`](../journal/shipped/) — design records of shipped GCS features.
 
 ---
 
@@ -151,7 +151,7 @@ GCS → drone is the weak side.
 | FR-UI-16  | Settings            | 🟡     | Sync period + graph window + dropout. Missing: theme, units, port profile |
 | FR-UI-17  | Parameter editor    | ❌     | Blocks on FR-TX-05                                        |
 | FR-UI-18  | Mission planner / map| ❌    | Blocks on FR-TX-06                                        |
-| FR-UI-19  | Log replay          | ✅     | Session-wide **read-only** replay UI: a crop/loop scrubber (`ReplayBar`) driven by a global replay `SessionMode` (`SessionState` read-only authority). Open via File ▸ Open Log. See FR-LOG-05 and [`roadmap/gcs-log-replay.md`](roadmap/gcs-log-replay.md). |
+| FR-UI-19  | Log replay          | ✅     | Session-wide **read-only** replay UI: a crop/loop scrubber (`ReplayBar`) gated by the `SourceController` FSM (the read-only / source authority). Open via File ▸ Open Log. See FR-LOG-05 and [`gcs-log-replay.md`](../journal/shipped/gcs-log-replay.md). |
 
 ### 2.5 Connection layer
 
@@ -167,7 +167,7 @@ GCS → drone is the weak side.
 
 ### 2.6 Embedded SITL (`vsim/` + `SimulatorWidget` + `vsim_d`)
 
-Design doc: `docs/in-app-sim.md`. Wire protocol: `tools/vsim/include/vsim_proto.h`.
+Design record: `docs/changelog/gcs-in-app-simulator-and-world-collision.md`. Wire protocol: `tools/vsim/include/vsim_proto.h`.
 Navigator-side code: `src/vsim/`, `src/ui/widgets/SimulatorWidget.{h,cpp}`.
 Physics daemon: `tools/vsim/` (builds the standalone `vsim_d` binary).
 
@@ -189,11 +189,11 @@ physics; it spawns/supervises `vsim_d` and decodes pose frames.
 | FR-SIM-05| Pose snapshot rendered live (OpenGL)                                     | ✅     |
 | FR-SIM-06| Per-run raw UART byte log to `logs/sim-<ts>.bin`                         | ✅     |
 | FR-SIM-07| Hot reset of physics / firmware state between runs                       | 🟡🔥  | Physics resets via `VSIM_CTL_RESET` (`SimWorker::sendReset`); firmware state still can't (`vayu_sitl_start` one-shot — Navigator restart needed) |
-| FR-SIM-08| Wind / external-force injection                                          | ❌     |
+| FR-SIM-08| Wind / external-force injection                                          | ✅     | World-frame wind field (steady + gust + turbulence) felt as relative-velocity drag. `wind_model.h`, pushed via `VSIM_CTL_SET_WIND` (`SimWorker::sendWind`), edited from the World tab (`WorldEditorWidget::windApplied`). Design: [`01-wind-turbulence.md`](../../../tools/vsim/docs/plans/sim-fidelity/01-wind-turbulence.md). |
 | FR-SIM-09| Ground-contact model (tipping, friction)                                 | ❌     | Intentional: hard clamp only (`tools/vsim/src/physics_core.cpp`) |
 | FR-SIM-10| FIFO transport to the standalone firmware binary                         | ✅     | `vsim_d` FIFOs are the only transport; the standalone `vayu_sitl` binary attaches to the same `/tmp/vsim_{pwm,imu}` paths |
-| FR-SIM-11| Mesh-derived mass properties + motor-mapping editor                      | ✅     | Import STL/glTF (assimp) → full 3×3 inertia tensor via `MassProperties` (closed-polyhedron integral); 4-motor position/axis/spin/coeff editor (`GeometryEditorWidget`) with interactive Blender-style 3D gizmos (click-select, G/R + X/Y/Z, sim-stopped only); pushed to `vsim_d` over `VSIM_CTL_SET_GEOMETRY`. Daemon integrates the full tensor (`Mat3` in `vsim_math.h`). All dynamics are about the CoM — the mesh is recentered and motor arms made CoM-relative GCS-side (`physicsConfig()`), so the model origin need not coincide with the CoM. Design: [`roadmap/sim-geometry-moi-motor-editor.md`](roadmap/sim-geometry-moi-motor-editor.md). |
-| FR-SIM-12| World/environment editable from UI                                       | ✅     | World tab: gravity (runtime), ground height, restitution, linear/angular drag. Pushed via `VSIM_CTL_SET_WORLD`; composes with geometry (disjoint `DroneParams` fields). `WorldEditorWidget`. Wind (FR-SIM-08) still ❌. |
+| FR-SIM-11| Mesh-derived mass properties + motor-mapping editor                      | ✅     | Import STL/glTF (assimp) → full 3×3 inertia tensor via `MassProperties` (closed-polyhedron integral); 4-motor position/axis/spin/coeff editor (`GeometryEditorWidget`) with interactive Blender-style 3D gizmos (click-select, G/R + X/Y/Z, sim-stopped only); pushed to `vsim_d` over `VSIM_CTL_SET_GEOMETRY`. Daemon integrates the full tensor (`Mat3` in `vsim_math.h`). All dynamics are about the CoM — the mesh is recentered and motor arms made CoM-relative GCS-side (`physicsConfig()`), so the model origin need not coincide with the CoM. Design: [`sim-geometry-moi-motor-editor.md`](../journal/shipped/sim-geometry-moi-motor-editor.md). |
+| FR-SIM-12| World/environment editable from UI                                       | ✅     | World tab: gravity (runtime), ground height, restitution, linear/angular drag. Pushed via `VSIM_CTL_SET_WORLD`; composes with geometry (disjoint `DroneParams` fields). `WorldEditorWidget`. Wind: see FR-SIM-08 (✅). |
 | FR-SIM-13| Blender-style simulator UI                                               | ✅     | `SimulatorWidget` is a Vehicle\|World mode bar + 3D viewport + categorized (collapsible, `CollapsibleSection`) properties panel. Vehicle = airframe config (locked while running); World = environment design + run controls. FPV telemetry HUD (`SimHudWidget`) overlays the viewport while running. |
 | FR-SIM-14| RC transmitter input (USB joystick)                                      | ✅     | `RcBridge` reads a USB RC TX (Linux `js0`, e.g. Artery PPM / FlySky-via-PPM dongle), maps axes→channels (roll/pitch/throttle/yaw/arm) and streams CSV µs frames over a pty that `$VAYU_UART_RC_PATH` points at, so the firmware RC feeder flies from the sticks. Toggle in World→Simulation; enable before first Start. |
 
@@ -217,7 +217,7 @@ physics; it spawns/supervises `vsim_d` and decodes pose frames.
 | FR-LOG-02 | Raw UART byte capture per SITL run                         | ✅     |
 | FR-LOG-03 | Persistent text log of all rx/tx with timestamps           | ✅     | `core/Logger.{h,cpp}`; tees from `LogPanel::appendLog` to `AppDataLocation/logs/navigator-YYYY-MM-DD.log` with 5 MB / 10-file rotation. |
 | FR-LOG-04 | CSV export of IMU / attitude / control-loop traces         | ✅     | `core/CsvExport`; per-widget "Export CSV" buttons on ImuPanel, ControlLoopPlot, MotorStatusWidget. Shared timestamp axis across all series. |
-| FR-LOG-05 | Replay a logged `.bin` through `DroneProtocol`             | ✅     | Widened to **whole-GCS** replay: every panel fed from the log via a `RecordSink` (record tee, gated by the `recordOnConnect` setting) + `ITelemetrySource` seam + `ReplaySource` (seekable playback clock). Pairs with FR-UI-19. Design: [`roadmap/gcs-log-replay.md`](roadmap/gcs-log-replay.md). |
+| FR-LOG-05 | Replay a logged `.bin` through `DroneProtocol`             | ✅     | Widened to **whole-GCS** replay: every panel fed from the log via a `RecordSink` (record tee, gated by the `recordOnConnect` setting) + `ITelemetrySource` seam + `ReplaySource` (seekable playback clock). Pairs with FR-UI-19. Design: [`gcs-log-replay.md`](../journal/shipped/gcs-log-replay.md). |
 
 ### 2.9 UX / styling
 
@@ -247,7 +247,7 @@ functionality made usable.
 | FR-UX-16  | Replace inline hex colours with named tokens                                 | ❌     | `#61AFEF`, `#98C379`, `#E06C75`, `#ABB2BF` recur ~50× across the codebase. Define once in the theme (`color.accent`, `color.ok`, `color.warn`, `color.danger`, `color.muted`). |
 | FR-UX-17  | LIVE blinker / heartbeat indicator readable at a glance                      | 🟡     | The exp-fade on `m_liveLabel` works but the "Diff: ±N ms" pill next to it is hard to scan. Consider a single combined widget with a coloured dot + signed delta. |
 | FR-UX-18  | Disable controls that depend on connection while disconnected                | ✅     | CalibrationWidget gated via `setConnected()` (sensor cards + Start disabled, footer reads "NOT CONNECTED"). Motor / Control-loop pages stay viewable as display-only. |
-| FR-UX-19  | Command registry + editable keyboard shortcuts                               | ✅     | Central command set (`core/CommandRegistry`, one `QAction` per command); VS Code-style searchable rebind table with conflict detection + persisted overrides (`ShortcutsManager`, `ShortcutsEditorDialog`). Generalises the FR-UX-08 `QShortcut`s. Design: [`roadmap/command-registry-and-shortcuts.md`](roadmap/command-registry-and-shortcuts.md). |
+| FR-UX-19  | Command registry + editable keyboard shortcuts                               | ✅     | Central command set (`core/CommandRegistry`, one `QAction` per command); VS Code-style searchable rebind table with conflict detection + persisted overrides (`ShortcutsManager`, `ShortcutsEditorDialog`). Generalises the FR-UX-08 `QShortcut`s. Design: [`command-registry-and-shortcuts.md`](../journal/shipped/command-registry-and-shortcuts.md). |
 | FR-UX-20  | Command palette (`Ctrl+Shift+P`)                                             | ✅     | Fuzzy runner over `CommandRegistry` (`CommandPalette`). Same roadmap doc. |
 | FR-UX-21  | Recent-views (MRU) switcher                                                  | ✅     | Firefox/VS Code-style hold-to-cycle over recently-viewed pages (`ViewHistory` + `RecentViewsOverlay`, `Ctrl+Tab`); depth setting `recentViewsCount`. IDE idiom, not a GCS convention — kept behind the registry. Same roadmap doc. |
 | FR-UX-22  | About dialog                                                                 | ✅     | Static `AboutDialog` — name / version / build / Qt + protocol / flight-stack components. |
@@ -256,7 +256,7 @@ functionality made usable.
 > **Note.** Unlike FR-UX-01–18 (the Phase-0 cleanup batch — *existing*
 > functionality made usable), FR-UX-19–23 are genuinely **new** affordances: a
 > command layer + help surface that supersede the ad-hoc `0l` shortcuts. Their
-> design lives in [`roadmap/command-registry-and-shortcuts.md`](roadmap/command-registry-and-shortcuts.md).
+> design lives in [`command-registry-and-shortcuts.md`](../journal/shipped/command-registry-and-shortcuts.md).
 
 ---
 
@@ -326,7 +326,7 @@ surface and breaks `MainWindow.cpp` apart before it hits 1500 LOC.
 | 1d| CSV export of telemetry traces (FR-LOG-04). **✅ shipped.**        | `core/CsvExport.{h,cpp}`; ImuPanel/ControlLoopPlot/MotorStatusWidget |
 | 1e| Sim parameter editor: mass, inertia, k_thrust, max_omega, noise (FR-SIM-03, -04). **🟡 mostly shipped** — mesh-derived mass/inertia + per-motor position/axis/spin/k_thrust/k_moment/max_omega land via `GeometryEditorWidget` (FR-SIM-11). Sensor-noise editing (FR-SIM-04) still pending. | `GeometryEditorWidget`, `MeshLoader`, `MassProperties` |
 | 1f| CRC32 lookup table (perf nit; only if profile shows it).          | `core/crc.cpp`                       |
-| 1g| **✅ Command layer** (FR-UX-19–23): command registry + editable shortcuts, palette, recent-views switcher, About/Docs. Pure GCS, no firmware; supersedes the `0l` `QShortcut`s. Design: [`roadmap/command-registry-and-shortcuts.md`](roadmap/command-registry-and-shortcuts.md). | `core/CommandRegistry`, `ShortcutsManager`, `ViewHistory`, `src/ui/widgets/{ShortcutsEditorDialog,CommandPalette,RecentViewsOverlay,AboutDialog}` |
+| 1g| **✅ Command layer** (FR-UX-19–23): command registry + editable shortcuts, palette, recent-views switcher, About/Docs. Pure GCS, no firmware; supersedes the `0l` `QShortcut`s. Design: [`command-registry-and-shortcuts.md`](../journal/shipped/command-registry-and-shortcuts.md). | `core/CommandRegistry`, `ShortcutsManager`, `ViewHistory`, `src/ui/widgets/{ShortcutsEditorDialog,CommandPalette,RecentViewsOverlay,AboutDialog}` |
 
 Exit criteria for Phase 1:
 
@@ -353,7 +353,7 @@ direction lands.
 |---|-------------------------------------------------------------------|--------------------------------------|
 | 2a| Mode switching (FR-TX-07).                                        | Blocks on firmware mode plumbing.    |
 | 2b| Sim wind / external force injection (FR-SIM-08).                  | Test surface for control hardening.  |
-| 2c| **✅ Log replay** (FR-LOG-05, FR-UI-19): **whole-GCS** read-only replay — every panel fed from the log via an `ITelemetrySource` seam + `ReplaySource`, with a crop/loop scrubber and `SessionMode` read-only gating. Design: [`roadmap/gcs-log-replay.md`](roadmap/gcs-log-replay.md). | `src/replay/` (`RecordSink`, `ReplaySource`), `ReplayBar`, `SessionState` |
+| 2c| **✅ Log replay** (FR-LOG-05, FR-UI-19): **whole-GCS** read-only replay — every panel fed from the log via an `ITelemetrySource` seam + `ReplaySource`, with a crop/loop scrubber and `SourceController` (FSM) read-only gating. Design: [`gcs-log-replay.md`](../journal/shipped/gcs-log-replay.md). | `src/replay/` (`RecordSink`, `ReplaySource`), `ReplayBar`, `SourceController` |
 | 2d| In-process firmware hot-reset (FR-SIM-07).                        | Requires `host_lifecycle.c` rework — non-trivial. |
 | 2e| Map / mission planner (FR-UI-18, FR-TX-06).                       | Defer until there's a real autonomy stack to talk to. |
 | 2f| Per-airframe profiles (FR-CFG-04).                                | Falls out of 1b + 1e.                |
