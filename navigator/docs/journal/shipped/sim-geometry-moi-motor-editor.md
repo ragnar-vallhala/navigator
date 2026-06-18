@@ -1,7 +1,7 @@
 # Sim: mesh geometry, computed MoI, and a motor-mapping editor
 
 Status: ✅ shipped as FR-SIM-11 (Phase-1 item 1e mostly closed; sensor-noise
-editing FR-SIM-04 still pending). See [`../requirements.md`](../requirements.md).
+editing FR-SIM-04 still pending). See [`../../reference/requirements.md`](../../reference/requirements.md).
 Headless coverage: `tools/vsim/tests/massprops_test.cpp` (analytic inertia +
 `Mat3` inverse + STL import) and `simworker_smoke.cpp` (geometry push over the
 ctl FIFO without desync).

@@ -11,8 +11,8 @@ Effort: S (days) · M (1–2 wk) · L (3–4 wk) · XL (5+ wk).
 
 | Feature (mockup) | Tier | Disposition | Real class / target | Effort |
 |---|---|---|---|---|
-| **Whole-GCS log replay + crop/loop** | 🔴 | **shipped** | `src/replay/`, `ITelemetrySource`, `ReplayBar` — see [gcs-log-replay.md](gcs-log-replay.md) | XL |
-| **Editable shortcuts + command registry** (FR-UX-19) | 🔴/🟡 | **shipped** | `core/CommandRegistry`, `ShortcutsManager`, `ShortcutsEditorDialog` — see [command-registry-and-shortcuts.md](command-registry-and-shortcuts.md) | L |
+| **Whole-GCS log replay + crop/loop** | 🔴 | **shipped** | `src/replay/`, `ITelemetrySource`, `ReplayBar` — see [gcs-log-replay.md](../journal/shipped/gcs-log-replay.md) | XL |
+| **Editable shortcuts + command registry** (FR-UX-19) | 🔴/🟡 | **shipped** | `core/CommandRegistry`, `ShortcutsManager`, `ShortcutsEditorDialog` — see [command-registry-and-shortcuts.md](../journal/shipped/command-registry-and-shortcuts.md) | L |
 | **Command palette** (FR-UX-20) | 🟡 | **shipped** | `CommandPalette` (same doc) | M |
 | **Recent-views (`Ctrl+Tab`) switcher** (FR-UX-21) | 🟡 | **shipped** | `ViewHistory` + `RecentViewsOverlay` (same doc) | M |
 | **Documentation + About** (FR-UX-22/23) | 🟢 | **shipped** | `AboutDialog` + `QDesktopServices` | S |

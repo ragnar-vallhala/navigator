@@ -3,7 +3,7 @@
 Status: ✅ shipped — `src/replay/RecordSink.{h,cpp}` + `ReplaySource.{h,cpp}` and the
 `ui/widgets/ReplayBar.{h,cpp}` scrubber are live. Refines/widens **FR-LOG-05** (record
 `.bin`) and **FR-UI-19** (replay), the `src/replay/` slot from Phase-2 `2c` in
-[`../requirements.md`](../requirements.md). The body below remains as design rationale.
+[`../../reference/requirements.md`](../../reference/requirements.md). The body below remains as design rationale.
 
 > As-built note: the read-only / source authority is the `SourceController` FSM (see
 > [`gcs-source-state-machine.md`](gcs-source-state-machine.md)), **not** the 2-state

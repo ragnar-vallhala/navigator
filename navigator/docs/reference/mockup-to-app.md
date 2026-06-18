@@ -1,13 +1,13 @@
 # Mockup → app: reconciling the Navigator UI mockup with the codebase
 
-The interactive mockup in [`../ui-mockup/`](../ui-mockup/) is the design target
+The interactive mockup in [`ui-mockup/`](ui-mockup/) is the design target
 for Navigator's UI. This doc reconciles it against what the app **already has**,
 so "implement all this" stays honest: most of the mockup is *already built* or
 in flight — only a few initiatives are genuinely new.
 
 The mockup's own **analysis mode** (`Ctrl+D`) tags every element by
 implementation difficulty (🔴 structural / 🟡 additive / 🟢 easy). Use this doc to
-map those verdicts onto real source and the existing [`../requirements.md`](../requirements.md)
+map those verdicts onto real source and the existing [`requirements.md`](requirements.md)
 phase plan.
 
 ## What the mockup shows that the app already has
@@ -45,13 +45,13 @@ They are the real subject of "implement all this":
    Refines and widens the planned Phase-2 `2c` (FR-LOG-05 / FR-UI-19, `src/replay/`)
    from "play a `.bin` through `DroneProtocol`" into a *session-wide* read-only
    replay where every panel is fed from the log and a crop region loops a
-   sub-range. → [gcs-log-replay.md](gcs-log-replay.md)
+   sub-range. → [gcs-log-replay.md](../journal/shipped/gcs-log-replay.md)
 
 2. **Editable command/shortcut system + command palette + MRU view switcher** —
    🔴/🟡. Generalises the ad-hoc `QShortcut`s from Phase-0 `0l` into a central
    command registry with editable keybindings, a fuzzy palette, and a
    Firefox-style `Ctrl+`` ` recent-views cycle. **FR-UX-19 / FR-UX-20 / FR-UX-21**.
-   → [command-registry-and-shortcuts.md](command-registry-and-shortcuts.md)
+   → [command-registry-and-shortcuts.md](../journal/shipped/command-registry-and-shortcuts.md)
 
 3. **Help surface — Documentation + About** — 🟢 easy.
    `AboutDialog` (static, version/build) + Documentation entry that opens the

@@ -3,7 +3,7 @@
 Status: ✅ shipped — `core/CommandRegistry`, `core/ShortcutsManager`, `core/ViewHistory`
 and the `ui/widgets/{ShortcutsEditorDialog,CommandPalette,RecentViewsOverlay,AboutDialog}`
 are live. Generalises the Phase-0 `0l` shortcuts. Wired into
-[`../requirements.md`](../requirements.md) as **FR-UX-19** (command registry + editable
+[`../../reference/requirements.md`](../../reference/requirements.md) as **FR-UX-19** (command registry + editable
 shortcuts), **FR-UX-20** (command palette), **FR-UX-21** (recent-views switcher),
 **FR-UX-22** (About), **FR-UX-23** (Documentation); Phase-1 item `1g`. The body below
 remains as design rationale.
