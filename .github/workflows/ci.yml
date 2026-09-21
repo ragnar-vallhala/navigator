@@ -2,20 +2,19 @@
 # same database.
 #
 # SITL is ON, against a firmware release rather than firmware source: nothing
-# here compiles a line of it. The SDK tarball is fetched from the vayu repo's
-# rolling sitl-sdk-latest release and unpacked at the repo root, which is where
-# CMake looks by default.
+# here compiles a line of it. The SDK tarball is fetched from a PINNED version
+# release of the vayu repo and unpacked at the repo root, which is where CMake
+# looks by default. The pin lives in VAYU_FW_VERSION on the fetch step.
 #
 # A release asset and not an Actions artifact: artifacts need an authenticated,
 # same-repo token, so this workflow could not read one from another repository
 # even though that repository is public. A release asset downloads over plain
 # HTTPS with no credentials, which is also how a person gets it.
 #
-# The engine therefore tracks the firmware's main rather than this repo's
-# commit. That is the point of shipping them separately, and the ABI check
-# catches a mismatch at load: if the firmware bumps VAYU_SITL_ABI_VERSION, the
-# module refuses to load here and the SITL cases fail loudly rather than
-# running against a misread struct.
+# The GCS and the firmware therefore version independently, which is the point
+# of shipping them separately. A mismatch is still caught at load rather than
+# misread: if a bumped pin brings an incompatible VAYU_SITL_ABI_VERSION, the
+# module refuses to load and the SITL cases fail loudly.
 #
 # Slowest job here at ~14 min, nearly all of it Qt6 + assimp apt install and a
 # cold compile. Caching those is the real win and is not attempted yet.
@@ -53,12 +52,30 @@ jobs:
             qt6-base-dev qt6-base-dev-tools qt6-serialport-dev \
             libgl1-mesa-dev libassimp-dev libpulse-dev python3-numpy
       - name: Fetch the firmware SITL SDK
+        env:
+          # The firmware version this GCS is built and tested against. Bumping
+          # it is a deliberate, reviewable commit -- which is the point of
+          # pinning: a green build here stays green, and a firmware change
+          # cannot turn this repo red without someone choosing it.
+          #
+          # The cost is the mirror of that: drift is not detected until the
+          # bump. If the firmware raises VAYU_SITL_ABI_VERSION, nothing here
+          # notices until this line moves, and then the module refuses to load
+          # and the SITL cases fail loudly -- which is the right place to find
+          # out, but not the earliest one.
+          VAYU_FW_VERSION: v0.1.0
         run: |
           set -euo pipefail
-          curl -sSLf -o vayu-sitl-sdk.tar.gz \
-            https://github.com/ragnar-vallhala/vayu/releases/download/sitl-sdk-latest/vayu-sitl-sdk.tar.gz
-          tar xzf vayu-sitl-sdk.tar.gz
+          ASSET="vayu-sitl-sdk-${VAYU_FW_VERSION}-linux-x86_64.tar.gz"
+          curl -sSLf -O \
+            "https://github.com/ragnar-vallhala/vayu/releases/download/${VAYU_FW_VERSION}/${ASSET}"
+          tar xzf "$ASSET"
           echo "engine build id: $(cat vayu-sitl-sdk/BUILD_ID)"
+          # The stamp must be the pinned tag. If it is a bare commit hash the
+          # asset came from the rolling release, meaning the pin silently did
+          # not take.
+          grep -q "^${VAYU_FW_VERSION} " vayu-sitl-sdk/BUILD_ID \
+            || { echo "SDK is not ${VAYU_FW_VERSION}"; exit 1; }
           # Named explicitly rather than trusted to a default: if the layout
           # ever changes, fail here with a clear message instead of silently
           # configuring SITL off and losing the coverage this job exists for.

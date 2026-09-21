@@ -41,4 +41,4 @@ vayu_settings.dat
 
 # Unpacked firmware SITL SDK release (an artifact, never committed)
 /vayu-sitl-sdk/
-vayu-sitl-sdk.tar.gz
+vayu-sitl-sdk*.tar.gz

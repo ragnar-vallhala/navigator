@@ -22,10 +22,13 @@ Qt6 (Core, Widgets, SerialPort, Network), assimp and libpulse are required;
 ## The simulator needs a firmware release
 
 Nothing here builds firmware. The in-app simulator is the firmware compiled
-for the host, shipped by the firmware repository as `vayu-sitl-sdk.tar.gz`
-and loaded at runtime. Unpack it at the repo root:
+for the host, shipped by the
+[vayu](https://github.com/ragnar-vallhala/vayu/releases) repository as a
+release asset and loaded at runtime. CI builds against **v0.1.0**; grab that
+release, or the rolling `sitl-sdk-latest` if you want whatever is on firmware
+main. Unpack it at the repo root:
 
-    tar xzf vayu-sitl-sdk.tar.gz      # -> ./vayu-sitl-sdk/
+    tar xzf vayu-sitl-sdk-v0.1.0-linux-x86_64.tar.gz   # -> ./vayu-sitl-sdk/
 
 CMake finds `vayu-sitl-sdk/include` from there with no flags. At runtime:
 
