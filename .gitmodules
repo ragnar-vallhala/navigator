@@ -1,0 +1,3 @@
+[submodule "navlink"]
+	path = navlink
+	url = https://github.com/ragnar-vallhala/navlink.git

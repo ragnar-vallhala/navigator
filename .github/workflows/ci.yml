@@ -1,18 +1,26 @@
 # Navigator (Qt6 GCS) build, its ctest cases, and the clang-tidy gate over the
-# same database. Split out of ci.yml so the firmware jobs can be skipped for a
-# GCS-only change.
+# same database.
 #
-# This one is NOT filtered by component, only by docs, and that is deliberate:
-# navigator/CMakeLists.txt add_subdirectory()s sim/host to build
-# vayu_sitl_rtos_core for the in-app SITL, and sim/host compiles 59 firmware
-# sources into it. A change to the mixer or the EKF can break this build, so it
-# has to run on firmware changes as well as on its own.
+# SITL is OFF here, and that is a gap rather than a decision. The in-app
+# simulator needs the firmware's SITL SDK (vayu-sitl-sdk.tar.gz: the engine
+# module, the headless binary, four headers), which this repository does not
+# build and no firmware release publishes yet. So CI currently proves the GCS
+# builds and its 20 cases pass, but does NOT compile SimWorker, SitlModule or
+# SimulatorWidget.
 #
-# It is also the slowest job in the repo at ~14 min, nearly all of it Qt6 +
-# assimp apt install and a cold compile. Caching those is the real win here and
-# is not attempted in this split.
+# To close it once the firmware repo publishes a release, unpack the tarball at
+# the repo root before configuring and drop the NAVIGATOR_SITL=OFF:
+#
+#   - run: |
+#       gh release download --repo <firmware-repo> -p 'vayu-sitl-sdk*.tar.gz'
+#       tar xzf vayu-sitl-sdk*.tar.gz
+#
+# CMake finds vayu-sitl-sdk/include by itself from there.
+#
+# Slowest job here at ~14 min, nearly all of it Qt6 + assimp apt install and a
+# cold compile. Caching those is the real win and is not attempted yet.
 
-name: navigator
+name: ci
 
 on:
   push:
@@ -29,7 +37,7 @@ on:
 
 jobs:
   navigator:
-    name: navigator (Qt6 build + tests + clang-tidy)
+    name: ci (Qt6 build + tests + clang-tidy)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -49,7 +57,8 @@ jobs:
         # database at all; on here so the analysis below sees it.
         run: |
           cmake -S navigator -B navigator/build-tidy \
-                -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DNAVIGATOR_SIM_GRASS=ON
+                -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DNAVIGATOR_SIM_GRASS=ON \
+                -DNAVIGATOR_SITL=OFF
           cmake --build navigator/build-tidy -j"$(nproc)"
           # The headless mesh tool is the one source neither job's main
           # database reaches; it needs the same Qt6 + assimp already installed
@@ -58,22 +67,16 @@ jobs:
                 -B navigator/headless-sdk/cpp/worldmesh/build \
                 -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
       - name: ctest
-        # 20 QtTest cases. The firmware's 21 SITL cases used to be registered
-        # here too, because Navigator compiled sim/host as a subdirectory; it
-        # loads the engine at runtime now, so those belong to the firmware
-        # build alone. Several cases construct widgets and so need a platform
+        # 20 QtTest cases. Several construct widgets and so need a platform
         # plugin; offscreen is what the headless render test documents.
         env:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir navigator/build-tidy --output-on-failure
       - name: clang-tidy (Navigator)
-        # Same gate as the clang-tidy job, over the database only this job can
-        # produce: AUTOMOC generates the tst_*.moc the tests include, so it
-        # needs a real build, not just a configure. Scope is Navigator's own
-        # sources now -- the firmware and sim/vsim sources this database used
-        # to carry moved to the clang-tidy job's sim/host/build, configured
-        # with the RTOS engine on. Its closing "not analysed" list is this
-        # invocation's; the clang-tidy job covers the rest.
+        # AUTOMOC generates the tst_*.moc the tests include, so this needs a
+        # real build, not just a configure. The closing "not analysed" list
+        # names what no database here covers -- with SITL off that includes the
+        # simulator sources, which is the same gap the header describes.
         env:
           CLANG_TIDY: clang-tidy-18
         run: |
