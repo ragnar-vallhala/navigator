@@ -1,21 +1,21 @@
 # Navigator (Qt6 GCS) build, its ctest cases, and the clang-tidy gate over the
 # same database.
 #
-# SITL is OFF here, and that is a gap rather than a decision. The in-app
-# simulator needs the firmware's SITL SDK (vayu-sitl-sdk.tar.gz: the engine
-# module, the headless binary, four headers), which this repository does not
-# build and no firmware release publishes yet. So CI currently proves the GCS
-# builds and its 20 cases pass, but does NOT compile SimWorker, SitlModule or
-# SimulatorWidget.
+# SITL is ON, against a firmware release rather than firmware source: nothing
+# here compiles a line of it. The SDK tarball is fetched from the vayu repo's
+# rolling sitl-sdk-latest release and unpacked at the repo root, which is where
+# CMake looks by default.
 #
-# To close it once the firmware repo publishes a release, unpack the tarball at
-# the repo root before configuring and drop the NAVIGATOR_SITL=OFF:
+# A release asset and not an Actions artifact: artifacts need an authenticated,
+# same-repo token, so this workflow could not read one from another repository
+# even though that repository is public. A release asset downloads over plain
+# HTTPS with no credentials, which is also how a person gets it.
 #
-#   - run: |
-#       gh release download --repo <firmware-repo> -p 'vayu-sitl-sdk*.tar.gz'
-#       tar xzf vayu-sitl-sdk*.tar.gz
-#
-# CMake finds vayu-sitl-sdk/include by itself from there.
+# The engine therefore tracks the firmware's main rather than this repo's
+# commit. That is the point of shipping them separately, and the ABI check
+# catches a mismatch at load: if the firmware bumps VAYU_SITL_ABI_VERSION, the
+# module refuses to load here and the SITL cases fail loudly rather than
+# running against a misread struct.
 #
 # Slowest job here at ~14 min, nearly all of it Qt6 + assimp apt install and a
 # cold compile. Caching those is the real win and is not attempted yet.
@@ -52,13 +52,26 @@ jobs:
           sudo apt-get install -y cmake clang-tidy-18 jq \
             qt6-base-dev qt6-base-dev-tools qt6-serialport-dev \
             libgl1-mesa-dev libassimp-dev libpulse-dev python3-numpy
+      - name: Fetch the firmware SITL SDK
+        run: |
+          set -euo pipefail
+          curl -sSLf -o vayu-sitl-sdk.tar.gz \
+            https://github.com/ragnar-vallhala/vayu/releases/download/sitl-sdk-latest/vayu-sitl-sdk.tar.gz
+          tar xzf vayu-sitl-sdk.tar.gz
+          echo "engine build id: $(cat vayu-sitl-sdk/BUILD_ID)"
+          # Named explicitly rather than trusted to a default: if the layout
+          # ever changes, fail here with a clear message instead of silently
+          # configuring SITL off and losing the coverage this job exists for.
+          test -f vayu-sitl-sdk/include/vayu_sitl_abi.h
+          test -f vayu-sitl-sdk/lib/libvayu_sitl.so
+          test -x vayu-sitl-sdk/bin/vayu_sitl_rtos
+
       - name: Configure + build
         # Grass/flora is off by default, which leaves GpuGrass.cpp in no
         # database at all; on here so the analysis below sees it.
         run: |
           cmake -S navigator -B navigator/build-tidy \
-                -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DNAVIGATOR_SIM_GRASS=ON \
-                -DNAVIGATOR_SITL=OFF
+                -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DNAVIGATOR_SIM_GRASS=ON
           cmake --build navigator/build-tidy -j"$(nproc)"
           # The headless mesh tool is the one source neither job's main
           # database reaches; it needs the same Qt6 + assimp already installed
@@ -66,17 +79,30 @@ jobs:
           cmake -S navigator/headless-sdk/cpp/worldmesh \
                 -B navigator/headless-sdk/cpp/worldmesh/build \
                 -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+      - name: Fail if SITL silently turned itself off
+        # The CMake gate degrades to a warning when the SDK is missing, which
+        # is right for a developer and wrong for this job: a fetch that half
+        # worked would leave the simulator sources uncompiled and everything
+        # still green. NAVIGATOR_HAS_SITL is the compile definition the app
+        # sets only when SITL is really on.
+        run: |
+          grep -q 'NAVIGATOR_HAS_SITL' navigator/build-tidy/compile_commands.json \
+            || { echo "SITL is off -- the SDK was not picked up"; exit 1; }
+
       - name: ctest
         # 20 QtTest cases. Several construct widgets and so need a platform
-        # plugin; offscreen is what the headless render test documents.
+        # plugin; offscreen is what the headless render test documents. The
+        # module is put beside the test binaries so anything that loads the
+        # engine finds it on the first search path.
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir navigator/build-tidy --output-on-failure
+        run: |
+          cp vayu-sitl-sdk/lib/libvayu_sitl.so navigator/build-tidy/
+          ctest --test-dir navigator/build-tidy --output-on-failure
       - name: clang-tidy (Navigator)
         # AUTOMOC generates the tst_*.moc the tests include, so this needs a
-        # real build, not just a configure. The closing "not analysed" list
-        # names what no database here covers -- with SITL off that includes the
-        # simulator sources, which is the same gap the header describes.
+        # real build, not just a configure. With SITL on, the database covers
+        # the simulator sources too -- SimWorker, SitlModule, SimulatorWidget.
         env:
           CLANG_TIDY: clang-tidy-18
         run: |
