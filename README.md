@@ -49,3 +49,12 @@ module built against a different ABI is refused at load rather than trusted.
 The pytest suite needs `bin/vayu_sitl_rtos` from the SDK, and the generated
 Python codec: run `python3 navlink/generate.py --lang both` once (the CMake
 build does this for C).
+
+## License
+
+Apache License 2.0 — see [LICENSE.md](LICENSE.md). Copyright (C) 2026
+NAVRobotec Pvt Ltd.
+
+The flight controller firmware this talks to is a separate, private
+repository. What is here is the ground station: the protocol it speaks
+(`navlink`, also Apache-2.0) is public, so a third party can build against it.

@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 NAVRobotec Pvt Ltd
+# Author: Ragnar Vallhala
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 """Frequency-sweep (CHIRP) on one axis — for frequency-domain system-ID.
 
 Drives a linear chirp  cmd(t) = amp * sin(2π · (f0 + (f1-f0)·t/T)/2 · t)  on the
