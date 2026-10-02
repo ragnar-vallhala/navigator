@@ -1,4 +1,4 @@
-# vayu-navigator
+# navigator
 
 The Vayu ground control station: a Qt6 desktop GCS, the headless SDK that
 drives the flight stack from Python, and the autotuner.
