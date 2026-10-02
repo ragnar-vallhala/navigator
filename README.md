@@ -53,6 +53,18 @@ The pytest suite needs `bin/vayu_sitl_rtos` from the SDK, and the generated
 Python codec: run `python3 navlink/generate.py --lang both` once (the CMake
 build does this for C).
 
+## Branches
+
+- **`main`** — development. Every change arrives as a PR and must pass
+  `CI required`: the Linux build with SITL, ctest and clang-tidy, the
+  GCS-only Windows build (MSYS2 UCRT64) and its ctest, and the commit lint
+  (`tools/dev/lint_commits.sh`: Conventional Commits, subject ≤ 72 chars,
+  no AI attribution trailers).
+- **`stable`** — releases. A release is a PR from `main` that must also
+  raise `project(Navigator VERSION …)` in `navigator/CMakeLists.txt`
+  (`Semver bump required`). Merge it with a **merge commit**, not a squash,
+  so `stable` keeps `main`'s history and the next release merges cleanly.
+
 ## License
 
 Apache License 2.0 — see [LICENSE.md](LICENSE.md). Copyright (C) 2026

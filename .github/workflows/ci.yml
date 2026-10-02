@@ -21,22 +21,58 @@
 
 name: ci
 
+# Required checks report on every PR, docs-only ones included: a required
+# check that never reports blocks the merge forever, which is what
+# `paths-ignore` would do here. Docs-only changes are instead detected by the
+# `changes` job, and the build jobs skip -- which `CI required` counts as ok.
 on:
   push:
-    branches: [main]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - '**/docs/**'
+    branches: [main, stable]
   pull_request:
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - '**/docs/**'
+    branches: [main, stable]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect code changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -eu
+          # A new branch or a force push has no usable base: build.
+          if ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            echo "code=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          code=$(git diff --name-only "$BASE" HEAD \
+                   | grep -qvE '(\.md$|^docs/|/docs/)' && echo true || echo false)
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "code changed: $code"
+
+  commit-lint:
+    name: Commit message lint
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - run: tools/dev/lint_commits.sh "origin/${{ github.base_ref }}..HEAD"
+
   navigator:
     name: ci (Qt6 build + tests + clang-tidy)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -125,3 +161,57 @@ jobs:
         run: |
           tools/dev/run_clang_tidy.sh \
             navigator/build-tidy navigator/headless-sdk/cpp/worldmesh/build
+
+  # The GCS-only Windows build (NAVIGATOR_SITL=OFF: the SITL bridge needs a
+  # POSIX host) on MSYS2 UCRT64, the toolchain tools/windows/deploy-navigator-
+  # msys.sh bundles from. It keeps the Windows port from rotting between
+  # releases; the SITL tabs are compiled out here, everything else is in.
+  windows:
+    name: Windows build + tests (MSYS2 UCRT64, GCS-only)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-qt6-serialport
+      - name: Configure + build
+        run: |
+          cmake -S navigator -B build-win -G Ninja \
+                -DCMAKE_BUILD_TYPE=Release -DNAVIGATOR_SITL=OFF
+          cmake --build build-win -j"$(nproc)"
+      - name: ctest
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build-win --output-on-failure
+
+  # The one check branch protection requires: a job that skipped (docs-only
+  # change, or commit lint on a push) is ok, anything else that did not
+  # succeed fails it.
+  ci-required:
+    name: CI required
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [changes, commit-lint, navigator, windows]
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: $RESULTS"
+          for r in $RESULTS; do
+            case "$r" in success|skipped) ;; *) exit 1 ;; esac
+          done
