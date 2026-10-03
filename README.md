@@ -59,7 +59,8 @@ build does this for C).
   `CI required`: the Linux build with SITL, ctest and clang-tidy, the
   GCS-only Windows build (MSYS2 UCRT64) and its ctest, and the commit lint
   (`tools/dev/lint_commits.sh`: Conventional Commits, subject ≤ 72 chars,
-  no AI attribution trailers).
+  no AI attribution trailers). Run the same check at commit time by
+  enabling the hook once per clone: `git config core.hooksPath .githooks`.
 - **`stable`** — releases. A release is a PR from `main` that must also
   raise `project(Navigator VERSION …)` in `navigator/CMakeLists.txt`
   (`Semver bump required`). Merge it with a **merge commit**, not a squash,

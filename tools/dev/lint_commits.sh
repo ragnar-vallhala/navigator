@@ -20,6 +20,12 @@
 #   line 2 blank; no AI attribution trailer (Co-Authored-By: Claude, ...)
 #
 # Usage:  tools/dev/lint_commits.sh [<base>..<head>]   (default origin/main..HEAD)
+#         tools/dev/lint_commits.sh --msg-file <file>   one message, as the
+#                                                       commit-msg hook does
+#
+# CI runs the range form on every PR. .githooks/commit-msg runs the --msg-file
+# form at commit time, so the same rules reject a message before it is made;
+# enable it once per clone with `git config core.hooksPath .githooks`.
 #
 # Only commits NEW to the range are checked. A release PR (main -> stable)
 # re-walks history that was already gated when it landed on main, and the
@@ -29,13 +35,37 @@
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 
-RANGE="${1:-origin/main..HEAD}"
 TYPES='feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert'
 PATTERN="^(${TYPES})(\([a-z0-9][a-z0-9_.,-]*\))?!?: .+$"
 # Anchored on trailer syntax, so prose that mentions Claude and a genuine
 # human Co-Authored-By both pass.
 AI_TRAILER='co-authored-by:.*(claude|anthropic)|generated with .*claude'
 
+# check_msg <label> <message>: print one line per problem, return 1 if any.
+# fixup!/squash! messages pass: they are folded into a checked commit.
+check_msg() {
+  local label=$1 msg=$2 subject rc=0
+  subject=$(printf '%s\n' "$msg" | sed -n 1p)
+  case "$subject" in "fixup! "*|"squash! "*) return 0 ;; esac
+  bad() { echo "${PREFIX}${label}\"$subject\": $1"; rc=1; }
+  printf '%s' "$subject" | grep -qE "$PATTERN" \
+    || bad "not <type>[(<scope>)][!]: <subject>, type one of ${TYPES//|/ }"
+  [ "${#subject}" -le 72 ] || bad "subject is ${#subject} chars, max 72"
+  [ -z "$(printf '%s\n' "$msg" | sed -n 2p)" ] || bad "line 2 must be blank"
+  ! printf '%s\n' "$msg" | grep -Eqi "$AI_TRAILER" || bad "carries an AI attribution trailer"
+  return "$rc"
+}
+
+if [ "${1:-}" = --msg-file ]; then
+  PREFIX="commit-msg: "
+  # The file still holds the editor's # comments; git strips them afterwards.
+  check_msg "" "$(git stripspace --strip-comments < "$2")" && exit 0
+  echo "commit-msg: fix the message, or see tools/dev/lint_commits.sh" >&2
+  exit 1
+fi
+
+PREFIX="::error::"
+RANGE="${1:-origin/main..HEAD}"
 for br in main stable; do   # the CI checkout may not have both
   git rev-parse -q --verify "origin/$br" >/dev/null \
     || git fetch -q origin "$br:refs/remotes/origin/$br" 2>/dev/null || true
@@ -51,16 +81,8 @@ landed() {
 fail=0 checked=0
 for c in $(git rev-list --no-merges --reverse "$RANGE"); do
   landed "$c" && continue
-  msg=$(git log -1 --format=%B "$c")
-  subject=$(printf '%s\n' "$msg" | sed -n 1p)
-  case "$subject" in "fixup! "*|"squash! "*) continue ;; esac
   checked=$((checked + 1))
-  bad() { echo "::error::$(git log -1 --format=%h "$c") \"$subject\": $1"; fail=1; }
-  printf '%s' "$subject" | grep -qE "$PATTERN" \
-    || bad "not <type>[(<scope>)][!]: <subject>, type one of ${TYPES//|/ }"
-  [ "${#subject}" -le 72 ] || bad "subject is ${#subject} chars, max 72"
-  [ -z "$(printf '%s\n' "$msg" | sed -n 2p)" ] || bad "line 2 must be blank"
-  ! printf '%s\n' "$msg" | grep -Eqi "$AI_TRAILER" || bad "carries an AI attribution trailer"
+  check_msg "$(git log -1 --format=%h "$c") " "$(git log -1 --format=%B "$c")" || fail=1
 done
 
 [ "$fail" = 0 ] && echo "commit lint: $checked new commit(s) in $RANGE ok"
