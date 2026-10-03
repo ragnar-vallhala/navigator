@@ -1,0 +1,51 @@
+# Semver gate -- every merge into `stable` must raise the release version.
+#
+# The version is project(Navigator VERSION x.y.z) in navigator/CMakeLists.txt,
+# the one place it is set: it is compiled in as NAVIGATOR_VERSION and stamped
+# into the macOS bundle. The PR head must carry a version strictly greater than
+# the one on `stable`, so every release on `stable` is a new, distinct version.
+#
+# `pull_request`, not `pull_request_target`: the latter only fires from a copy of
+# the workflow on the default branch, and this gate is about `stable`. Only one
+# file is read, with `git show`; none of the PR's code runs. Deleting this file
+# in a PR does not get around it -- the required "Semver bump required" check
+# then never reports and the merge stays blocked.
+
+name: Semver gate
+
+on:
+  pull_request:
+    branches: [stable]
+
+permissions:
+  contents: read
+
+jobs:
+  semver-bump:
+    name: Semver bump required
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+      - name: Require a version bump in navigator/CMakeLists.txt
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth 1 origin "refs/pull/${PR_NUMBER}/head:pr-head"
+          version() {
+            git show "$1:navigator/CMakeLists.txt" \
+              | sed -nE 's/^project\(Navigator VERSION ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -1
+          }
+          BASE=$(version "$BASE_SHA"); HEAD=$(version pr-head)
+          echo "stable (base): ${BASE:-?}   PR (head): ${HEAD:-?}"
+          [ -n "$BASE" ] && [ -n "$HEAD" ] \
+            || { echo "::error::no project(Navigator VERSION x.y.z) in navigator/CMakeLists.txt"; exit 1; }
+          # Strictly greater: different, and the higher of the two by version sort.
+          if [ "$HEAD" = "$BASE" ] || [ "$(printf '%s\n%s\n' "$BASE" "$HEAD" | sort -V | tail -1)" != "$HEAD" ]; then
+            echo "::error::merging into stable needs a version bump in navigator/CMakeLists.txt (stable=$BASE, PR=$HEAD)"
+            exit 1
+          fi
+          echo "ok: $BASE -> $HEAD"
