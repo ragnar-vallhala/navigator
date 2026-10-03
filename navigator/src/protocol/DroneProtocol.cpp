@@ -34,6 +34,9 @@ DroneProtocol::DroneProtocol(QObject *parent) : QObject(parent) {
     emit estPerfReceived(d);
   };
   m_v2Router.onBaro = [this](const BaroData &d) { emit baroReceived(d); };
+  m_v2Router.onBattery = [this](const BatteryData &d) {
+    emit batteryReceived(d);
+  };
   m_v2Router.onVerticalState = [this](const VerticalStateData &d) {
     emit verticalStateReceived(d);
   };

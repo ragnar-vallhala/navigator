@@ -38,6 +38,7 @@ struct VehicleState {
   RcData rc{};
   MotorData motors{};
   BaroData baro{};
+  BatteryData battery{}; // BATTERY (msgid 1050): pack voltage + validity flags
   VerticalStateData
       vertical{}; // fused VERT estimate (VERTICAL_STATE, msgid 1040)
 
@@ -55,6 +56,7 @@ struct VehicleState {
   qint64 lastRcMs = 0;
   qint64 lastMotorMs = 0;
   qint64 lastBaroMs = 0;
+  qint64 lastBatteryMs = 0;
   qint64 lastVerticalMs = 0;
 
   // Rolling attitude std-devs (deg), computed by the engine on each attitude

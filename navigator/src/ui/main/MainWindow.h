@@ -37,6 +37,7 @@
 #include "SimSource.h"
 #include <functional>
 #include "ViewHistory.h"
+#include "core/BatteryEstimator.h"
 #include "Drone3DWidget.h"   // Added
 #include "TelemetryEngine.h" // owns DroneProtocol + the VehicleState store
 #include "TimeSyncEstimator.h" // NTP clock-sync filter for the time-sync handshake
@@ -176,6 +177,8 @@ private:
   // Baro AGL ground reference (MSL captured while not flying); see onUiTimer.
   float m_baroGroundRefM = 0.0f;
   bool m_haveBaroRef = false;
+  // BATTERY → gauge/field: pack-or-not, latched cell count, percent.
+  battery::Estimator m_battery;
   AttitudeWidget *m_attitude = nullptr;
   LogPanel *m_logPanel = nullptr;
   PacketAnalyzerWidget *m_analyzerWidget = nullptr;
