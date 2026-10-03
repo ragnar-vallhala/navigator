@@ -79,6 +79,11 @@
 #include <cmath>
 #include <cstdio> // ::rename (atomic blob publish)
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h> // MoveFileExW (atomic blob publish)
+#endif
 #include <unistd.h>
 
 // Firmware pokes reached through the loaded module's SITL-only section (see
@@ -276,6 +281,15 @@ constexpr const char *kRcEnableKey = "simulator/rcEnable";
 constexpr const char *kRcSourceKey = "simulator/rcSource";     // 0=js 1=uart
 constexpr const char *kRcPathKey = "simulator/rcPath";         // joystick dev
 constexpr const char *kRcUartPathKey = "simulator/rcUartPath"; // serial dev
+// The device each RC source starts on before one is saved: a WinMM joystick
+// number and a COM port on Windows (see RcBridge).
+#ifdef _WIN32
+constexpr const char *kRcPathDefault = "0";
+constexpr const char *kRcUartPathDefault = "COM3";
+#else
+constexpr const char *kRcPathDefault = "/dev/input/js0";
+constexpr const char *kRcUartPathDefault = "/dev/ttyUSB0";
+#endif
 constexpr const char *kRcBaudKey = "simulator/rcBaud";
 constexpr const char *kRcMapAxisKey = "simulator/rcMapAxis"; // + func
 constexpr const char *kRcMapInvKey = "simulator/rcMapInv";   // + func
@@ -736,6 +750,14 @@ void SimulatorWidget::buildUi() {
            "run. No engine is started here; this view just mirrors it."));
     connect(m_simAttachBtn, &QPushButton::clicked, this,
             &SimulatorWidget::attachExternalSim);
+#ifdef _WIN32
+    // The external engine binary and its pose FIFO are POSIX; the in-app
+    // simulator above is the Windows path.
+    m_simAttachBtn->setEnabled(false);
+    m_simAttachBtn->setToolTip(
+        tr("Attaching to an external sim needs a POSIX host (its pose stream "
+           "is a FIFO). Use Start to run the simulator in-app."));
+#endif
     runRow->addWidget(m_simStartBtn);
     runRow->addWidget(m_simStopBtn);
     runRow->addWidget(m_simResetBtn);
@@ -2763,8 +2785,14 @@ void SimulatorWidget::sendWorldMeshToSim(const vsim::LoadedMesh &m) {
   // daemon never mmaps a half-written blob. Per-instance suffix keeps two
   // Navigators isolated (matches SimWorker's fifoSuffixed()).
   const QByteArray suffix = qgetenv("VSIM_FIFO_SUFFIX");
+#ifdef _WIN32
+  // No /tmp; the engine only needs a path it can read, so the user's temp dir.
+  const QString path = QDir::tempPath() + QStringLiteral("/vsim_world") +
+                       QString::fromLocal8Bit(suffix) + QStringLiteral(".bin");
+#else
   const QString path = QStringLiteral("/tmp/vsim_world") +
                        QString::fromLocal8Bit(suffix) + QStringLiteral(".bin");
+#endif
   const QString tmp = path + QStringLiteral(".tmp");
   {
     QFile f(tmp);
@@ -2781,8 +2809,16 @@ void SimulatorWidget::sendWorldMeshToSim(const vsim::LoadedMesh &m) {
       return;
     }
   }
+#ifdef _WIN32
+  // rename() will not replace an existing file on Windows; MoveFileEx will,
+  // and atomically on one volume -- which a temp file beside it is.
+  if (!MoveFileExW(reinterpret_cast<LPCWSTR>(tmp.utf16()),
+                   reinterpret_cast<LPCWSTR>(path.utf16()),
+                   MOVEFILE_REPLACE_EXISTING)) {
+#else
   if (::rename(tmp.toLocal8Bit().constData(), path.toLocal8Bit().constData()) !=
       0) {
+#endif
     appendLog("world", tr("world mesh: rename to %1 failed").arg(path));
     QFile::remove(tmp);
     return;
@@ -2905,8 +2941,8 @@ void SimulatorWidget::applyRcSource() {
   // Swap the device field to the saved path for the selected source.
   if (m_rcPath) {
     const QString path =
-        uart ? st.value(kRcUartPathKey, "/dev/ttyUSB0").toString()
-             : st.value(kRcPathKey, "/dev/input/js0").toString();
+        uart ? st.value(kRcUartPathKey, kRcUartPathDefault).toString()
+             : st.value(kRcPathKey, kRcPathDefault).toString();
     QSignalBlocker block(m_rcPath);
     m_rcPath->clear();
     if (uart) {
