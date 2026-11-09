@@ -19,6 +19,7 @@
 #include "VsimTypes.h"
 
 #include "vayu_sitl_abi.h" // vayu_sitl_telemetry_fn
+#include "vsim_proto.h"    // vsim_ctl_reset_t
 
 #include <QObject>
 #include <QString>
@@ -114,10 +115,21 @@ public:
 
   // Reset the in-process physics. With no args, respawns at level pose slightly
   // above ground (matches the engine's own initial state).
-  void sendReset();
+  // seed: non-zero deterministically re-seeds the engine's sensor-noise RNG and
+  // zeroes the random-walk biases (identical reset => identical noise); 0 leaves
+  // the noise stream free-running (legacy).
+  void sendReset(uint32_t seed = 0);
   // Re-spawn at a specific NED world position, level attitude, zero velocity.
   // Used to lift the drone onto the terrain surface when a world loads.
-  void sendResetPose(float x, float y, float z);
+  void sendResetPose(float x, float y, float z, uint32_t seed = 0);
+
+  // The reset body sendResetPose enqueues (exposed so the seed plumbing is
+  // testable without an engine).
+  static vsim_ctl_reset_t resetBody(float x, float y, float z, uint32_t seed);
+  // The seed a run uses: the configured fixed one, or `entropy` when random per
+  // start. Never 0 (0 would mean "do not seed").
+  static uint32_t resolveResetSeed(bool randomPerStart, uint32_t fixedSeed,
+                                   uint32_t entropy);
 
   // Test-rig mode (VSIM_CTL_SET_TESTRIG): pin translation, leave rotation free —
   // a frictionless attitude gimbal. Pair with sendRigPose to pose the airframe.

@@ -71,14 +71,29 @@ SimSnapshot SimWorker::snapshot() const {
   return last_snap_;
 }
 
-void SimWorker::sendReset() { sendResetPose(0.0f, 0.0f, -0.05f); }
+void SimWorker::sendReset(uint32_t seed) {
+  sendResetPose(0.0f, 0.0f, -0.05f, seed);
+}
 
-void SimWorker::sendResetPose(float x, float y, float z) {
+vsim_ctl_reset_t SimWorker::resetBody(float x, float y, float z,
+                                      uint32_t seed) {
   vsim_ctl_reset_t body{};
   body.pos_w[0] = x;
   body.pos_w[1] = y;
   body.pos_w[2] = z;        // NED: more negative = higher above ground
   body.quat_wxyz[0] = 1.0f; // identity (level)
+  body.seed = seed;
+  return body;
+}
+
+uint32_t SimWorker::resolveResetSeed(bool randomPerStart, uint32_t fixedSeed,
+                                     uint32_t entropy) {
+  const uint32_t s = randomPerStart ? entropy : fixedSeed;
+  return s ? s : 1u;
+}
+
+void SimWorker::sendResetPose(float x, float y, float z, uint32_t seed) {
+  const vsim_ctl_reset_t body = resetBody(x, y, z, seed);
   enqueue([body] { sitl()->reset_to(&body); });
 }
 

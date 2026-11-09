@@ -236,6 +236,12 @@ private:
     QString err;
   };
   void enqueueShip(WorldShipReq req);
+  // Clean reset at the spawn pose (home pad on procedural terrain) carrying the
+  // run's noise seed. Start, the Reset button and training all use it.
+  void sendSpawnReset();
+  // Start owes a spawn reset, but only once the collision under the spawn has
+  // shipped (otherwise the drone is placed over terrain the engine lacks).
+  bool spawnResetWaitsForCollision() const;
   void startShipJob(WorldShipReq req);
   void onShipFinished(const WorldShipResult &r, int gen, const QString &path,
                       const QString &tmp);
@@ -322,6 +328,8 @@ private:
   bool m_shipRunningLift = false;
   std::optional<QRectF> m_shipRunningCover;
   std::optional<WorldShipReq> m_shipPending;
+  bool m_spawnResetPending = false; // Start's reset, held for the collision
+  uint32_t m_runSeed = 1;           // noise seed for this run's resets
 
   // Flora: packed instance data per built chunk (cache), and which chunks are
   // currently uploaded to the renderer (only the near ones, for perf).

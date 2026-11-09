@@ -60,6 +60,7 @@
 #include <QFile>
 #include <QVBoxLayout>
 #include <QProcess>
+#include <QRandomGenerator>
 #include <QSpinBox>
 #include <QPlainTextEdit>
 #include <QLabel>
@@ -271,6 +272,9 @@ constexpr const char *kLogDirSettingKey = "simulator/logDir";
 constexpr const char *kGeomGroup = "simulator/geometry";
 constexpr const char *kWorldGroup = "simulator/world";
 constexpr const char *kAudioKey = "simulator/propAudio";
+constexpr const char *kSeedKey = "simulator/resetSeed";         // fixed seed
+constexpr const char *kSeedRandomKey = "simulator/resetSeedRandom"; // per Start
+constexpr int kDefaultResetSeed = 1337;
 constexpr const char *kImuHzKey = "simulator/imuHz";
 constexpr const char *kPhysHzKey = "simulator/physicsHz";
 constexpr const char *kPoseHzKey = "simulator/poseHz";
@@ -740,16 +744,7 @@ void SimulatorWidget::buildUi() {
     m_simResetBtn->setEnabled(false);
     m_simResetBtn->setToolTip(tr("Reset the airframe to the spawn pose"));
     connect(m_simResetBtn, &QPushButton::clicked, this, [this] {
-      if (!m_sim)
-        return;
-      // On procedural terrain, respawn ON the home helipad (origin) — a small
-      // margin above the pad top so it settles onto the deck, not the slope.
-      if (m_terrainHeightAt) {
-        const float padTop = landingSurfaceZ(m_homePad.x(), m_homePad.y());
-        m_sim->sendResetPose(m_homePad.x(), m_homePad.y(), padTop - 0.4f);
-      } else {
-        m_sim->sendReset();
-      }
+      sendSpawnReset();
     });
     m_simAttachBtn = new ui::GhostButton(tr("Attach Ext"), simBody);
     m_simAttachBtn->setToolTip(
@@ -855,6 +850,37 @@ void SimulatorWidget::buildUi() {
     });
     runRow->addWidget(m_propAudioChk);
     sv->addLayout(runRow);
+
+    // -- Noise seed: Start / Reset send it with the reset so the sensor-noise
+    // stream is reproducible (0 in the engine would mean free-running). --
+    {
+      QSettings st;
+      auto *seedRow = new QHBoxLayout();
+      auto *seedLbl = new QLabel(tr("Noise seed"), simBody);
+      auto *seedSpin = new QSpinBox(simBody);
+      seedSpin->setRange(1, INT_MAX);
+      seedSpin->setValue(
+          std::max(1, st.value(kSeedKey, kDefaultResetSeed).toInt()));
+      seedSpin->setToolTip(
+          tr("Deterministic sensor-noise seed sent with every Start/Reset: the "
+             "same seed reproduces the same noise. Applies on the next Start."));
+      auto *seedRnd = new QCheckBox(tr("Random each Start"), simBody);
+      seedRnd->setChecked(st.value(kSeedRandomKey, false).toBool());
+      seedSpin->setEnabled(!seedRnd->isChecked());
+      seedRnd->setToolTip(tr("Pick a fresh seed on every Start (logged); Reset "
+                             "then reuses that run's seed."));
+      connect(seedSpin, qOverload<int>(&QSpinBox::valueChanged), this,
+              [](int v) { QSettings().setValue(kSeedKey, v); });
+      connect(seedRnd, &QCheckBox::toggled, this, [seedSpin](bool on) {
+        QSettings().setValue(kSeedRandomKey, on);
+        seedSpin->setEnabled(!on);
+      });
+      seedRow->addWidget(seedLbl);
+      seedRow->addWidget(seedSpin);
+      seedRow->addWidget(seedRnd);
+      seedRow->addStretch();
+      sv->addLayout(seedRow);
+    }
 
     // -- Loop rates (IMU/firmware, physics substeps, render) --
     {
@@ -2138,7 +2164,7 @@ void SimulatorWidget::setTrainingMode(int difficulty) {
   updateTrainingProgress();
   // Start every run from the floor: re-spawn the airframe at the level pose.
   if (m_training.active() && m_sim)
-    m_sim->sendReset();
+    m_sim->sendReset(m_runSeed);
   if (m_training.active())
     appendLog("train",
               tr("training course armed (%1 gates)").arg(m_training.total()));
@@ -2775,6 +2801,23 @@ float SimulatorWidget::landingSurfaceZ(float x, float y) const {
   return z;
 }
 
+void SimulatorWidget::sendSpawnReset() {
+  if (!m_sim)
+    return;
+  // On procedural terrain, respawn ON the home helipad (origin) -- a small
+  // margin above the pad top so it settles onto the deck, not the slope.
+  if (m_terrainHeightAt) {
+    const float padTop = landingSurfaceZ(m_homePad.x(), m_homePad.y());
+    m_sim->sendResetPose(m_homePad.x(), m_homePad.y(), padTop - 0.4f, m_runSeed);
+  } else {
+    m_sim->sendReset(m_runSeed);
+  }
+}
+
+bool SimulatorWidget::spawnResetWaitsForCollision() const {
+  return m_shipWatcher || m_shipPending || m_collisionPending;
+}
+
 void SimulatorWidget::liftDroneToSurface() {
   if (!m_sim || !m_terrainHeightAt)
     return;
@@ -2981,7 +3024,11 @@ void SimulatorWidget::onShipFinished(const WorldShipResult &r, int gen,
       // to re-drop a drone that fell through while it was being built.
       // Only if the drone is actually over what shipped (a drone that outran the
       // window is picked up by the next recentre's ship instead).
-      if (lift && (!m_shipRunningCover ||
+      if (m_spawnResetPending) {
+        // Start's reset: collision is in, place the drone (this supersedes the lift).
+        m_spawnResetPending = false;
+        sendSpawnReset();
+      } else if (lift && (!m_shipRunningCover ||
                    m_shipRunningCover->contains(m_lastDronePos.x(),
                                                 m_lastDronePos.y())))
         liftDroneToSurface();
@@ -2998,6 +3045,11 @@ void SimulatorWidget::onShipFinished(const WorldShipResult &r, int gen,
     if (stale)
       next.lift = next.lift || lift;
     startShipJob(std::move(next));
+  } else if (m_spawnResetPending && m_sim && !m_collisionPending) {
+    // The collision Start was waiting for was dropped or failed and nothing
+    // newer is coming: reset anyway rather than leave the stale state.
+    m_spawnResetPending = false;
+    sendSpawnReset();
   }
 }
 
@@ -3256,6 +3308,15 @@ void SimulatorWidget::startInAppSim() {
     SitlModule::instance().api()->set_telemetry_sink(
         &uart2_to_widget_trampoline, this);
 
+  {
+    QSettings st;
+    m_runSeed = vsim::SimWorker::resolveResetSeed(
+        st.value(kSeedRandomKey, false).toBool(),
+        static_cast<uint32_t>(st.value(kSeedKey, kDefaultResetSeed).toInt()),
+        QRandomGenerator::global()->generate());
+    appendLog("sim", tr("noise seed %1").arg(m_runSeed));
+  }
+  m_spawnResetPending = false;
   m_sim = new vsim::SimWorker(this);
   m_sim->setTelemetrySink(&uart2_to_widget_trampoline, this);
   connect(m_sim, &vsim::SimWorker::stoppedCleanly, this,
@@ -3309,6 +3370,14 @@ void SimulatorWidget::startInAppSim() {
     pushNoise();  // apply the configured sensor models (σ / enable)
     pushFaults(); // re-assert any latched faults across the restart
     loadWorldMeshToRenderer(); // re-loads + ships the collision BVH now m_sim exists
+    // Clean start: reset at the spawn pose with the run's seed, wiping whatever
+    // a previous Stop left in the engine. Held until the collision under the
+    // spawn has shipped (built off-thread) so the drone is never placed over
+    // terrain the engine does not have; with no world to collide with, now.
+    if (spawnResetWaitsForCollision())
+      m_spawnResetPending = true;
+    else
+      sendSpawnReset();
     // Restart any armed training course from the first gate, flying from the floor.
     if (m_training.active()) {
       m_training.resetProgress();
@@ -3435,6 +3504,7 @@ void SimulatorWidget::stopInAppSim() {
   if (SitlModule::instance().available())
     SitlModule::instance().api()->set_telemetry_sink(nullptr, nullptr);
   cancelWorldShip(); // a build in flight must not ship into a stopped sim
+  m_spawnResetPending = false;
   m_sim->requestStop();
   if (!m_sim->wait(2000)) {
     m_sim->terminate();
