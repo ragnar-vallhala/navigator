@@ -33,6 +33,10 @@ navigator_test(tst_battery_estimator tst_battery_estimator.cpp)
 target_include_directories(tst_battery_estimator PRIVATE ${SRC}/core)
 target_link_libraries(tst_battery_estimator PRIVATE navlink_codec)
 
+# ---- RC bridge failsafe policy (NO_SIGNAL on link loss, arm gating) --------
+navigator_test(tst_rc_frame tst_rc_frame.cpp)
+target_include_directories(tst_rc_frame PRIVATE ${SRC}/vsim)
+
 # ---- CMD_SET_PID command codec (AT-1 foundation) --------------------------
 navigator_test(tst_command_codec
     tst_command_codec.cpp

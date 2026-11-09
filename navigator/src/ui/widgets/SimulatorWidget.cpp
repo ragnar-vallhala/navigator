@@ -1285,9 +1285,11 @@ QWidget *SimulatorWidget::buildFaultPanel() {
   auto *rcLoss = new QCheckBox(tr("RC link loss (→ firmware failsafe)"), grp);
   rcLoss->setToolTip(tr("Stop feeding RC so the firmware enters failsafe"));
   connect(rcLoss, &QCheckBox::toggled, this, [this](bool on) {
-    // On: cut the RC feed. Off: restore whatever the RC-enable box says.
+    // Link loss is distinct from the RC-enable box: it makes the bridge send
+    // NO_SIGNAL so the firmware's RC failsafe fires. The enable box is left
+    // alone, so unchecking this restores exactly the prior RC state.
     if (m_rc)
-      m_rc->setEnabled(on ? false : (m_rcEnable && m_rcEnable->isChecked()));
+      m_rc->setLinkLost(on);
     appendLog("fault",
               on ? tr("RC link loss injected") : tr("RC link restored"));
   });
