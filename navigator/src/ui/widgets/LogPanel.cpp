@@ -24,6 +24,7 @@
 #include <QHBoxLayout>
 #include <QScrollBar>
 #include <QTextStream>
+#include <QTimeZone>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -71,7 +72,7 @@ LogPanel::LogPanel(QWidget *parent) : QGroupBox("Log", parent) {
 QString LogPanel::stampFor(const Entry &e) const {
   switch (m_tsMode) {
   case Utc:
-    return QDateTime::fromMSecsSinceEpoch(e.wallMs, Qt::UTC)
+    return QDateTime::fromMSecsSinceEpoch(e.wallMs, QTimeZone::utc())
         .toString(QStringLiteral("hh:mm:ss.zzz"));
   case Elapsed: {
     const qint64 ms = std::max<qint64>(0, e.elapsedMs);

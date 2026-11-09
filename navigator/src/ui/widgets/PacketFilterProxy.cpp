@@ -18,49 +18,71 @@
 
 #include "PacketLogModel.h"
 
+// beginFilterChange()/endFilterChange() replace invalidateFilter() from Qt
+// 6.10 (which deprecates it); older Qt 6 only has invalidateFilter().
+void PacketFilterProxy::beginChange() {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
+  beginFilterChange();
+#endif
+}
+
+void PacketFilterProxy::endChange() {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
+  endFilterChange();
+#else
+  invalidateFilter();
+#endif
+}
+
 PacketFilterProxy::PacketFilterProxy(QObject *parent)
     : QSortFilterProxyModel(parent) {
   setAllTypes(true);
 }
 
 void PacketFilterProxy::setTypeEnabled(int t, bool on) {
+  beginChange();
   if (on)
     m_types.insert(t);
   else
     m_types.remove(t);
-  invalidateFilter();
+  endChange();
 }
 
 void PacketFilterProxy::setAllTypes(bool on) {
+  beginChange();
   m_types.clear();
   if (on) {
     for (int t = 0x0; t <= 0xA; ++t)
       m_types.insert(t);
     m_types.insert(0xFF); // RAW
   }
-  invalidateFilter();
+  endChange();
 }
 
 void PacketFilterProxy::setDirection(Direction d) {
+  beginChange();
   m_dir = d;
-  invalidateFilter();
+  endChange();
 }
 
 void PacketFilterProxy::setDeviceFilter(int dev) {
+  beginChange();
   m_dev = dev;
-  invalidateFilter();
+  endChange();
 }
 
 void PacketFilterProxy::setSearch(const QString &s) {
+  beginChange();
   m_search = s.trimmed().toLower();
   m_searchHex = m_search;
   m_searchHex.remove(' ');
-  invalidateFilter();
+  endChange();
 }
 
 bool PacketFilterProxy::setExpression(const QString &expr) {
+  beginChange();
   const bool ok = m_expr.compile(expr);
-  invalidateFilter();
+  endChange();
   return ok;
 }
 

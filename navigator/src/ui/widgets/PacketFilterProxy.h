@@ -50,6 +50,9 @@ protected:
   bool filterAcceptsRow(int row, const QModelIndex &parent) const override;
 
 private:
+  void beginChange(); // bracket every change to the filter state
+  void endChange();
+
   QSet<int> m_types; // enabled type nibbles (+0xFF)
   Direction m_dir = Both;
   int m_dev = -1;
