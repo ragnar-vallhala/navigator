@@ -37,17 +37,36 @@ inline bool deviceLostErrno(int e) {
   return e != EAGAIN && e != EWOULDBLOCK && e != EINTR;
 }
 
+// A source that was selected (joystick, or UART with the connect flag set)
+// but cannot be opened is a LOST source, not a neutral live link: the bridge
+// sends NO_SIGNAL and retries the open.
+inline bool sourceLostAtOpen(bool selected, bool opened) {
+  return selected && !opened;
+}
+
+// Retry timer: counts `wait_ms` down by `step_ms`; when it expires re-arms it
+// to `period_ms` and returns true (time to retry the open).
+inline bool reopenDue(int &wait_ms, int step_ms, int period_ms) {
+  wait_ms -= step_ms;
+  if (wait_ms > 0)
+    return false;
+  wait_ms = period_ms;
+  return true;
+}
+
 // Arm channel in us. `mapped` is the already-resolved mapped/disabled value.
 // Returns -1 while there is no link (no arm may be emitted at all).
 //  - link lost / source lost: never arm (no frame is sent).
-//  - RC disabled: the override is ignored too; the frame stays neutral
-//    (arm 1500, throttle low) so "RC off" can never arm the vehicle.
+//  - RC disabled, or no input source (`hasSource` false: nothing selected, or
+//    UART selected but not connected): the override is ignored too; the frame
+//    stays neutral (arm 1500, throttle low) so neither "RC off" nor "no input
+//    device" can ever arm the vehicle.
 //  - otherwise: override -1 = mapped, 0 = force disarm, 1 = force arm.
-inline int resolveArm(bool noSignal, bool enabled, int armOverride,
-                      int mapped) {
+inline int resolveArm(bool noSignal, bool enabled, bool hasSource,
+                      int armOverride, int mapped) {
   if (noSignal)
     return -1;
-  if (!enabled || armOverride < 0)
+  if (!enabled || !hasSource || armOverride < 0)
     return mapped;
   return armOverride ? 2000 : 1000;
 }

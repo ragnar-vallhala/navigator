@@ -305,8 +305,9 @@ void RcBridge::run() {
 #ifdef _WIN32
   int js_index = -1; // WinMM joystick number for the Joystick source
 #endif
-  // Joystick that was open and then vanished (unplugged). While set we send
-  // NO_SIGNAL (failsafe) and retry the open every kReopenMs (hotplug back).
+  // Selected joystick/UART that failed to open, or was open and then vanished
+  // (unplugged). While set we send NO_SIGNAL (failsafe) and retry the open
+  // every kReopenMs (hotplug back).
   bool src_lost = false;
   constexpr int kReopenMs = 500;
   int reopen_wait_ms = 0;
@@ -328,6 +329,26 @@ void RcBridge::run() {
     reopen_wait_ms = 0;
     emit logLine(
         QString("RC: joystick lost (%1) — NO_SIGNAL, retrying").arg(why));
+  };
+
+  // Open the selected joystick (Linux: evdev path; Windows: WinMM number).
+  // Sets fd / js_index on success.
+  auto try_open_js = [&](const QString &path) -> bool {
+#ifdef _WIN32
+    bool ok = false;
+    const int idx = path.toInt(&ok);
+    JOYINFOEX ji{};
+    ji.dwSize = sizeof ji;
+    ji.dwFlags = JOY_RETURNALL;
+    if (ok && joyGetPosEx((UINT)idx, &ji) == JOYERR_NOERROR) {
+      js_index = idx;
+      return true;
+    }
+    return false;
+#else
+    fd = ::open(path.toLocal8Bit().constData(), O_RDONLY | O_NONBLOCK);
+    return fd >= 0;
+#endif
   };
 
   auto close_src = [&]() {
@@ -371,36 +392,40 @@ void RcBridge::run() {
         button_.fill(0);
       } else if (want == Uart) {
         fd = openUart(path.toLocal8Bit().constData(), baud);
-        if (fd == kNoIo)
-          emit logLine(QString("RC: cannot open UART %1 (%2) — neutral frames")
-                           .arg(path, ioError()));
-        else
+        if (rcframe::sourceLostAtOpen(true, fd != kNoIo)) {
+          // Selected but unopenable: a lost source (NO_SIGNAL, retry), never
+          // a live neutral link.
+          src_lost = true;
+          reopen_wait_ms = kReopenMs;
+          emit logLine(
+              QString("RC: cannot open UART %1 (%2) — NO_SIGNAL, retrying")
+                  .arg(path, ioError()));
+        } else {
           emit logLine(QString("RC: UART %1 @ %2 → %3")
                            .arg(path)
                            .arg(baud)
                            .arg(slave_path_));
-      } else {
-#ifdef _WIN32
-        // A joystick number, polled with WinMM; "open" = it answers a poll.
-        bool ok = false;
-        const int idx = path.toInt(&ok);
-        JOYINFOEX ji{};
-        ji.dwSize = sizeof ji;
-        ji.dwFlags = JOY_RETURNALL;
-        if (ok && joyGetPosEx((UINT)idx, &ji) == JOYERR_NOERROR) {
-          js_index = idx;
-          emit logLine(QString("RC: joystick %1 → %2").arg(path, slave_path_));
-        } else {
-          emit logLine(QString("RC: no joystick %1 — neutral frames").arg(path));
         }
+      } else {
+        // Windows: a joystick number polled with WinMM; "open" = it answers.
+        const bool opened = try_open_js(path);
+        if (rcframe::sourceLostAtOpen(true, opened)) {
+          src_lost = true;
+          reopen_wait_ms = kReopenMs;
+#ifdef _WIN32
+          emit logLine(
+              QString("RC: no joystick %1 — NO_SIGNAL, retrying").arg(path));
 #else
-        fd = ::open(path.toLocal8Bit().constData(), O_RDONLY | O_NONBLOCK);
-        if (fd < 0)
-          emit logLine(QString("RC: cannot open %1 (%2) — neutral frames")
+          emit logLine(QString("RC: cannot open %1 (%2) — NO_SIGNAL, retrying")
                            .arg(path, ::strerror(errno)));
-        else
+#endif
+        } else {
+#ifdef _WIN32
+          emit logLine(QString("RC: joystick %1 → %2").arg(path, slave_path_));
+#else
           emit logLine(QString("RC: reading %1 → %2").arg(path, slave_path_));
 #endif
+        }
         axis_.fill(0);
         axis_[2] = -32767;
         button_.fill(0);
@@ -413,6 +438,23 @@ void RcBridge::run() {
 
     if (want == Uart) {
       // Drain available bytes, split on newlines, parse the latest frame.
+      if (fd == kNoIo && src_lost && rcframe::reopenDue(reopen_wait_ms, 20, kReopenMs)) {
+        QString path;
+        int baud;
+        {
+          QMutexLocker lk(&cfg_mtx_);
+          path = uart_path_;
+          baud = uart_baud_;
+        }
+        fd = openUart(path.toLocal8Bit().constData(), baud);
+        if (fd != kNoIo) {
+          src_lost = false;
+          uart_nosig = true; // no signal until the first valid frame
+          uart_quiet_ms = 0;
+          uline.clear();
+          emit logLine(QString("RC: UART %1 back").arg(path));
+        }
+      }
       if (fd != kNoIo) {
         char b[256];
         long r;
@@ -476,14 +518,18 @@ void RcBridge::run() {
           mark_lost(QStringLiteral("joyGetPosEx failed"));
         }
       }
-      if (src_lost && js_index >= 0 && (reopen_wait_ms -= 20) <= 0) {
-        reopen_wait_ms = kReopenMs;
-        JOYINFOEX ji{};
-        ji.dwSize = sizeof ji;
-        ji.dwFlags = JOY_RETURNALL;
-        if (joyGetPosEx((UINT)js_index, &ji) == JOYERR_NOERROR) {
+      if (src_lost && rcframe::reopenDue(reopen_wait_ms, 20, kReopenMs)) {
+        QString path;
+        {
+          QMutexLocker lk(&cfg_mtx_);
+          path = js_path_;
+        }
+        if (try_open_js(path)) {
           src_lost = false;
-          emit logLine(QString("RC: joystick %1 back").arg(js_index));
+          axis_.fill(0);
+          axis_[2] = -32767;
+          button_.fill(0);
+          emit logLine(QString("RC: joystick %1 back").arg(path));
         }
       }
 #else
@@ -504,15 +550,14 @@ void RcBridge::run() {
           fd = kNoIo;
           mark_lost(why);
         }
-      } else if (src_lost && (reopen_wait_ms -= 20) <= 0) {
-        reopen_wait_ms = kReopenMs;
+      } else if (src_lost &&
+                 rcframe::reopenDue(reopen_wait_ms, 20, kReopenMs)) {
         QString path;
         {
           QMutexLocker lk(&cfg_mtx_);
           path = js_path_;
         }
-        fd = ::open(path.toLocal8Bit().constData(), O_RDONLY | O_NONBLOCK);
-        if (fd >= 0) {
+        if (try_open_js(path)) {
           src_lost = false;
           axis_.fill(0);
           axis_[2] = -32767;
@@ -558,8 +603,9 @@ void RcBridge::run() {
         want == Uart && (uart_nosig || uart_quiet_ms >= kUartStaleMs);
     const bool noSignal =
         linkLost_.load(std::memory_order_acquire) || src_lost || uartLost;
-    arm = rcframe::resolveArm(
-        noSignal, en, armOverride_.load(std::memory_order_relaxed), arm);
+    arm = rcframe::resolveArm(noSignal, en, want != kSrcNone,
+                              armOverride_.load(std::memory_order_relaxed),
+                              arm);
     if (noSignal)
       arm = 1500; // readout only; not sent
 

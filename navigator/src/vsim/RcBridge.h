@@ -75,7 +75,8 @@ public:
   // "Disabled" = the user turned RC off in the UI: a receiver that is powered
   // with sticks centred and the arm switch off. Frames still flow (so the
   // firmware sees a live, disarmed link, not a failsafe) and the software arm
-  // override is ignored, so disabled RC can never arm.
+  // override is ignored, so disabled RC can never arm. The same holds when no
+  // input source is selected or the UART is not connected (neutral live link).
   void setEnabled(bool on) { enabled_.store(on, std::memory_order_release); }
 
   // Link loss (fault injection, or the input device vanishing): the
@@ -105,6 +106,8 @@ public:
 
   // Software arm override for TXs with no usable arm switch.
   // v: -1 = use the mapped source; 0 = force disarmed; 1 = force armed.
+  // Ignored while RC is disabled or there is no input source (see
+  // rcframe::resolveArm), and never emitted while the link/source is lost.
   void setArmOverride(int v) {
     armOverride_.store(v, std::memory_order_relaxed);
   }
