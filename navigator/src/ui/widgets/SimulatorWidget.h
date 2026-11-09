@@ -33,18 +33,22 @@
 extern "C" {}
 
 #include <QElapsedTimer>
+#include <QFutureWatcher>
 #include <QFile>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QRectF>
 #include <QString>
 #include <QVector3D>
 #include <QWidget>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <unordered_map>
 
@@ -206,7 +210,36 @@ private:
   void updateTrainingProgress();
   // Build a serialized BVH from an already-loaded mesh, write it atomically to
   // an mmap file, and point the daemon at it (VSIM_CTL_SET_WORLD_MESH).
-  void sendWorldMeshToSim(const vsim::LoadedMesh &m);
+  // The BVH build and blob write run on a worker (never the UI thread); only
+  // the rename + ctl send happen here once it lands. Newest request wins: an
+  // older in-flight one is dropped. liftAfter re-drops a buried drone, but only
+  // after this collision has been shipped.
+  // coverage (world N,E rect the mesh spans) lets the lift check that the drone
+  // is really over shipped collision; unset = covers everything (finite world).
+  void sendWorldMeshToSim(vsim::LoadedMesh m, bool liftAfter = false,
+                          std::optional<QRectF> coverage = std::nullopt);
+  struct WorldShipReq {
+    // Either a finished soup (finite worlds) or the cached terrain chunks plus
+    // a small extra soup (helipads); the worker flattens either to float[3n].
+    std::shared_ptr<const vsim::LoadedMesh> mesh;
+    std::vector<std::shared_ptr<const vsim::procgen::ProcMesh>> chunks;
+    std::vector<QVector3D> extra;
+    bool doubleSided = false;
+    bool lift = false;
+    std::optional<QRectF> coverage;
+  };
+  struct WorldShipResult {
+    bool ok = false;
+    uint32_t nodes = 0, nverts = 0;
+    qint64 bytes = 0;
+    double buildMs = 0, totalMs = 0;
+    QString err;
+  };
+  void enqueueShip(WorldShipReq req);
+  void startShipJob(WorldShipReq req);
+  void onShipFinished(const WorldShipResult &r, int gen, const QString &path,
+                      const QString &tmp);
+  void cancelWorldShip(); // drop in-flight + queued collision ships
   // Invoked when the SimWorker exits on its own (spawn failure, startup-grace
   // timeout, daemon death) so the UI doesn't get stuck in the Running state.
   void onSimWorkerExited();
@@ -275,10 +308,20 @@ private:
   class QTimer *m_streamTimer = nullptr; // polls the view centre (~10 Hz)
   // Mesh cache for loaded chunks (keyed like the streamer) — lets local
   // collision reuse meshes instead of regenerating them on each crossing.
-  std::unordered_map<qint64, vsim::procgen::ProcMesh> m_chunkCache;
+  std::unordered_map<qint64, std::shared_ptr<const vsim::procgen::ProcMesh>>
+      m_chunkCache; // shared so the collision worker can read without a copy
   int m_streamGen = 0; // bumped on (re)configure to drop stale builds
   bool m_collisionPending = false; // a crossing asked for a collision rebuild
   int m_colCx = 0, m_colCy = 0;    // cell that collision should cover
+  // Async collision ship: generation counter shared with the worker (bumped by
+  // every new request / cancel), the one running job, and the latest queued one.
+  std::shared_ptr<std::atomic<int>> m_shipGen =
+      std::make_shared<std::atomic<int>>(0);
+  QFutureWatcher<WorldShipResult> *m_shipWatcher = nullptr;
+  QString m_shipRunningTmp;
+  bool m_shipRunningLift = false;
+  std::optional<QRectF> m_shipRunningCover;
+  std::optional<WorldShipReq> m_shipPending;
 
   // Flora: packed instance data per built chunk (cache), and which chunks are
   // currently uploaded to the renderer (only the near ones, for perf).
