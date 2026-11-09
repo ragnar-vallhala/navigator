@@ -49,10 +49,10 @@ navlink_handlers_t g_handlers;
 
 void onRcChannels(void *, const navlink_frame_hdr_t *,
                   const navlink_rc_channels_t *m) {
-  // The bridge's frame below: throttle at idle (1000), arm forced off (1000),
-  // acro on (ch6 2000). The firmware's own fallback when no RC arrives is a
+  // The bridge's frame below (no input source: neutral link, override
+  // ignored): throttle at idle (1000), arm neutral (1500), acro on (ch6 2000). The firmware's own fallback when no RC arrives is a
   // hover frame -- throttle 1300, arm 2000, ch6 1500 -- so this cannot be it.
-  if (m->chan[2] == 1000 && m->chan[4] == 1000 && m->chan[5] == 2000)
+  if (m->chan[2] == 1000 && m->chan[4] == 1500 && m->chan[5] == 2000)
     g_rcFromBridge.fetch_add(1);
 }
 
@@ -79,9 +79,9 @@ void TstSitlEngine::engineRunsWithRcFromTheBridge() {
 
   // RC first: the firmware's feeder reads VAYU_UART_RC_PATH once, at boot.
   RcBridge rc;
-  rc.setJoystickPath(QStringLiteral("no-such-joystick")); // -> neutral axes
+  rc.setSource(RcBridge::Uart); // not connected -> no source: neutral frames
   rc.setEnabled(true);
-  rc.setArmOverride(0); // arm 1000
+  rc.setArmOverride(1); // ignored with no source: arm stays 1500
   rc.setAcro(true);     // ch6 2000
   QString err;
   QVERIFY2(rc.openPty(&err), qPrintable(err));

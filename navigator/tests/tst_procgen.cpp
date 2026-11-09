@@ -63,6 +63,8 @@ private slots:
   void streamerPagesOnCrossing();
   void floraSitsOnSurfaceAndDeterministic();
   void floraTilesWithoutDuplicates();
+  void renderAndCollisionSurfacesAgree();
+  void spawnAndPadHeightsMatchCollisionSurface();
 };
 
 void TstProcgen::noiseIsDeterministicAndBounded() {
@@ -365,6 +367,136 @@ void TstProcgen::floraTilesWithoutDuplicates() {
   for (const FloraInstance &b : c1)
     QVERIFY(b.pos.x >= chunkM - gp.spacing);
 }
+
+
+// Elevation [m] of a chunk mesh's own triangles at world (x, y): walks the same
+// two-triangle split meshFieldChunk emits, so it is exactly the surface a
+// physics BVH built from that mesh presents.
+static float meshElevationAt(const ProcMesh &m, int cx, int cy, float chunkM,
+                             int res, float x, float y) {
+  const float step = chunkM / static_cast<float>(res);
+  const float u = (x - cx * chunkM) / step, v = (y - cy * chunkM) / step;
+  const int i = std::min(res - 1, std::max(0, static_cast<int>(std::floor(u))));
+  const int j = std::min(res - 1, std::max(0, static_cast<int>(std::floor(v))));
+  const float fx = u - i, fy = v - j;
+  const std::size_t b = (static_cast<std::size_t>(j) * res + i) * 6;
+  auto z = [&](std::size_t k) { return -m.positions[b + k].z; };
+  // Tri A = (0,0),(1,0),(1,1) where fx >= fy; tri B = (0,0),(1,1),(0,1).
+  if (fx >= fy)
+    return z(0) + (z(1) - z(0)) * fx + (z(2) - z(1)) * fy;
+  return z(3) + (z(4) - z(5)) * fx + (z(5) - z(3)) * fy;
+}
+
+// Max |a-b| of the two chunk tessellations over random in-chunk points.
+static float maxMeshDeviation(uint32_t seed, int cx, int cy, float chunkM,
+                              int resA, int resB, int samples, uint32_t &rng) {
+  FieldParams fp;
+  fp.seed = seed;
+  TerrainField f(fp);
+  const ProcMesh a = meshFieldChunk(f, cx, cy, chunkM, resA);
+  const ProcMesh b = meshFieldChunk(f, cx, cy, chunkM, resB);
+  auto rnd = [&]() {
+    rng = rng * 1664525u + 1013904223u;
+    return static_cast<float>(rng >> 8) / 16777216.0f;
+  };
+  float mx = 0;
+  for (int n = 0; n < samples; ++n) {
+    const float x = (cx + rnd()) * chunkM, y = (cy + rnd()) * chunkM;
+    mx = std::max(mx, std::fabs(meshElevationAt(a, cx, cy, chunkM, resA, x, y) -
+                                meshElevationAt(b, cx, cy, chunkM, resB, x, y)));
+  }
+  return mx;
+}
+
+void TstProcgen::renderAndCollisionSurfacesAgree() {
+  // The streamer's defaults ARE what the sim runs: physics must collide with the
+  // surface that is drawn, to well under a centimetre.
+  const vsim::ChunkStreamer::Config cfg;
+  const float tol = 1e-3f; // m
+  uint32_t rng = 12345u;
+  float worst = 0;
+  for (uint32_t seed : {1u, 7u, 42u, 1337u, 90210u})
+    for (int c = 0; c < 3; ++c)
+      worst = std::max(worst,
+                       maxMeshDeviation(seed, c - 1, (c * 2) % 3 - 1, cfg.chunkM,
+                                        cfg.resolution, cfg.collisionResolution,
+                                        150, rng));
+  qInfo("default render vs collision max deviation: %.5f m", worst);
+  QVERIFY2(worst <= tol, "collision surface differs from the rendered surface");
+
+  // A coarser collision mesh is allowed only inside a stated bound; this pins
+  // the documented figure (measured ~1.1 m for 48 vs 100 cells on 192 m chunks).
+  float coarse = 0;
+  for (uint32_t seed : {1u, 7u, 42u, 1337u, 90210u})
+    coarse = std::max(coarse, maxMeshDeviation(seed, 0, 0, cfg.chunkM,
+                                               cfg.resolution, 48, 300, rng));
+  qInfo("render(100) vs collision(48) max deviation: %.3f m", coarse);
+  QVERIFY(coarse <= 2.0f);
+}
+
+void TstProcgen::spawnAndPadHeightsMatchCollisionSurface() {
+  const vsim::ChunkStreamer::Config cfg;
+  const float tol = 1e-3f;
+  uint32_t rng = 777u;
+  auto rnd = [&]() {
+    rng = rng * 1664525u + 1013904223u;
+    return static_cast<float>(rng >> 8) / 16777216.0f;
+  };
+  float worst = 0, worstRaw = 0;
+  for (uint32_t seed : {3u, 11u, 5150u}) {
+    FieldParams fp;
+    fp.seed = seed;
+    TerrainField f(fp);
+    // The 3x3 collision neighbourhood around the origin, exactly as shipped.
+    std::vector<ProcMesh> chunks;
+    for (int j = -1; j <= 1; ++j)
+      for (int i = -1; i <= 1; ++i)
+        chunks.push_back(meshFieldChunk(f, i, j, cfg.chunkM,
+                                        cfg.collisionResolution));
+    std::vector<const ProcMesh *> ptrs;
+    for (const ProcMesh &m : chunks)
+      ptrs.push_back(&m);
+    const vsim::LoadedMesh coll = vsim::collisionMeshFromChunks(ptrs);
+    QVERIFY(coll.valid);
+
+    // Points: the origin (home pad / spawn), chunk seams, and random spots.
+    std::vector<std::pair<float, float>> pts = {
+        {0.0f, 0.0f}, {cfg.chunkM, 5.0f}, {-cfg.chunkM, -cfg.chunkM}, {3.3f, -77.7f}};
+    for (int n = 0; n < 40; ++n)
+      pts.emplace_back((rnd() * 2 - 1) * cfg.chunkM * 0.99f,
+                       (rnd() * 2 - 1) * cfg.chunkM * 0.99f);
+    for (const auto &[x, y] : pts) {
+      const float deck = surfaceHeight(f, x, y, cfg.chunkM, cfg.collisionResolution);
+      // Brute-force the actual collision triangles for the one covering (x, y).
+      bool hit = false;
+      for (std::size_t t = 0; t + 2 < coll.positions.size() && !hit; t += 3) {
+        const QVector3D &p0 = coll.positions[t], &p1 = coll.positions[t + 1],
+                        &p2 = coll.positions[t + 2];
+        const float d = (p1.y() - p2.y()) * (p0.x() - p2.x()) +
+                        (p2.x() - p1.x()) * (p0.y() - p2.y());
+        if (std::fabs(d) < 1e-9f)
+          continue;
+        const float l0 = ((p1.y() - p2.y()) * (x - p2.x()) +
+                          (p2.x() - p1.x()) * (y - p2.y())) / d;
+        const float l1 = ((p2.y() - p0.y()) * (x - p2.x()) +
+                          (p0.x() - p2.x()) * (y - p2.y())) / d;
+        const float l2 = 1.0f - l0 - l1;
+        const float e = -1e-4f;
+        if (l0 < e || l1 < e || l2 < e)
+          continue;
+        const float zc = l0 * p0.z() + l1 * p1.z() + l2 * p2.z(); // NED z
+        worst = std::max(worst, std::fabs(deck - (-zc)));
+        worstRaw = std::max(worstRaw, std::fabs(f.height(x, y) - (-zc)));
+        hit = true;
+      }
+      QVERIFY2(hit, "point not covered by the collision mesh");
+    }
+  }
+  qInfo("deck/spawn vs collision triangles: max %.5f m (raw f.height(): %.3f m)",
+        worst, worstRaw);
+  QVERIFY2(worst <= tol, "pad/spawn height is not on the collision surface");
+}
+
 
 QTEST_MAIN(TstProcgen)
 #include "tst_procgen.moc"

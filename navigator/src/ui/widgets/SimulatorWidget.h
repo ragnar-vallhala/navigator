@@ -296,6 +296,9 @@ private:
   // for imported / no world), the last known drone position, and a request to
   // lift once the endless biome's local collision has shipped.
   std::function<float(float, float)> m_terrainHeightAt;
+  // Raw field height for bulk, display-only sampling (minimap, slope screen);
+  // m_terrainHeightAt is the exact meshed surface and costs ~0.3 ms a call.
+  std::function<float(float, float)> m_terrainRawHeightAt;
   QVector3D m_lastDronePos{0, 0, 0};
   void liftDroneToSurface(); // re-drop the drone above the surface if buried
 

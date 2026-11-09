@@ -1285,9 +1285,11 @@ QWidget *SimulatorWidget::buildFaultPanel() {
   auto *rcLoss = new QCheckBox(tr("RC link loss (→ firmware failsafe)"), grp);
   rcLoss->setToolTip(tr("Stop feeding RC so the firmware enters failsafe"));
   connect(rcLoss, &QCheckBox::toggled, this, [this](bool on) {
-    // On: cut the RC feed. Off: restore whatever the RC-enable box says.
+    // Link loss is distinct from the RC-enable box: it makes the bridge send
+    // NO_SIGNAL so the firmware's RC failsafe fires. The enable box is left
+    // alone, so unchecking this restores exactly the prior RC state.
     if (m_rc)
-      m_rc->setEnabled(on ? false : (m_rcEnable && m_rcEnable->isChecked()));
+      m_rc->setLinkLost(on);
     appendLog("fault",
               on ? tr("RC link loss injected") : tr("RC link restored"));
   });
@@ -2176,11 +2178,23 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
   // One terrain-height sampler (world N,E -> elevation [m]) for the active world,
   // shared by the minimap and the "lift drone onto the surface" logic.
   std::function<float(float, float)> heightAt;
+  // Raw field height: cheap (~1 us), used where many samples are drawn
+  // (minimap, pad slope screening) and metre-level error is harmless.
+  std::function<float(float, float)> rawHeightAt;
   float minimapRange = 200.0f;
   if (endless) {
-    heightAt = [this](float n, float e) {
+    rawHeightAt = [this](float n, float e) {
       const auto f = m_chunkStreamer.field();
       return f ? f->height(n, e) : 0.0f;
+    };
+    heightAt = [this](float n, float e) {
+      const auto f = m_chunkStreamer.field();
+      // The meshed (slope-capped) surface, not the raw field, so spawn and pad
+      // heights match what is drawn and collided with.
+      const auto &c = m_chunkStreamer.config();
+      return f ? vsim::procgen::surfaceHeight(*f, n, e, c.chunkM,
+                                              c.collisionResolution)
+               : 0.0f;
     };
   } else if (vsim::isKnownBiome(w.proceduralBiome)) {
     auto hf = std::make_shared<vsim::procgen::Heightfield>(
@@ -2188,12 +2202,15 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
     heightAt = [hf](float n, float e) { return hf->sampleWorld(n, e); };
     minimapRange = w.proceduralSizeM * 0.5f; // fit the finite arena
   }
+  if (!rawHeightAt)
+    rawHeightAt = heightAt; // finite biomes: the heightfield is already cheap
   m_terrainHeightAt = heightAt; // null for imported / no world
+  m_terrainRawHeightAt = rawHeightAt;
   // Scatter helipad pads (and the home pad at origin) for the new world.
   m_lastHelipadCenter = QVector3D(0, 0, 0);
   recomputeHelipads(0.0f, 0.0f);
   if (m_minimap) {
-    m_minimap->setSampler(heightAt);
+    m_minimap->setSampler(rawHeightAt); // ~12k samples: must stay cheap
     if (heightAt) {
       m_minimap->setRangeM(minimapRange);
       m_minimap->setReferenceHeight(endless ? w.field.heightM : 80.0f);
@@ -2461,8 +2478,10 @@ void SimulatorWidget::onStreamTick() {
       BuiltChunk b;
       b.mesh =
           vsim::procgen::meshFieldChunk(*field, req.cx, req.cy, chunkM, res);
-      b.collMesh = vsim::procgen::meshFieldChunk(*field, req.cx, req.cy, chunkM,
-                                                 collRes);
+      b.collMesh = collRes == res
+                       ? b.mesh // same tessellation: collide with what is drawn
+                       : vsim::procgen::meshFieldChunk(*field, req.cx, req.cy,
+                                                       chunkM, collRes);
       return b;
     }));
   }
@@ -2638,10 +2657,12 @@ void SimulatorWidget::recomputeHelipads(float cx, float cy) {
   };
   auto slopeAt = [&](float px, float py) {
     const float dhdx =
-        (m_terrainHeightAt(px + kEps, py) - m_terrainHeightAt(px - kEps, py)) /
+        (m_terrainRawHeightAt(px + kEps, py) -
+         m_terrainRawHeightAt(px - kEps, py)) /
         (2.0f * kEps);
     const float dhdy =
-        (m_terrainHeightAt(px, py + kEps) - m_terrainHeightAt(px, py - kEps)) /
+        (m_terrainRawHeightAt(px, py + kEps) -
+         m_terrainRawHeightAt(px, py - kEps)) /
         (2.0f * kEps);
     return std::sqrt(dhdx * dhdx + dhdy * dhdy);
   };
