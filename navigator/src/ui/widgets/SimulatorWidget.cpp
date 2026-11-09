@@ -1894,6 +1894,7 @@ void SimulatorWidget::startAutotune() {
     const vsim::GeometryConfig g = m_geomEditor->physicsConfig();
     vsim_ctl_geometry_t gb{};
     gb.mass = g.mass;
+    gb.prop_radius = g.propRadius;
     for (int i = 0; i < 9; ++i)
       gb.inertia[i] = g.inertia[i];
     for (int i = 0; i < 4; ++i) {

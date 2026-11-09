@@ -129,6 +129,7 @@ void SimWorker::sendRigPose(float rollDeg, float pitchDeg, float yawDeg) {
 void SimWorker::sendGeometry(const GeometryConfig &g) {
   vsim_ctl_geometry_t body{};
   body.mass = g.mass;
+  body.prop_radius = g.propRadius;
   for (int i = 0; i < 9; ++i)
     body.inertia[i] = g.inertia[i];
   for (int i = 0; i < 4; ++i) {

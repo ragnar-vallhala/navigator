@@ -79,6 +79,9 @@ struct GeometryConfig {
   QVector3D translate{0, 0, 0}; // body-frame offset applied to the mesh [m]
   QVector3D rotate{0, 0, 0};    // body-frame orientation, XYZ Euler [deg]
   float mass = 1.0f;            // kg
+  // Rotor radius [m] (half the prop diameter): sizes ground effect and the
+  // contact footprint in the sim. Default is a 5-inch prop.
+  float propRadius = 0.0635f;
   // Inertia tensor about the CoM, body frame [kg*m^2], row-major.
   std::array<float, 9> inertia = {0.012f, 0, 0, 0, 0.012f, 0, 0, 0, 0.022f};
   QVector3D com{0, 0, 0}; // CoM offset from model origin [m]
