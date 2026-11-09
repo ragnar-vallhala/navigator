@@ -378,7 +378,8 @@ void TstProcgen::collisionWindowKeepsUpWithShipLatency() {
       int shipCx = INT_MIN, shipCy = INT_MIN;     // what the engine has
       int pendCx = 0, pendCy = 0;
       float pendAt = -1.0f;
-      for (float t = 0.0f; t < 60.0f; t += dt) {
+      for (int step = 0; step < 600; ++step) {
+        const float t = static_cast<float>(step) * dt;
         const float x = 7.0f + vx * t, y = 11.0f + vy * t;
         if (pendAt >= 0.0f && t >= pendAt) {
           shipCx = pendCx;
