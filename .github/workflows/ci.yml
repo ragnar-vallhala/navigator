@@ -6,10 +6,15 @@
 # release of the vayu repo and unpacked at the repo root, which is where CMake
 # looks by default. The pin lives in VAYU_FW_VERSION on the fetch step.
 #
-# A release asset and not an Actions artifact: artifacts need an authenticated,
-# same-repo token, so this workflow could not read one from another repository
-# even though that repository is public. A release asset downloads over plain
-# HTTPS with no credentials, which is also how a person gets it.
+# A release asset and not an Actions artifact: artifacts need a same-repo
+# token, so this workflow could not read one from another repository.
+#
+# vayu is private, so the release asset is no longer anonymous either: this
+# workflow's own GITHUB_TOKEN cannot read another private repository. The fetch
+# authenticates with the VAYU_RELEASE_TOKEN secret, a fine-grained token with
+# read-only Contents access to ragnar-vallhala/vayu and nothing else. Pull
+# requests from forks get no secrets, so for them the fetch fails with a message
+# saying so rather than a bare 404.
 #
 # The GCS and the firmware therefore version independently, which is the point
 # of shipping them separately. A mismatch is still caught at load rather than
@@ -100,11 +105,19 @@ jobs:
           # and the SITL cases fail loudly -- which is the right place to find
           # out, but not the earliest one.
           VAYU_FW_VERSION: v0.1.0
+          # vayu is private: see the header. Read-only, vayu Contents only.
+          GH_TOKEN: ${{ secrets.VAYU_RELEASE_TOKEN }}
         run: |
           set -euo pipefail
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::VAYU_RELEASE_TOKEN is not set, or this run cannot see" \
+                 "secrets (a pull request from a fork). vayu is private, so the" \
+                 "SITL SDK cannot be fetched without it."
+            exit 1
+          fi
           ASSET="vayu-sitl-sdk-${VAYU_FW_VERSION}-linux-x86_64.tar.gz"
-          curl -sSLf -O \
-            "https://github.com/ragnar-vallhala/vayu/releases/download/${VAYU_FW_VERSION}/${ASSET}"
+          gh release download "${VAYU_FW_VERSION}" \
+            --repo ragnar-vallhala/vayu --pattern "${ASSET}"
           tar xzf "$ASSET"
           echo "engine build id: $(cat vayu-sitl-sdk/BUILD_ID)"
           # The stamp must be the pinned tag. If it is a bare commit hash the

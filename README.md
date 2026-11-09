@@ -26,8 +26,11 @@ for the host, shipped by the
 [vayu](https://github.com/ragnar-vallhala/vayu/releases) repository as a
 release asset and loaded at runtime. CI builds against **v0.1.0**; grab that
 release, or the rolling `sitl-sdk-latest` if you want whatever is on firmware
-main. Unpack it at the repo root:
+main. vayu is a private repository, so the download needs a GitHub login with
+access to it. Fetch and unpack it at the repo root:
 
+    gh release download v0.1.0 --repo ragnar-vallhala/vayu \
+        --pattern 'vayu-sitl-sdk-v0.1.0-linux-x86_64.tar.gz'
     tar xzf vayu-sitl-sdk-v0.1.0-linux-x86_64.tar.gz   # -> ./vayu-sitl-sdk/
 
 CMake finds `vayu-sitl-sdk/include` from there with no flags. At runtime:

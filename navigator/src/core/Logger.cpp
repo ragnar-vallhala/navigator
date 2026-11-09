@@ -17,6 +17,7 @@
 #include "Logger.h"
 
 #include <QDateTime>
+#include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QMutex>
@@ -60,6 +61,15 @@ void enforceMaxFiles(const QString &dir, int maxFiles) {
   }
 }
 
+// Open g_file for append. Can't go through Logger itself (it is the log
+// file that failed), so report on the Qt message channel instead.
+void openAppendLocked() {
+  if (!g_file.open(QIODevice::WriteOnly | QIODevice::Append |
+                   QIODevice::Text))
+    qWarning().noquote() << "Logger: cannot open" << g_filePath << ":"
+                         << g_file.errorString();
+}
+
 // Roll the current file to a numbered sibling and reopen fresh.
 // File is *already* closed by the caller; we just rename + reopen.
 void rotateLocked() {
@@ -80,7 +90,7 @@ void rotateLocked() {
   }
   // Reopen.
   g_file.setFileName(g_filePath);
-  g_file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text);
+  openAppendLocked();
   g_out.setDevice(&g_file);
 }
 
@@ -138,7 +148,7 @@ void log(const QString &line) {
     g_file.close();
     g_filePath = today;
     g_file.setFileName(g_filePath);
-    g_file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text);
+    openAppendLocked();
     g_out.setDevice(&g_file);
   }
 
