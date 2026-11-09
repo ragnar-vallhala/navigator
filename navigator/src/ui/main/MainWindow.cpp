@@ -1304,6 +1304,7 @@ void MainWindow::applyAllSettings(bool persist) {
   Notify::setEnabled(s.toastNotifications);
   m_chime.setEnabled(s.audioAlerts);
   m_confirmBeforeArm = s.confirmBeforeArm;
+  m_battery.setCellsOverride(s.batteryCells);
 #ifdef NAVIGATOR_HAS_SITL
   if (m_simulatorWidget)
     m_simulatorWidget->setPropAudioDefault(s.simPropAudio);
@@ -1581,6 +1582,37 @@ void MainWindow::onUiTimer() {
     for (int i = 0; i < 4; ++i)
       speeds.append(s.motors.speeds[i]);
     m_motorWidget->setMotorSpeeds(speeds);
+  }
+
+  // BATTERY → the IMU panel's gauge (percent; volts + cells in its tooltip) and
+  // Motor Status' Battery field. Whether it is a pack at all comes from the
+  // flags, not the voltage: an unplugged pack still reads a few volts.
+  const bool battFresh =
+      s.lastBatteryMs != 0 && (nowMs - s.lastBatteryMs) < kTelemetryStaleMs;
+  if (!battFresh) {
+    m_battery.reset();
+    m_imuPanel->setBatteryUnavailable(tr("no battery telemetry"));
+    m_motorWidget->setBattery(QStringLiteral("-"));
+  } else {
+    const battery::Reading b =
+        m_battery.update(s.battery.voltage, s.battery.flags);
+    if (b.pack) {
+      const QString volts = QString("%1 V").arg(b.volts, 0, 'f', 1);
+      const QString cells =
+          QString("%1S%2").arg(b.cells).arg(b.cellsInferred ? tr(" (auto)")
+                                                             : QString());
+      m_imuPanel->setBattery(b.percent, volts + QStringLiteral(" · ") + cells);
+      m_motorWidget->setBattery(QString("%1 · %2S · %3%")
+                                    .arg(volts)
+                                    .arg(b.cells)
+                                    .arg(b.percent, 0, 'f', 0));
+    } else {
+      // Not a pack: say why, with the reading the flags are judging.
+      const QString why = QString("%1 (%2 V)").arg(b.status).arg(
+          b.volts, 0, 'f', 1);
+      m_imuPanel->setBatteryUnavailable(why);
+      m_motorWidget->setBattery(why);
+    }
   }
 
   // Sparse pills + arm state — edge-guarded so we only restyle on change.

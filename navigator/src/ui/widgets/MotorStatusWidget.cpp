@@ -328,8 +328,9 @@ MotorStatusWidget::MotorStatusWidget(QWidget *parent) : QWidget(parent) {
   m_current = addPowerField(powerGrid, 3, tr("Current"));
   m_escTemp = addPowerField(powerGrid, 4, tr("ESC Temp"));
   m_mahUsed = addPowerField(powerGrid, 5, tr("Used"));
-  // Battery / current / ESC-temp / mAh have no telemetry source yet → they stay
-  // "-" (set by addPowerField) so absent data isn't mistaken for a real value.
+  // Current / ESC-temp / mAh have no telemetry source yet → they stay "-" (set
+  // by addPowerField) so absent data isn't mistaken for a real value. Battery
+  // reads "-" too until BATTERY telemetry arrives (setBattery).
   rightPanel->addWidget(powerBox);
 
   rightPanel->addStretch();
@@ -360,4 +361,9 @@ void MotorStatusWidget::setMotorSpeeds(const QVector<float> &speeds) {
   // Derived power readouts from the live motor mix.
   m_avgThrottle->setText(QString("%1%").arg(static_cast<int>(sum / 4 * 100)));
   m_maxSpread->setText(QString("%1%").arg(static_cast<int>((mx - mn) * 100)));
+}
+
+void MotorStatusWidget::setBattery(const QString &text) {
+  if (m_battery && m_battery->text() != text)
+    m_battery->setText(text);
 }

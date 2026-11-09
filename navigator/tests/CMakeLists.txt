@@ -28,6 +28,11 @@ navigator_test(tst_time_sync_estimator
     ${SRC}/protocol/TimeSyncEstimator.cpp)
 target_include_directories(tst_time_sync_estimator PRIVATE ${SRC}/protocol)
 
+# ---- Battery: is it a pack, how many cells, what percent -------------------
+navigator_test(tst_battery_estimator tst_battery_estimator.cpp)
+target_include_directories(tst_battery_estimator PRIVATE ${SRC}/core)
+target_link_libraries(tst_battery_estimator PRIVATE navlink_codec)
+
 # ---- CMD_SET_PID command codec (AT-1 foundation) --------------------------
 navigator_test(tst_command_codec
     tst_command_codec.cpp

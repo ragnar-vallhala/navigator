@@ -48,6 +48,7 @@ signals:
   void controlLoopDataReceived(const ControlLoopData &data);
   void estPerfReceived(const EstPerfData &data);
   void baroReceived(const BaroData &data);
+  void batteryReceived(const BatteryData &data);
   void verticalStateReceived(const VerticalStateData &data);
   void notchStatusReceived(const NotchStatusData &data);
   void hslStatusReceived(const HslStatusData &data);

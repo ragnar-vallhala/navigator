@@ -167,7 +167,7 @@ ImuPanel::ImuPanel(QWidget *parent) : QWidget(parent) {
   gauges->setSpacing(8);
   m_tempGauge = new VGauge(tr("DEVICE\nTEMP"), 0, 80, "°C", VGauge::Temp, this);
   m_battGauge = new VGauge(tr("BATTERY"), 0, 100, "%", VGauge::Battery, this);
-  // No battery telemetry source yet → the gauge reads "-" (set by its ctor).
+  // Reads "-" (set by its ctor) until BATTERY telemetry arrives.
   gauges->addWidget(m_tempGauge);
   gauges->addWidget(m_battGauge);
   auto *gaugeWrap = new QWidget(this);
@@ -240,7 +240,15 @@ void ImuPanel::setSensor(const QString &name) {
     m_header->setText(QString("IMU — %1").arg(name));
 }
 
-void ImuPanel::setBattery(double pct) { m_battGauge->setValue(pct); }
+void ImuPanel::setBattery(double pct, const QString &detail) {
+  m_battGauge->setValue(pct);
+  m_battGauge->setToolTip(detail);
+}
+
+void ImuPanel::setBatteryUnavailable(const QString &why) {
+  m_battGauge->setUnavailable();
+  m_battGauge->setToolTip(why);
+}
 
 void ImuPanel::setGraphWindow(int seconds) {
   for (RealTimeGraph *g : {m_accG, m_gyrG, m_magG, m_baroG, m_vertG})
