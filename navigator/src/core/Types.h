@@ -52,6 +52,18 @@ struct BaroData {
 };
 
 // -----------------------------------------------------------
+// Battery – mirrors NavLink BATTERY (msgid 1050): pack voltage from the FC's
+// divider ADC. `voltage` is a pack only when `flags` (battery_flags) has both
+// PRESENT and CONVERTED; it is sent regardless, as evidence. battery::Estimator
+// (core/BatteryEstimator.h) turns this into what the UI shows.
+// -----------------------------------------------------------
+struct BatteryData {
+  float voltage = 0.0f; // V
+  uint16_t counts = 0;  // raw ADC count the voltage came from
+  uint8_t flags = 0;    // NAVLINK_BATTERY_FLAGS_* bitmask
+};
+
+// -----------------------------------------------------------
 // Vertical state – mirrors NavLink VERTICAL_STATE (msgid 1040), the fused
 // 2-state baro+accel estimate (VERT). altitude/climbRate are the fused outputs;
 // baroAltitude is the raw sensor altitude carried alongside so the GCS can chart

@@ -64,8 +64,10 @@ public slots:
   void setStateBand(bool on);   // vehicle-state colour band
   void setTraceWidth(double w); // trace pen width
   void setAntialias(bool on);   // antialiased trace painting
-  // Battery level (0..100 %); no telemetry source yet so MainWindow leaves it.
-  void setBattery(double pct);
+  // Battery gauge: a pack at `pct` (0..100), with volts/cells as the tooltip;
+  // or no usable pack, with the reason (or "no telemetry") as the tooltip.
+  void setBattery(double pct, const QString &detail);
+  void setBatteryUnavailable(const QString &why);
   // Vehicle-state colour for the graphs' state band (advanced per IMU update).
   void setVehicleState(const QColor &c) { m_state = c; }
 

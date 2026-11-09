@@ -60,7 +60,8 @@ struct GcsSettings {
   bool exportOnDisconnect = false; // dump the session log on disconnect
 
   // Alerts & Audio (mockup parity, wired 2026-06-14). Battery warn/crit are not
-  // here yet — no battery voltage in telemetry, so they stay coming-soon.
+  // here yet: BATTERY telemetry now carries the voltage, but no alert is wired
+  // to it, so they stay coming-soon.
   bool toastNotifications = true; // in-app status-bar toasts (Notify)
   bool audioAlerts = true;        // arm/disarm/failsafe chimes (ChimeAudio)
   bool confirmBeforeArm = true;   // require a confirm dialog before ARM
@@ -70,6 +71,10 @@ struct GcsSettings {
   // coming-soon — kernel-perf is pushed by the firmware, not polled.
   int packetBufferRows = 5000; // Packet Analyzer ring-buffer cap
   bool crcCheck = true;        // drop packets that fail CRC
+
+  // Battery cell count for the % readout: 0 = infer from voltage (default),
+  // 1..12 = this pack. See battery::Estimator.
+  int batteryCells = 0;
 
   // Versioned (de)serialisation — the leading version field lets us
   // append fields without breaking existing settings files. The trailing
@@ -86,7 +91,7 @@ struct GcsSettings {
         << s.traceWidth << s.antialias << s.logDirectory << s.timestampMode
         << s.maxLogLines << s.exportOnDisconnect << s.toastNotifications
         << s.audioAlerts << s.confirmBeforeArm << s.simPropAudio
-        << s.packetBufferRows << s.crcCheck;
+        << s.packetBufferRows << s.crcCheck << s.batteryCells;
     return out;
   }
 
@@ -152,6 +157,8 @@ struct GcsSettings {
       in >> s.packetBufferRows;
     if (!in.atEnd())
       in >> s.crcCheck;
+    if (!in.atEnd())
+      in >> s.batteryCells;
     return in;
   }
 };

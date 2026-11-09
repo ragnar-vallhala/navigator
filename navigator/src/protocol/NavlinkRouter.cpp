@@ -150,6 +150,18 @@ void thunkBaro(void *ctx, const navlink_frame_hdr_t *,
   r->onBaro(d);
 }
 
+void thunkBattery(void *ctx, const navlink_frame_hdr_t *,
+                  const navlink_battery_t *m) {
+  auto *r = static_cast<NavlinkRouter *>(ctx);
+  if (!r->onBattery)
+    return;
+  BatteryData d;
+  d.voltage = m->voltage;
+  d.counts = m->counts;
+  d.flags = m->flags;
+  r->onBattery(d);
+}
+
 void thunkNotchStatus(void *ctx, const navlink_frame_hdr_t *,
                       const navlink_notch_status_t *m) {
   auto *r = static_cast<NavlinkRouter *>(ctx);
@@ -374,6 +386,7 @@ NavlinkRouter::NavlinkRouter() : d_(new Impl) {
   d_->handlers.on_control_trace = thunkControlTrace;
   d_->handlers.on_est_perf = thunkEstPerf;
   d_->handlers.on_baro = thunkBaro;
+  d_->handlers.on_battery = thunkBattery;
   d_->handlers.on_vertical_state = thunkVerticalState;
   d_->handlers.on_notch_status = thunkNotchStatus;
   d_->handlers.on_hsl_status = thunkHslStatus;

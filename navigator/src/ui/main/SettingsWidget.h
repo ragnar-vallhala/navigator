@@ -74,6 +74,7 @@ private:
   QCheckBox *m_simPropAudioChk = nullptr;
   // Advanced.
   QSpinBox *m_packetBufferSpin = nullptr;
+  QSpinBox *m_batteryCellsSpin = nullptr;
   QCheckBox *m_crcCheckChk = nullptr;
   QSpinBox *m_recentViewsSpin = nullptr;
   QComboBox *m_themeCombo = nullptr;

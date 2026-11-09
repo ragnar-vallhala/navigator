@@ -45,6 +45,7 @@ public:
   std::function<void(const ControlLoopData &)> onControlLoop;
   std::function<void(const EstPerfData &)> onEstPerf;
   std::function<void(const BaroData &)> onBaro;
+  std::function<void(const BatteryData &)> onBattery;
   std::function<void(const VerticalStateData &)> onVerticalState;
   std::function<void(const NotchStatusData &)> onNotchStatus;
   std::function<void(const HslStatusData &)> onHslStatus;

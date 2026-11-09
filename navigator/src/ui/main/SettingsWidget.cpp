@@ -649,7 +649,19 @@ SettingsWidget::SettingsWidget(QWidget *parent) : QWidget(parent) {
       track(m_audioAlertsChk, rr.name);
     }
 
-    // Battery warn/crit stay coming-soon — no battery voltage in telemetry yet.
+    m_batteryCellsSpin = spin(0, 12, 0);
+    m_batteryCellsSpin->setSpecialValueText(tr("Auto"));
+    m_batteryCellsSpin->setSuffix(tr(" S"));
+    {
+      auto rr = makeRow("Battery cells",
+                        "for the % readout; Auto infers from the voltage",
+                        m_batteryCellsSpin);
+      v->addWidget(rr.w);
+      track(m_batteryCellsSpin, rr.name);
+    }
+
+    // Battery warn/crit stay coming-soon: the voltage is in telemetry now, but
+    // no alert is wired to it yet.
     v->addWidget(soonRow("Battery warning", "amber alert below (V/cell)",
                          dspin(2.5, 4.2, 3.50, 0.05)));
     v->addWidget(soonRow("Battery critical", "red alert below (V/cell)",
@@ -854,6 +866,8 @@ void SettingsWidget::setSettings(const GcsSettings &s) {
   m_maxLogLinesSpin->setValue(s.maxLogLines);
   const QSignalBlocker bEod(m_exportOnDisconnectChk);
   m_exportOnDisconnectChk->setChecked(s.exportOnDisconnect);
+  const QSignalBlocker bCells(m_batteryCellsSpin);
+  m_batteryCellsSpin->setValue(s.batteryCells);
   const QSignalBlocker bToast(m_toastChk);
   m_toastChk->setChecked(s.toastNotifications);
   const QSignalBlocker bAud(m_audioAlertsChk);
@@ -943,6 +957,7 @@ GcsSettings SettingsWidget::getSettings() const {
   s.simPropAudio = m_simPropAudioChk && m_simPropAudioChk->isChecked();
   s.packetBufferRows = m_packetBufferSpin ? m_packetBufferSpin->value() : 5000;
   s.crcCheck = !m_crcCheckChk || m_crcCheckChk->isChecked();
+  s.batteryCells = m_batteryCellsSpin ? m_batteryCellsSpin->value() : 0;
   s.recentViewsCount = m_recentViewsSpin ? m_recentViewsSpin->value() : 5;
   s.theme = m_themeCombo ? m_themeCombo->currentIndex() : 0;
   s.unitSystem = m_unitSystemCombo ? m_unitSystemCombo->currentIndex() : 0;

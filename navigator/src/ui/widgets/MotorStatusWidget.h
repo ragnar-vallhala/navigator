@@ -32,6 +32,8 @@ public:
   ~MotorStatusWidget() override = default;
 
   void setMotorSpeeds(const QVector<float> &speeds);
+  // The Power group's Battery field, e.g. "16.4 V · 4S · 72%" or "no pack".
+  void setBattery(const QString &text);
 
 signals:
   void backToHomeRequested();
@@ -42,8 +44,9 @@ private:
   QLabel *m_valLabels[4];
   QLabel *m_stdLabels[4];
   // Power group (mockup .gframe "Power"). Avg-throttle / max-spread are derived
-  // from the live motor speeds; battery / current / ESC-temp / mAh are
-  // placeholders until power telemetry exists (keep-the-widget policy).
+  // from the live motor speeds and battery comes from BATTERY telemetry;
+  // current / ESC-temp / mAh are placeholders until power telemetry exists
+  // (keep-the-widget policy).
   QLabel *m_avgThrottle = nullptr;
   QLabel *m_maxSpread = nullptr;
   QLabel *m_battery = nullptr;
