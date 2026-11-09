@@ -74,6 +74,7 @@ QJsonObject configToJson(const vsim::GeometryConfig &c) {
   root["meshPath"] = c.meshPath;
   root["scale"] = c.scale;
   root["mass"] = c.mass;
+  root["prop_radius"] = c.propRadius;
   root["translate"] = vec3ToJson(c.translate);
   root["rotate"] = vec3ToJson(c.rotate);
   root["com"] = vec3ToJson(c.com);
@@ -100,6 +101,7 @@ vsim::GeometryConfig configFromJson(const QJsonObject &root) {
   c.meshPath = root.value("meshPath").toString(c.meshPath);
   c.scale = root.value("scale").toDouble(c.scale);
   c.mass = root.value("mass").toDouble(c.mass);
+  c.propRadius = root.value("prop_radius").toDouble(c.propRadius);
   c.translate = vec3FromJson(root.value("translate"), c.translate);
   c.rotate = vec3FromJson(root.value("rotate"), c.rotate);
   c.com = vec3FromJson(root.value("com"), c.com);

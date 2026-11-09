@@ -15,6 +15,8 @@
 """Unit tests for GCS .conf parsing + geometry framing (no I/O beyond a tmp file)."""
 import struct
 
+import pytest
+
 from vayu_headless import config
 from vayu_headless.transport import vsim
 
@@ -63,3 +65,12 @@ def test_geometry_frame_uses_mass_and_forces_thrust_axis():
     # then m0 pos(3f=12) -> axis at offset 24+40+12 = 76
     ax, ay, az = struct.unpack_from("<3f", f, 76)
     assert (ax, ay, az) == (0.0, 0.0, -1.0)
+
+
+def test_geometry_frame_carries_trailing_prop_radius():
+    # ABI 4: vsim_ctl_geometry_t is 220 B = mass + 9 inertia + 4*11 motor + prop_radius
+    f = config.geometry_frame({})
+    off = 24 + 4 + 36 + 4 * 11 * 4
+    assert struct.unpack_from("<f", f, off)[0] == pytest.approx(0.0635)
+    f = config.geometry_frame({"prop_radius": "0.0762"})
+    assert struct.unpack_from("<f", f, off)[0] == pytest.approx(0.0762)

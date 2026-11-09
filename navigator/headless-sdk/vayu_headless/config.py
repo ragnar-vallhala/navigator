@@ -74,7 +74,7 @@ def read_gcs_conf(path):
 
 
 def geometry_frame(g):
-    """Pack vsim_ctl_geometry_t from the parsed geometry dict (54 floats)."""
+    """Pack vsim_ctl_geometry_t from the parsed geometry dict (55 floats, 220 B)."""
     f = lambda k, d=0.0: float(g.get(k, d))   # noqa: E731
     body = struct.pack("<f", f("mass", 1.0))
     body += struct.pack("<9f", *[f("I%d" % i) for i in range(9)])
@@ -89,4 +89,7 @@ def geometry_frame(g):
         body += struct.pack("<5f", f(p + "spin", 1.0), f(p + "kt", 1.522e-5),
                             f(p + "km", 2.44e-7), f(p + "wmax", 1200.0),
                             f(p + "tau", 0.0125))
+    # Trailing prop_radius [m] (half the prop diameter); ABI 4 / 220 B. <=0 keeps
+    # the sim default (0.0635, a 5in prop). VSIM_PROP_RADIUS env overrides it.
+    body += struct.pack("<f", f("prop_radius", 0.0635))
     return vsim.ctl(vsim.CTL_SET_GEOMETRY, body)
