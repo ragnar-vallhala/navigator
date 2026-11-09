@@ -44,6 +44,7 @@ void ChunkStreamer::deactivate() {
   inflight_.clear();
   desired_.clear();
   first_ = true;
+  colCx_ = colCy_ = INT_MIN;
 }
 
 void ChunkStreamer::markBuilt(qint64 key) {
@@ -65,7 +66,38 @@ std::vector<ChunkReq> ChunkStreamer::collisionChunks(int cx, int cy) const {
   return out;
 }
 
-StreamPlan ChunkStreamer::plan(float wx, float wy) {
+CollisionRecentre ChunkStreamer::collisionRecentre(float wx, float wy, float vx,
+                                                   float vy, int colCx,
+                                                   int colCy, float chunkM,
+                                                   float lookaheadS,
+                                                   float hysteresis) {
+  // Look-ahead displacement, capped under one chunk.
+  float sx = vx * lookaheadS, sy = vy * lookaheadS;
+  const float len = std::hypot(sx, sy);
+  const float cap = 0.99f * chunkM;
+  if (len > cap) {
+    sx *= cap / len;
+    sy *= cap / len;
+  }
+  const float qx = wx + sx, qy = wy + sy;
+  CollisionRecentre r;
+  r.cx = static_cast<int>(std::floor(qx / chunkM));
+  r.cy = static_cast<int>(std::floor(qy / chunkM));
+  if (colCx == INT_MIN || colCy == INT_MIN) {
+    r.recentre = true;
+    return r;
+  }
+  if (r.cx == colCx && r.cy == colCy)
+    return r; // predicted to stay in the current chunk
+  const float mx = (colCx + 0.5f) * chunkM, my = (colCy + 0.5f) * chunkM;
+  const float lim = (0.5f + hysteresis) * chunkM;
+  const bool out = std::fabs(wx - mx) > lim || std::fabs(wy - my) > lim ||
+                   std::fabs(qx - mx) > lim || std::fabs(qy - my) > lim;
+  r.recentre = out;
+  return r;
+}
+
+StreamPlan ChunkStreamer::plan(float wx, float wy, float vx, float vy) {
   StreamPlan p;
   if (!active_ || !field_)
     return p;
@@ -89,16 +121,22 @@ StreamPlan ChunkStreamer::plan(float wx, float wy) {
     for (qint64 key : p.toRemove)
       loaded_.erase(key);
 
-    if (cx != colCx_ || cy != colCy_) {
-      p.collisionDue = true;
-      p.colCx = cx;
-      p.colCy = cy;
-      colCx_ = cx;
-      colCy_ = cy;
-    }
     curCx_ = cx;
     curCy_ = cy;
     first_ = false;
+  }
+
+  // Collision follows position + velocity with hysteresis, independent of the
+  // render cell (so it can recentre early, before the next chunk is entered).
+  const CollisionRecentre cr =
+      collisionRecentre(wx, wy, vx, vy, colCx_, colCy_, cfg_.chunkM,
+                        cfg_.collisionLookaheadS, cfg_.collisionHysteresis);
+  if (cr.recentre && (cr.cx != colCx_ || cr.cy != colCy_)) {
+    p.collisionDue = true;
+    p.colCx = cr.cx;
+    p.colCy = cr.cy;
+    colCx_ = cr.cx;
+    colCy_ = cr.cy;
   }
 
   // Nearest-first list of chunks neither loaded nor already building.

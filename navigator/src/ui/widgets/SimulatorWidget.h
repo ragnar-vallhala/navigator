@@ -343,6 +343,7 @@ private:
   // m_terrainHeightAt is the exact meshed surface and costs ~0.3 ms a call.
   std::function<float(float, float)> m_terrainRawHeightAt;
   QVector3D m_lastDronePos{0, 0, 0};
+  QVector3D m_lastDroneVel; // NED [m/s]; feeds the collision look-ahead
   void liftDroneToSurface(); // re-drop the drone above the surface if buried
 
   // Helipad landing platforms scattered deterministically on flat ground. Each

@@ -2090,6 +2090,7 @@ void SimulatorWidget::applyProposedGains() {
 
 void SimulatorWidget::updateHud(const vsim::SimSnapshot &s) {
   m_lastDronePos = s.pos_w; // tracked for the lift-onto-terrain logic
+  m_lastDroneVel = s.vel_w;
   if (m_hud)
     m_hud->setSnapshot(s);
   if (m_horizon) {
@@ -2434,7 +2435,11 @@ void SimulatorWidget::onStreamTick() {
   if (!m_chunkStreamer.active() || !m_renderer)
     return;
   const QVector3D c = m_renderer->streamCenter();
-  const vsim::StreamPlan p = m_chunkStreamer.plan(c.x(), c.y());
+  // The collision window leads the drone along its velocity (not when the
+  // free-fly camera is the centre: that has no physics body).
+  const QVector3D v = (m_sim && !m_renderer->freeFly()) ? m_lastDroneVel
+                                                        : QVector3D();
+  const vsim::StreamPlan p = m_chunkStreamer.plan(c.x(), c.y(), v.x(), v.y());
 
   for (qint64 key : p.toRemove) {
     m_renderer->removeWorldChunk(key);
