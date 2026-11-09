@@ -27,10 +27,14 @@ import pytest
 from vayu_headless._repo import repo_root
 from vayu_headless.transport import vsim
 
-PROTO = os.path.join(repo_root(), "sim", "vsim", "include", "vsim_proto.h")
+# vsim_proto.h now ships in the vayu SITL SDK (include/); point VSIM_PROTO_H at it.
+PROTO = os.environ.get("VSIM_PROTO_H") or os.path.join(
+    repo_root(), "sim", "vsim", "include", "vsim_proto.h")
 
 
 def _proto_sizes():
+    if not os.path.exists(PROTO):
+        pytest.skip("vsim_proto.h not found; set VSIM_PROTO_H to the SDK header")
     txt = open(PROTO).read()
     sizes = {}
     for m in re.finditer(r"static_assert\(sizeof\((\w+)\)\s*==\s*([0-9 +]+)", txt):
@@ -58,5 +62,5 @@ def test_ctl_frame_total_matches(sizes):
 def test_ctl_bodies_match_python_formats(sizes):
     assert sizes["vsim_ctl_world_t"] == struct.calcsize("<7f")        # gravity..damp
     assert sizes["vsim_ctl_wind_t"] == struct.calcsize("<3f4fi")      # steady..enable
-    geometry_fmt = "<f" + "9f" + "3f3f5f" * 4                          # mass+I+4 motors
+    geometry_fmt = "<f" + "9f" + "3f3f5f" * 4 + "f"                    # mass+I+4 motors+prop_radius
     assert sizes["vsim_ctl_geometry_t"] == struct.calcsize(geometry_fmt)
