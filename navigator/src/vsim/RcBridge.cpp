@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 #include "RcBridge.h"
+#include "RcFrame.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -304,10 +305,24 @@ void RcBridge::run() {
 #ifdef _WIN32
   int js_index = -1; // WinMM joystick number for the Joystick source
 #endif
+  // Joystick that was open and then vanished (unplugged). While set we send
+  // NO_SIGNAL (failsafe) and retry the open every kReopenMs (hotplug back).
+  bool src_lost = false;
+  constexpr int kReopenMs = 500;
+  int reopen_wait_ms = 0;
   std::string uline; // UART CSV line accumulator
   // Last UART-parsed channels, held between frames.
   int u_roll = 1500, u_pitch = 1500, u_thr = 1000, u_yaw = 1500, u_arm = 1500;
   int u_ch6 = 1000; // transmitter's ch6 (acro switch); 1000 = stabilise default
+
+  auto mark_lost = [&](const QString &why) {
+    if (src_lost)
+      return;
+    src_lost = true;
+    reopen_wait_ms = 0;
+    emit logLine(
+        QString("RC: joystick lost (%1) — NO_SIGNAL, retrying").arg(why));
+  };
 
   auto close_src = [&]() {
     if (fd != kNoIo) {
@@ -331,6 +346,7 @@ void RcBridge::run() {
     // (the pty the firmware reads) stays put, so switching source is seamless.
     if (want != cur_src) {
       close_src();
+      src_lost = false;
       uline.clear();
       QString path;
       int baud;
@@ -418,7 +434,7 @@ void RcBridge::run() {
 #ifdef _WIN32
       // WinMM reports state, not events: poll it. Axes X Y Z R U V come as
       // 0..65535 and are centred onto the js range (-32767..32767).
-      if (js_index >= 0) {
+      if (js_index >= 0 && !src_lost) {
         JOYINFOEX ji{};
         ji.dwSize = sizeof ji;
         ji.dwFlags = JOY_RETURNALL;
@@ -429,6 +445,18 @@ void RcBridge::run() {
             axis_[i] = std::clamp((int)pos[i] - 32767, -32767, 32767);
           for (int i = 0; i < (int)button_.size(); ++i)
             button_[i] = (ji.dwButtons >> i) & 1u;
+        } else {
+          mark_lost(QStringLiteral("joyGetPosEx failed"));
+        }
+      }
+      if (src_lost && js_index >= 0 && (reopen_wait_ms -= 20) <= 0) {
+        reopen_wait_ms = kReopenMs;
+        JOYINFOEX ji{};
+        ji.dwSize = sizeof ji;
+        ji.dwFlags = JOY_RETURNALL;
+        if (joyGetPosEx((UINT)js_index, &ji) == JOYERR_NOERROR) {
+          src_lost = false;
+          emit logLine(QString("RC: joystick %1 back").arg(js_index));
         }
       }
 #else
@@ -440,6 +468,29 @@ void RcBridge::run() {
             axis_[e.number] = e.value;
           else if ((e.type & kJsButton) && e.number < button_.size())
             button_[e.number] = e.value;
+        }
+        // r < 0 with a real errno (ENODEV on unplug) or r == 0 (EOF): the
+        // device is gone. Close it; the retry below reopens on hotplug.
+        if (r < 0 ? rcframe::deviceLostErrno(errno) : r == 0) {
+          const QString why = r < 0 ? ioError() : QStringLiteral("EOF");
+          closeIo(fd);
+          fd = kNoIo;
+          mark_lost(why);
+        }
+      } else if (src_lost && (reopen_wait_ms -= 20) <= 0) {
+        reopen_wait_ms = kReopenMs;
+        QString path;
+        {
+          QMutexLocker lk(&cfg_mtx_);
+          path = js_path_;
+        }
+        fd = ::open(path.toLocal8Bit().constData(), O_RDONLY | O_NONBLOCK);
+        if (fd >= 0) {
+          src_lost = false;
+          axis_.fill(0);
+          axis_[2] = -32767;
+          button_.fill(0);
+          emit logLine(QString("RC: joystick %1 back").arg(path));
         }
       }
 #endif
@@ -474,9 +525,13 @@ void RcBridge::run() {
       emit axesUpdated(au, bu);
     }
 
-    const int ov = armOverride_.load(std::memory_order_relaxed);
-    if (ov >= 0)
-      arm = ov ? 2000 : 1000; // software arm override
+    // No link: the fault-injected link loss or a vanished joystick. Send
+    // NO_SIGNAL instead of channels (and never an arm value).
+    const bool noSignal = linkLost_.load(std::memory_order_acquire) || src_lost;
+    arm = rcframe::resolveArm(
+        noSignal, en, armOverride_.load(std::memory_order_relaxed), arm);
+    if (noSignal)
+      arm = 1500; // readout only; not sent
 
     // CSV frame: roll,pitch,throttle,yaw,arm,ch6  (feeder fills 7..13 = 1500).
     // ch6 carries the acro/angle flight-mode toggle (firmware: > 1500 = acro).
@@ -485,9 +540,10 @@ void RcBridge::run() {
     const int ch6 = (want == Uart)
                         ? (en ? u_ch6 : 1000)
                         : (acro_.load(std::memory_order_relaxed) ? 2000 : 1000);
-    char buf[96];
-    const int n = std::snprintf(buf, sizeof(buf), "%d,%d,%d,%d,%d,%d\n", roll,
-                                pitch, thr, yaw, arm, ch6);
+    const std::string frame =
+        rcframe::formatFrame(noSignal, roll, pitch, thr, yaw, arm, ch6);
+    const int n = (int)frame.size();
+    const char *buf = frame.c_str();
 #ifdef _WIN32
     if (n > 0)
       writeOut(buf, n);
