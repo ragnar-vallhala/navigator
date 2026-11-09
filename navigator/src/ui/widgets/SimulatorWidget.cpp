@@ -2175,8 +2175,15 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
   // One terrain-height sampler (world N,E -> elevation [m]) for the active world,
   // shared by the minimap and the "lift drone onto the surface" logic.
   std::function<float(float, float)> heightAt;
+  // Raw field height: cheap (~1 us), used where many samples are drawn
+  // (minimap, pad slope screening) and metre-level error is harmless.
+  std::function<float(float, float)> rawHeightAt;
   float minimapRange = 200.0f;
   if (endless) {
+    rawHeightAt = [this](float n, float e) {
+      const auto f = m_chunkStreamer.field();
+      return f ? f->height(n, e) : 0.0f;
+    };
     heightAt = [this](float n, float e) {
       const auto f = m_chunkStreamer.field();
       // The meshed (slope-capped) surface, not the raw field, so spawn and pad
@@ -2192,12 +2199,15 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
     heightAt = [hf](float n, float e) { return hf->sampleWorld(n, e); };
     minimapRange = w.proceduralSizeM * 0.5f; // fit the finite arena
   }
+  if (!rawHeightAt)
+    rawHeightAt = heightAt; // finite biomes: the heightfield is already cheap
   m_terrainHeightAt = heightAt; // null for imported / no world
+  m_terrainRawHeightAt = rawHeightAt;
   // Scatter helipad pads (and the home pad at origin) for the new world.
   m_lastHelipadCenter = QVector3D(0, 0, 0);
   recomputeHelipads(0.0f, 0.0f);
   if (m_minimap) {
-    m_minimap->setSampler(heightAt);
+    m_minimap->setSampler(rawHeightAt); // ~12k samples: must stay cheap
     if (heightAt) {
       m_minimap->setRangeM(minimapRange);
       m_minimap->setReferenceHeight(endless ? w.field.heightM : 80.0f);
@@ -2644,10 +2654,12 @@ void SimulatorWidget::recomputeHelipads(float cx, float cy) {
   };
   auto slopeAt = [&](float px, float py) {
     const float dhdx =
-        (m_terrainHeightAt(px + kEps, py) - m_terrainHeightAt(px - kEps, py)) /
+        (m_terrainRawHeightAt(px + kEps, py) -
+         m_terrainRawHeightAt(px - kEps, py)) /
         (2.0f * kEps);
     const float dhdy =
-        (m_terrainHeightAt(px, py + kEps) - m_terrainHeightAt(px, py - kEps)) /
+        (m_terrainRawHeightAt(px, py + kEps) -
+         m_terrainRawHeightAt(px, py - kEps)) /
         (2.0f * kEps);
     return std::sqrt(dhdx * dhdx + dhdy * dhdy);
   };
