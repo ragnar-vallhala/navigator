@@ -104,7 +104,7 @@ jobs:
           # notices until this line moves, and then the module refuses to load
           # and the SITL cases fail loudly -- which is the right place to find
           # out, but not the earliest one.
-          VAYU_FW_VERSION: v0.1.0
+          VAYU_FW_VERSION: v0.2.0
           # vayu is private: see the header. Read-only, vayu Contents only.
           GH_TOKEN: ${{ secrets.VAYU_RELEASE_TOKEN }}
         run: |
