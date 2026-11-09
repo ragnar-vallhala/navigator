@@ -314,6 +314,12 @@ void RcBridge::run() {
   // Last UART-parsed channels, held between frames.
   int u_roll = 1500, u_pitch = 1500, u_thr = 1000, u_yaw = 1500, u_arm = 1500;
   int u_ch6 = 1000; // transmitter's ch6 (acro switch); 1000 = stabilise default
+  // UART link health. The transmitter bridge sends NO_SIGNAL when its radio
+  // is off; a dead port or a stalled stream is treated the same once no valid
+  // frame has arrived for kUartStaleMs (the firmware feeder's own rule).
+  constexpr int kUartStaleMs = 500;
+  int uart_quiet_ms = 0;
+  bool uart_nosig = false;
 
   auto mark_lost = [&](const QString &why) {
     if (src_lost)
@@ -347,6 +353,8 @@ void RcBridge::run() {
     if (want != cur_src) {
       close_src();
       src_lost = false;
+      uart_nosig = false;
+      uart_quiet_ms = 0;
       uline.clear();
       QString path;
       int baud;
@@ -408,19 +416,38 @@ void RcBridge::run() {
       if (fd != kNoIo) {
         char b[256];
         long r;
+        uart_quiet_ms += 20;
         while ((r = readSome(fd, b, sizeof(b))) > 0) {
           for (long i = 0; i < r; ++i) {
             const char c = b[i];
             if (c == '\n' || c == '\r') {
               if (!uline.empty()) {
-                parseCsvFrame(uline, &u_roll, &u_pitch, &u_thr, &u_yaw, &u_arm,
-                              &u_ch6);
+                switch (rcframe::classifyLine(uline)) {
+                case rcframe::Line::NoSignal:
+                  uart_nosig = true;
+                  break;
+                case rcframe::Line::Frame:
+                  parseCsvFrame(uline, &u_roll, &u_pitch, &u_thr, &u_yaw,
+                                &u_arm, &u_ch6);
+                  uart_nosig = false;
+                  uart_quiet_ms = 0;
+                  break;
+                case rcframe::Line::Junk:
+                  break;
+                }
                 uline.clear();
               }
             } else if (uline.size() < 128) {
               uline += c;
             }
           }
+        }
+        if (r < 0) { // port gone (adapter unplugged): stop reading it
+          emit logLine(QString("RC: UART read failed (%1) — NO_SIGNAL")
+                           .arg(ioError()));
+          closeIo(fd);
+          fd = kNoIo;
+          uart_nosig = true;
         }
       }
       roll = en ? u_roll : 1500;
@@ -527,7 +554,10 @@ void RcBridge::run() {
 
     // No link: the fault-injected link loss or a vanished joystick. Send
     // NO_SIGNAL instead of channels (and never an arm value).
-    const bool noSignal = linkLost_.load(std::memory_order_acquire) || src_lost;
+    const bool uartLost =
+        want == Uart && (uart_nosig || uart_quiet_ms >= kUartStaleMs);
+    const bool noSignal =
+        linkLost_.load(std::memory_order_acquire) || src_lost || uartLost;
     arm = rcframe::resolveArm(
         noSignal, en, armOverride_.load(std::memory_order_relaxed), arm);
     if (noSignal)

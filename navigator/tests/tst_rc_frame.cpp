@@ -31,6 +31,7 @@ private slots:
   void armOverrideIgnoredWhenDisabled();
   void armOverrideAppliesWhenLive();
   void deviceLossErrnoClassification();
+  void uartLineClassification();
 };
 
 void TstRcFrame::normalFrameIsCsv() {
@@ -69,6 +70,15 @@ void TstRcFrame::deviceLossErrnoClassification() {
   QVERIFY(rcframe::deviceLostErrno(EIO));
   QVERIFY(!rcframe::deviceLostErrno(EAGAIN)); // no event right now
   QVERIFY(!rcframe::deviceLostErrno(EINTR));
+}
+
+void TstRcFrame::uartLineClassification() {
+  using rcframe::Line;
+  QCOMPARE(rcframe::classifyLine("1500,1500,1000,1500,1000,1000"), Line::Frame);
+  QCOMPARE(rcframe::classifyLine("NO_SIGNAL"), Line::NoSignal);
+  QCOMPARE(rcframe::classifyLine("  NO_SIGNAL"), Line::NoSignal);
+  QCOMPARE(rcframe::classifyLine("boot v1.2"), Line::Junk);
+  QCOMPARE(rcframe::classifyLine(""), Line::Junk);
 }
 
 QTEST_MAIN(TstRcFrame)

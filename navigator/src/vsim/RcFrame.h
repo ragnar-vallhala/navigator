@@ -64,4 +64,18 @@ inline std::string formatFrame(bool noSignal, int roll, int pitch, int thr,
   return n > 0 ? std::string(buf, (size_t)n) : std::string();
 }
 
+// One line from a UART transmitter bridge: a channel frame (starts with a
+// number), the bridge's NO_SIGNAL token (radio off), or anything else.
+enum class Line { Frame, NoSignal, Junk };
+inline Line classifyLine(const std::string &l) {
+  size_t i = 0;
+  while (i < l.size() && (l[i] == ' ' || l[i] == '\t'))
+    ++i;
+  if (l.compare(i, 9, "NO_SIGNAL") == 0)
+    return Line::NoSignal;
+  if (i < l.size() && ((l[i] >= '0' && l[i] <= '9') || l[i] == '-'))
+    return Line::Frame;
+  return Line::Junk;
+}
+
 } // namespace rcframe
