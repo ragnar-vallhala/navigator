@@ -369,6 +369,10 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
     find_package(assimp REQUIRED)
     target_sources(Navigator PRIVATE ${GCS_SITL_SOURCES} ${GCS_SITL_HEADERS})
     target_link_libraries(Navigator PRIVATE assimp::assimp)
+    if(WIN32)
+        # RcBridge reads a USB transmitter as a WinMM joystick (joyGetPosEx).
+        target_link_libraries(Navigator PRIVATE winmm)
+    endif()
     target_compile_definitions(Navigator PRIVATE NAVIGATOR_HAS_SITL=1)
     # Grass/flora is opt-in: only then compile GpuGrass + the CPU flora scatter
     # and define the guard so the renderer/UI grass code is live (see the

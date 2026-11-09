@@ -170,3 +170,25 @@ navigator_test(tst_procgen
     ${SRC}/vsim/procgen/Flora.cpp
     ${SRC}/vsim/ChunkStreamer.cpp)
 target_include_directories(tst_procgen PRIVATE ${SRC}/vsim)
+
+# ---- In-app simulator end to end (SITL builds only) -----------------------
+# Navigator's SitlModule + SimWorker + RcBridge against the real engine module:
+# it loads, boots and steps, telemetry reaches the sink, and RcBridge's RC gets
+# through the pty (a named pipe on Windows) into the firmware. It needs the
+# module itself, so VAYU_SITL_MODULE points at the build root, where CI and a
+# developer put it; without one the test skips and says why.
+if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
+  navigator_test(tst_sitl_engine
+      tst_sitl_engine.cpp
+      ${SRC}/vsim/SitlModule.cpp ${SRC}/vsim/SitlModule.h
+      ${SRC}/vsim/SimWorker.cpp ${SRC}/vsim/SimWorker.h
+      ${SRC}/vsim/RcBridge.cpp ${SRC}/vsim/RcBridge.h)
+  target_include_directories(tst_sitl_engine PRIVATE ${SRC}/vsim ${VAYU_SITL_SDK})
+  target_link_libraries(tst_sitl_engine PRIVATE navlink_codec)
+  if(WIN32)
+    target_link_libraries(tst_sitl_engine PRIVATE winmm)
+  endif()
+  set_tests_properties(tst_sitl_engine PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
+      TIMEOUT 60)
+endif()

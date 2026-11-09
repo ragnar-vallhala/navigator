@@ -341,6 +341,13 @@ void SimWorker::run() {
 // Viewer-only mode: read an EXISTING pose FIFO published by an external sim
 // (e.g. a headless vayu_sitl_rtos run) and emit poseUpdated.
 void SimWorker::runAttach() {
+#ifdef _WIN32
+  // The external sim publishes its pose on a POSIX FIFO; there is none to
+  // attach to on Windows (the UI disables the button too).
+  emit logLine("attach: an external sim needs a POSIX host -- not on Windows");
+  emit stoppedCleanly();
+  return;
+#else
   // Wait briefly for the file to appear (the external sim may publish it a
   // moment after launch).
   const auto deadline =
@@ -422,6 +429,7 @@ void SimWorker::runAttach() {
   }
   emit logLine("detached from external sim");
   emit stoppedCleanly();
+#endif
 }
 
 } // namespace vsim

@@ -35,6 +35,10 @@
 // var before vayu_sitl_start), reads the joystick, and writes one CSV
 // frame per ~20 ms to the pty master.
 //
+// Windows has no pty: the bridge serves a named pipe (\\.\pipe\vayu_rc_<pid>)
+// and the firmware's feeder opens that path instead. The joystick is a WinMM
+// joystick number ("0") rather than a js device, and the UART a COM port.
+//
 // Axis → channel is linear: us = 1500 + axis*500/32767 (axis is
 // -32767..32767), optionally inverted per channel. Throttle idles low when
 // the stick is down (axis rests at -32767 → 1000 us).
@@ -100,8 +104,9 @@ public:
   void setAcro(bool on) { acro_.store(on ? 1 : 0, std::memory_order_relaxed); }
   bool acro() const { return acro_.load(std::memory_order_relaxed) != 0; }
 
-  // Create the pty pair; slavePath() is then valid. Returns false (and
-  // sets *err) on failure. Call before start() / before vayu_sitl_start.
+  // Create the pty pair (a named pipe on Windows); slavePath() is then valid.
+  // Returns false (and sets *err) on failure. Call before start() / before
+  // vayu_sitl_start.
   bool openPty(QString *err);
   QString slavePath() const { return slave_path_; }
 
@@ -120,12 +125,22 @@ protected:
 
 private:
   QMutex cfg_mtx_; // guards js_path_ / uart_path_ / uart_baud_ (live edits)
+#ifdef _WIN32
+  QString js_path_ = QStringLiteral("0"); // WinMM joystick number
+  QString uart_path_ = QStringLiteral("COM3");
+#else
   QString js_path_ = QStringLiteral("/dev/input/js0");
   QString uart_path_ = QStringLiteral("/dev/ttyUSB0");
+#endif
   int uart_baud_ = 115200;
   std::atomic<int> source_{Joystick};
   QString slave_path_;
+#ifdef _WIN32
+  void *pipe_ = nullptr; // HANDLE of the named pipe the firmware reads
+  void writeOut(const char *buf, int n);
+#else
   int master_fd_ = -1;
+#endif
   std::atomic<bool> stop_{false};
   std::atomic<bool> enabled_{true};
   std::atomic<bool> uartConnected_{false}; // Uart source opened only when true
