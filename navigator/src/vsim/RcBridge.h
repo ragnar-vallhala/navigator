@@ -72,7 +72,18 @@ public:
   // When disabled, the bridge streams a neutral/idle frame (throttle low,
   // everything else centered) instead of the joystick — so toggling RC on
   // the running sim takes effect live, without a restart.
+  // "Disabled" = the user turned RC off in the UI: a receiver that is powered
+  // with sticks centred and the arm switch off. Frames still flow (so the
+  // firmware sees a live, disarmed link, not a failsafe) and the software arm
+  // override is ignored, so disabled RC can never arm. The same holds when no
+  // input source is selected or the UART is not connected (neutral live link).
   void setEnabled(bool on) { enabled_.store(on, std::memory_order_release); }
+
+  // Link loss (fault injection, or the input device vanishing): the
+  // transmitter is gone. No channel frames are sent, only the feeder's
+  // NO_SIGNAL line, so the firmware's RC failsafe engages. Never emits arm.
+  void setLinkLost(bool on) { linkLost_.store(on, std::memory_order_release); }
+  bool linkLost() const { return linkLost_.load(std::memory_order_acquire); }
 
   // Gate for the Uart source: the serial device is NOT opened until this is
   // set true (a deliberate "Connect" from the UI). Keeps the sim from grabbing
@@ -95,6 +106,8 @@ public:
 
   // Software arm override for TXs with no usable arm switch.
   // v: -1 = use the mapped source; 0 = force disarmed; 1 = force armed.
+  // Ignored while RC is disabled or there is no input source (see
+  // rcframe::resolveArm), and never emitted while the link/source is lost.
   void setArmOverride(int v) {
     armOverride_.store(v, std::memory_order_relaxed);
   }
@@ -143,6 +156,7 @@ private:
 #endif
   std::atomic<bool> stop_{false};
   std::atomic<bool> enabled_{true};
+  std::atomic<bool> linkLost_{false};
   std::atomic<bool> uartConnected_{false}; // Uart source opened only when true
   std::atomic<int> armOverride_{-1};       // -1 use mapping, 0 disarm, 1 arm
   std::atomic<int> acro_{0};               // 0 = angle mode (ch6 low), 1 = acro
