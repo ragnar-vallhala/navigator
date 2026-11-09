@@ -2179,7 +2179,12 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
   if (endless) {
     heightAt = [this](float n, float e) {
       const auto f = m_chunkStreamer.field();
-      return f ? f->height(n, e) : 0.0f;
+      // The meshed (slope-capped) surface, not the raw field, so spawn and pad
+      // heights match what is drawn and collided with.
+      const auto &c = m_chunkStreamer.config();
+      return f ? vsim::procgen::surfaceHeight(*f, n, e, c.chunkM,
+                                              c.collisionResolution)
+               : 0.0f;
     };
   } else if (vsim::isKnownBiome(w.proceduralBiome)) {
     auto hf = std::make_shared<vsim::procgen::Heightfield>(
@@ -2460,8 +2465,10 @@ void SimulatorWidget::onStreamTick() {
       BuiltChunk b;
       b.mesh =
           vsim::procgen::meshFieldChunk(*field, req.cx, req.cy, chunkM, res);
-      b.collMesh = vsim::procgen::meshFieldChunk(*field, req.cx, req.cy, chunkM,
-                                                 collRes);
+      b.collMesh = collRes == res
+                       ? b.mesh // same tessellation: collide with what is drawn
+                       : vsim::procgen::meshFieldChunk(*field, req.cx, req.cy,
+                                                       chunkM, collRes);
       return b;
     }));
   }

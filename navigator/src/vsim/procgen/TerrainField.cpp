@@ -130,6 +130,80 @@ PgVec3 TerrainField::color(float h, float flatness) const {
   return c;
 }
 
+namespace {
+
+constexpr int kErodeIters = 6;
+
+// Slope-capped height grid: gn x gn nodes, node (i, j) at world
+// (x0 + step*(iLo+i), y0 + step*(jLo+j)). The cap pulls any node down to at most
+// maxSlope*step above its lowest 4-neighbour (grayscale erosion, buffered so it
+// is order-independent). Nodes within kErodeIters of the grid border are not
+// reliable, so callers keep an apron >= kErodeIters around what they use. Shared
+// by the mesher and the analytic surfaceHeight() so both see one surface.
+std::vector<float> cappedGrid(const TerrainField &f, float x0, float y0,
+                              float step, int iLo, int jLo, int gn) {
+  std::vector<float> H(static_cast<std::size_t>(gn) * gn);
+  for (int j = 0; j < gn; ++j)
+    for (int i = 0; i < gn; ++i)
+      H[static_cast<std::size_t>(j) * gn + i] =
+          f.height(x0 + step * static_cast<float>(iLo + i),
+                   y0 + step * static_cast<float>(jLo + j));
+
+  const float maxSlope = f.params().maxSlope;
+  if (maxSlope > 0.0f && maxSlope < 8.0f) {
+    const float maxStep = maxSlope * step;
+    std::vector<float> B = H;
+    for (int k = 0; k < kErodeIters; ++k) {
+      for (int j = 1; j < gn - 1; ++j)
+        for (int i = 1; i < gn - 1; ++i) {
+          const std::size_t c = static_cast<std::size_t>(j) * gn + i;
+          const float lo = std::min(std::min(H[c - 1], H[c + 1]),
+                                    std::min(H[c - gn], H[c + gn]));
+          B[c] = std::min(H[c], lo + maxStep);
+        }
+      H = B;
+    }
+  }
+  return H;
+}
+
+int erodeApron(const TerrainField &f) {
+  const float ms = f.params().maxSlope;
+  return (ms > 0.0f && ms < 8.0f) ? 8 : 0; // must exceed kErodeIters
+}
+
+} // namespace
+
+float surfaceHeight(const TerrainField &f, float wx, float wy, float chunkM,
+                    int res) {
+  if (res < 1 || chunkM <= 0.0f)
+    return f.height(wx, wy);
+  const float step = chunkM / static_cast<float>(res);
+  const int cx = static_cast<int>(std::floor(wx / chunkM));
+  const int cy = static_cast<int>(std::floor(wy / chunkM));
+  const float x0 = static_cast<float>(cx) * chunkM;
+  const float y0 = static_cast<float>(cy) * chunkM;
+  const float u = (wx - x0) / step, v = (wy - y0) / step;
+  const int ci = std::min(res - 1, std::max(0, static_cast<int>(std::floor(u))));
+  const int cj = std::min(res - 1, std::max(0, static_cast<int>(std::floor(v))));
+  const float fx = u - static_cast<float>(ci), fy = v - static_cast<float>(cj);
+
+  // Window = the cell's 2x2 nodes plus the erosion apron, on the chunk's lattice.
+  const int apron = erodeApron(f);
+  const int gn = 2 + 2 * apron;
+  const std::vector<float> H =
+      cappedGrid(f, x0, y0, step, ci - apron, cj - apron, gn);
+  auto h = [&](int di, int dj) {
+    return H[static_cast<std::size_t>(dj + apron) * gn + (di + apron)];
+  };
+  const float h00 = h(0, 0), h10 = h(1, 0), h01 = h(0, 1), h11 = h(1, 1);
+  // Same two-triangle split as meshFieldChunk: (00,10,11) for fx >= fy else
+  // (00,11,01).
+  if (fx >= fy)
+    return h00 + (h10 - h00) * fx + (h11 - h10) * fy;
+  return h00 + (h11 - h01) * fx + (h01 - h00) * fy;
+}
+
 ProcMesh meshFieldChunk(const TerrainField &f, int cx, int cy, float chunkM,
                         int res) {
   ProcMesh m;
@@ -141,39 +215,11 @@ ProcMesh meshFieldChunk(const TerrainField &f, int cx, int cy, float chunkM,
   const float y0 = static_cast<float>(cy) * chunkM;
   const int verts = res + 1;
 
-  // Sample heights on an extended grid (chunk + apron). The apron lets the slope
-  // cap be applied identically at chunk borders, so adjacent chunks stay
-  // seamless. apron must exceed the number of erosion iterations.
-  const float maxSlope = f.params().maxSlope;
-  const bool limit = maxSlope > 0.0f && maxSlope < 8.0f;
-  const int apron = limit ? 8 : 0;
-  const int iters = 6;
+  // Extended grid (chunk + apron) so the slope cap is applied identically at
+  // chunk borders and adjacent chunks stay seamless.
+  const int apron = erodeApron(f);
   const int gn = verts + 2 * apron;
-
-  std::vector<float> H(static_cast<std::size_t>(gn) * gn);
-  for (int j = 0; j < gn; ++j)
-    for (int i = 0; i < gn; ++i)
-      H[static_cast<std::size_t>(j) * gn + i] =
-          f.height(x0 + step * static_cast<float>(i - apron),
-                   y0 + step * static_cast<float>(j - apron));
-
-  // Slope cap: iteratively pull any cell down to at most maxStep above its
-  // lowest 4-neighbour (grayscale erosion). Removes spikes/near-vertical faces
-  // while leaving slopes below the cap untouched. Buffered for order-independence.
-  if (limit) {
-    const float maxStep = maxSlope * step;
-    std::vector<float> B = H;
-    for (int k = 0; k < iters; ++k) {
-      for (int j = 1; j < gn - 1; ++j)
-        for (int i = 1; i < gn - 1; ++i) {
-          const std::size_t c = static_cast<std::size_t>(j) * gn + i;
-          const float lo = std::min(std::min(H[c - 1], H[c + 1]),
-                                    std::min(H[c - gn], H[c + gn]));
-          B[c] = std::min(H[c], lo + maxStep);
-        }
-      H = B;
-    }
-  }
+  std::vector<float> H = cappedGrid(f, x0, y0, step, -apron, -apron, gn);
 
   // Limited-grid accessor for chunk node (i,j); the apron covers i,j in [-1..verts].
   auto gh = [&](int i, int j) -> float {

@@ -73,7 +73,11 @@ public:
     procgen::FieldParams field;
     float chunkM = 192.0f;        // world metres per chunk side
     int resolution = 100;         // visual tessellation (grid cells per side)
-    int collisionResolution = 48; // coarse mesh for the collision BVH (cheap)
+    // Collision tessellation. Keep == resolution: the physics surface is then the
+    // very surface drawn (and surfaceHeight() samples), 0 m deviation. A coarser
+    // value is cheaper for the BVH but deviates from the render mesh by metres
+    // on rough terrain (measured 1.1 m max at 48 vs 100, 192 m chunks).
+    int collisionResolution = 100;
     int renderRadius = 3;         // Chebyshev chunk radius kept loaded (visual)
     int collisionRadius = 1;      // chunk radius shipped to the daemon as a BVH
     int maxInFlight = 6;          // cap on concurrent off-thread chunk builds
