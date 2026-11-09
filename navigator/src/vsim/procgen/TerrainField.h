@@ -94,4 +94,13 @@ private:
 ProcMesh meshFieldChunk(const TerrainField &f, int cx, int cy, float chunkM,
                         int res);
 
+// Elevation [m] of the surface meshFieldChunk(f, cx, cy, chunkM, res) presents at
+// world (wx, wy): slope cap included, interpolated on the same triangles. Use
+// this (not f.height()) for anything that must rest on the mesh the pilot sees
+// and the physics collides with: spawn, re-drop, helipad decks. It agrees with
+// the mesh to float precision; cost is one small (~18x18) local patch, not a
+// chunk. f.height() is the raw field and can sit >1 m from the mesh.
+float surfaceHeight(const TerrainField &f, float wx, float wy, float chunkM,
+                    int res);
+
 } // namespace vsim::procgen
