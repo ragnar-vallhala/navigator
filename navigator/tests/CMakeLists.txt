@@ -195,6 +195,12 @@ navigator_test(tst_worldpresets
     ${SRC}/vsim/procgen/WorldPresets.cpp)
 target_include_directories(tst_worldpresets PRIVATE ${SRC}/vsim)
 
+# ---- Procedural drone model generator (Qt-free core, headless) -------------
+navigator_test(tst_dronemodel
+    tst_dronemodel.cpp
+    ${SRC}/vsim/DroneModel.cpp)
+target_include_directories(tst_dronemodel PRIVATE ${SRC}/vsim)
+
 # ---- World tab preset wiring (headless widget test) ------------------------
 if(NAVIGATOR_SITL)
   navigator_test(tst_worldeditor

@@ -216,6 +216,7 @@ set(GCS_SITL_SOURCES
     src/vsim/SimWorker.cpp
     src/vsim/VehicleJson.cpp
     src/vsim/AirframePresets.cpp
+    src/vsim/DroneModel.cpp
     src/vsim/SitlModule.cpp
     src/vsim/VfsDir.cpp
     src/vsim/SimRendererWidget.cpp
@@ -267,6 +268,7 @@ set(GCS_SITL_HEADERS
     src/vsim/procgen/Flora.h
     src/vsim/procgen/WorldPresets.h
     src/vsim/MassProperties.h
+    src/vsim/DroneModel.h
     src/vsim/RcBridge.h
     src/vsim/TrainingCourse.h
 )
