@@ -38,6 +38,7 @@
 #include <QDesktopServices>
 #include <QCoreApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QTimer>
 #include <QtConcurrent>
@@ -61,6 +62,7 @@
 #include <QFile>
 #include <QVBoxLayout>
 #include <QProcess>
+#include <QRandomGenerator>
 #include <QSpinBox>
 #include <QPlainTextEdit>
 #include <QLabel>
@@ -285,6 +287,9 @@ constexpr const char *kLogDirSettingKey = "simulator/logDir";
 constexpr const char *kGeomGroup = "simulator/geometry";
 constexpr const char *kWorldGroup = "simulator/world";
 constexpr const char *kAudioKey = "simulator/propAudio";
+constexpr const char *kSeedKey = "simulator/resetSeed";         // fixed seed
+constexpr const char *kSeedRandomKey = "simulator/resetSeedRandom"; // per Start
+constexpr int kDefaultResetSeed = 1337;
 constexpr const char *kImuHzKey = "simulator/imuHz";
 constexpr const char *kPhysHzKey = "simulator/physicsHz";
 constexpr const char *kPoseHzKey = "simulator/poseHz";
@@ -455,6 +460,14 @@ SimulatorWidget::~SimulatorWidget() {
   if (SitlModule::instance().available())
     SitlModule::instance().api()->shutdown();
   stopInAppSim();
+  // A collision build may still be running on the pool: let it finish (<~100 ms)
+  // and delete its temp file, so nothing outlives the widget.
+  if (m_shipWatcher) {
+    m_shipWatcher->disconnect();
+    m_shipWatcher->waitForFinished();
+    QFile::remove(m_shipRunningTmp);
+    m_shipWatcher = nullptr;
+  }
 
   // Tear down the autotune machinery synchronously. Normally a tune is stopped
   // via stopAutotune() -> cancel() -> queued done -> onTuneDone(), but at app
@@ -764,16 +777,7 @@ void SimulatorWidget::buildUi() {
     m_simResetBtn->setEnabled(false);
     m_simResetBtn->setToolTip(tr("Reset the airframe to the spawn pose"));
     connect(m_simResetBtn, &QPushButton::clicked, this, [this] {
-      if (!m_sim)
-        return;
-      // On procedural terrain, respawn ON the home helipad (origin) — a small
-      // margin above the pad top so it settles onto the deck, not the slope.
-      if (m_terrainHeightAt) {
-        const float padTop = landingSurfaceZ(m_homePad.x(), m_homePad.y());
-        m_sim->sendResetPose(m_homePad.x(), m_homePad.y(), padTop - 0.4f);
-      } else {
-        m_sim->sendReset();
-      }
+      sendSpawnReset();
     });
     m_simAttachBtn = new ui::GhostButton(tr("Attach Ext"), simBody);
     m_simAttachBtn->setToolTip(
@@ -878,6 +882,37 @@ void SimulatorWidget::buildUi() {
     });
     runWidgets << m_propAudioChk;
     sv->addLayout(runRow);
+
+    // -- Noise seed: Start / Reset send it with the reset so the sensor-noise
+    // stream is reproducible (0 in the engine would mean free-running). --
+    {
+      QSettings st;
+      auto *seedRow = new QHBoxLayout();
+      auto *seedLbl = new QLabel(tr("Noise seed"), simBody);
+      auto *seedSpin = new QSpinBox(simBody);
+      seedSpin->setRange(1, INT_MAX);
+      seedSpin->setValue(
+          std::max(1, st.value(kSeedKey, kDefaultResetSeed).toInt()));
+      seedSpin->setToolTip(
+          tr("Deterministic sensor-noise seed sent with every Start/Reset: the "
+             "same seed reproduces the same noise. Applies on the next Start."));
+      auto *seedRnd = new QCheckBox(tr("Random each Start"), simBody);
+      seedRnd->setChecked(st.value(kSeedRandomKey, false).toBool());
+      seedSpin->setEnabled(!seedRnd->isChecked());
+      seedRnd->setToolTip(tr("Pick a fresh seed on every Start (logged); Reset "
+                             "then reuses that run's seed."));
+      connect(seedSpin, qOverload<int>(&QSpinBox::valueChanged), this,
+              [](int v) { QSettings().setValue(kSeedKey, v); });
+      connect(seedRnd, &QCheckBox::toggled, this, [seedSpin](bool on) {
+        QSettings().setValue(kSeedRandomKey, on);
+        seedSpin->setEnabled(!on);
+      });
+      seedRow->addWidget(seedLbl);
+      seedRow->addWidget(seedSpin);
+      seedRow->addWidget(seedRnd);
+      seedRow->addStretch();
+      sv->addLayout(seedRow);
+    }
 
     // -- Loop rates (IMU/firmware, physics substeps, render) --
     {
@@ -2147,6 +2182,7 @@ void SimulatorWidget::applyProposedGains() {
 
 void SimulatorWidget::updateHud(const vsim::SimSnapshot &s) {
   m_lastDronePos = s.pos_w; // tracked for the lift-onto-terrain logic
+  m_lastDroneVel = s.vel_w;
   if (m_hud)
     m_hud->setSnapshot(s);
   if (m_horizon) {
@@ -2194,7 +2230,7 @@ void SimulatorWidget::setTrainingMode(int difficulty) {
   updateTrainingProgress();
   // Start every run from the floor: re-spawn the airframe at the level pose.
   if (m_training.active() && m_sim)
-    m_sim->sendReset();
+    m_sim->sendReset(m_runSeed);
   if (m_training.active())
     appendLog("train",
               tr("training course armed (%1 gates)").arg(m_training.total()));
@@ -2231,6 +2267,7 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
   if (!m_renderer || !m_worldEditor)
     return;
   const vsim::WorldConfig &w = m_worldEditor->config();
+  cancelWorldShip(); // a new world config makes any in-flight collision stale
 
   const bool endless = w.proceduralBiome.compare(QStringLiteral("endless"),
                                                  Qt::CaseInsensitive) == 0;
@@ -2445,8 +2482,7 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
                            .arg(w.proceduralSeed)
                            .arg(m.triangleCount()));
     if (m_sim) {
-      sendWorldMeshToSim(m); // collision ready -> safe to lift onto it
-      liftDroneToSurface();
+      sendWorldMeshToSim(m, true); // lifts once the collision has shipped
     }
     return;
   }
@@ -2506,7 +2542,11 @@ void SimulatorWidget::onStreamTick() {
   if (!m_chunkStreamer.active() || !m_renderer)
     return;
   const QVector3D c = m_renderer->streamCenter();
-  const vsim::StreamPlan p = m_chunkStreamer.plan(c.x(), c.y());
+  // The collision window leads the drone along its velocity (not when the
+  // free-fly camera is the centre: that has no physics body).
+  const QVector3D v = (m_sim && !m_renderer->freeFly()) ? m_lastDroneVel
+                                                        : QVector3D();
+  const vsim::StreamPlan p = m_chunkStreamer.plan(c.x(), c.y(), v.x(), v.y());
 
   for (qint64 key : p.toRemove) {
     m_renderer->removeWorldChunk(key);
@@ -2582,7 +2622,8 @@ void SimulatorWidget::onChunkMeshed(qint64 key, const BuiltChunk &built) {
   }
   // Cache the COARSE mesh for collision reuse; upload the FINE mesh for render.
   // Flora is scattered separately (streamFlora), only for the near chunks.
-  m_chunkCache[key] = built.collMesh;
+  m_chunkCache[key] =
+      std::make_shared<const vsim::procgen::ProcMesh>(built.collMesh);
   const vsim::ChunkMeshData d = vsim::toChunkMeshData(key, built.mesh);
   m_renderer->setWorldChunk(d.key, d.positions, d.normals, d.colors);
   if (m_downRenderer)
@@ -2684,24 +2725,34 @@ void SimulatorWidget::tryBuildCollision() {
   // until the whole collision neighbourhood is cached.
   const std::vector<vsim::ChunkReq> need =
       m_chunkStreamer.collisionChunks(m_colCx, m_colCy);
-  std::vector<const vsim::procgen::ProcMesh *> meshes;
-  meshes.reserve(need.size());
+  std::vector<std::shared_ptr<const vsim::procgen::ProcMesh>> chunks;
+  chunks.reserve(need.size());
   for (const vsim::ChunkReq &req : need) {
     auto it = m_chunkCache.find(req.key);
     if (it == m_chunkCache.end())
       return; // not all cached yet; retry on next
-    meshes.push_back(&it->second);
+    chunks.push_back(it->second);
   }
-  vsim::LoadedMesh m = vsim::collisionMeshFromChunks(meshes);
   m_collisionPending = false;
-  if (m.valid) {
-    appendHelipadCollision(m.positions); // pads become solid landing surfaces
-    sendWorldMeshToSim(m);
-  }
+  // Pads become solid landing surfaces (a few hundred verts: cheap here). The
+  // heavy concat + BVH build happen on the worker.
+  std::vector<QVector3D> extra;
+  appendHelipadCollision(extra);
   // The local terrain just changed under the drone (spawn or a crossing); if
-  // that left it buried, re-drop it above the new surface. Self-guarded, so an
+  // that left it buried it is re-dropped above the new surface -- but only once
+  // this collision has actually reached the engine (async build), so the lift
+  // never targets terrain the engine does not have yet. Self-guarded, so an
   // airborne or resting drone is untouched.
-  liftDroneToSurface();
+  const float cm = m_chunkStreamer.config().chunkM;
+  const int rr = m_chunkStreamer.config().collisionRadius;
+  WorldShipReq req;
+  req.chunks = std::move(chunks);
+  req.extra = std::move(extra);
+  req.doubleSided = m_worldEditor->config().worldMeshDoubleSided;
+  req.lift = true;
+  req.coverage = QRectF((m_colCx - rr) * cm, (m_colCy - rr) * cm,
+                        (2 * rr + 1) * cm, (2 * rr + 1) * cm);
+  enqueueShip(std::move(req));
 }
 
 void SimulatorWidget::recomputeHelipads(float cx, float cy) {
@@ -2831,6 +2882,23 @@ float SimulatorWidget::landingSurfaceZ(float x, float y) const {
   return z;
 }
 
+void SimulatorWidget::sendSpawnReset() {
+  if (!m_sim)
+    return;
+  // On procedural terrain, respawn ON the home helipad (origin) -- a small
+  // margin above the pad top so it settles onto the deck, not the slope.
+  if (m_terrainHeightAt) {
+    const float padTop = landingSurfaceZ(m_homePad.x(), m_homePad.y());
+    m_sim->sendResetPose(m_homePad.x(), m_homePad.y(), padTop - 0.4f, m_runSeed);
+  } else {
+    m_sim->sendReset(m_runSeed);
+  }
+}
+
+bool SimulatorWidget::spawnResetWaitsForCollision() const {
+  return m_shipWatcher || m_shipPending || m_collisionPending;
+}
+
 void SimulatorWidget::liftDroneToSurface() {
   if (!m_sim || !m_terrainHeightAt)
     return;
@@ -2858,79 +2926,212 @@ void SimulatorWidget::liftDroneToSurface() {
             tr("re-dropped drone above terrain (surface %.1f m)").arg(h));
 }
 
-void SimulatorWidget::sendWorldMeshToSim(const vsim::LoadedMesh &m) {
-  if (!m_sim || !m.valid)
-    return;
-  const vsim::WorldConfig &w = m_worldEditor->config();
-
-  // Flatten the QVector3D soup to the contiguous float[3*nverts] the BVH
-  // builder expects (NED world space; transform already baked into positions).
-  const uint32_t nverts = static_cast<uint32_t>(m.positions.size());
-  std::vector<float> verts;
-  verts.reserve(static_cast<size_t>(nverts) * 3);
-  for (const QVector3D &p : m.positions) {
-    verts.push_back(p.x());
-    verts.push_back(p.y());
-    verts.push_back(p.z());
-  }
-  uint32_t nodes = 0;
-  std::vector<uint8_t> blob =
-      vsim::buildWorldBvh(verts.data(), nverts, w.worldMeshDoubleSided, nodes);
-  if (blob.empty()) {
-    appendLog("world", tr("world mesh BVH build failed"));
-    return;
-  }
-
-  // Publish atomically: write a temp file then rename() over the target so the
-  // daemon never mmaps a half-written blob. Per-instance suffix keeps two
-  // Navigators isolated (matches SimWorker's fifoSuffixed()).
+namespace {
+// Where the engine mmaps the collision blob. Per-instance suffix keeps two
+// Navigators isolated (matches SimWorker's fifoSuffixed()).
+QString worldBlobPath() {
   const QByteArray suffix = qgetenv("VSIM_FIFO_SUFFIX");
 #ifdef _WIN32
   // No /tmp; the engine only needs a path it can read, so the user's temp dir.
-  const QString path = QDir::tempPath() + QStringLiteral("/vsim_world") +
-                       QString::fromLocal8Bit(suffix) + QStringLiteral(".bin");
+  return QDir::tempPath() + QStringLiteral("/vsim_world") +
+         QString::fromLocal8Bit(suffix) + QStringLiteral(".bin");
 #else
-  const QString path = QStringLiteral("/tmp/vsim_world") +
-                       QString::fromLocal8Bit(suffix) + QStringLiteral(".bin");
+  return QStringLiteral("/tmp/vsim_world") + QString::fromLocal8Bit(suffix) +
+         QStringLiteral(".bin");
 #endif
-  const QString tmp = path + QStringLiteral(".tmp");
-  {
-    QFile f(tmp);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-      appendLog("world", tr("world mesh: cannot write %1").arg(tmp));
-      return;
-    }
-    const qint64 wrote = f.write(reinterpret_cast<const char *>(blob.data()),
-                                 static_cast<qint64>(blob.size()));
-    f.close();
-    if (wrote != static_cast<qint64>(blob.size())) {
-      appendLog("world", tr("world mesh: short write to %1").arg(tmp));
-      QFile::remove(tmp);
-      return;
-    }
-  }
-#ifdef _WIN32
-  // rename() will not replace an existing file on Windows; MoveFileEx will,
-  // and atomically on one volume -- which a temp file beside it is.
-  if (!MoveFileExW(reinterpret_cast<LPCWSTR>(tmp.utf16()),
-                   reinterpret_cast<LPCWSTR>(path.utf16()),
-                   MOVEFILE_REPLACE_EXISTING)) {
-#else
-  if (::rename(tmp.toLocal8Bit().constData(), path.toLocal8Bit().constData()) !=
-      0) {
-#endif
-    appendLog("world", tr("world mesh: rename to %1 failed").arg(path));
-    QFile::remove(tmp);
+}
+} // namespace
+
+void SimulatorWidget::cancelWorldShip() {
+  // Any build in flight is now stale: its result is dropped (and its temp file
+  // removed) when it lands, and nothing queued behind it is started.
+  m_shipGen->fetch_add(1);
+  m_shipPending.reset();
+}
+
+void SimulatorWidget::sendWorldMeshToSim(vsim::LoadedMesh m, bool liftAfter,
+                                         std::optional<QRectF> coverage) {
+  if (!m_sim || !m.valid)
+    return;
+  const vsim::WorldConfig &w = m_worldEditor->config();
+  WorldShipReq req;
+  req.mesh = std::make_shared<const vsim::LoadedMesh>(std::move(m));
+  req.doubleSided = w.worldMeshDoubleSided;
+  req.lift = liftAfter;
+  req.coverage = coverage;
+  enqueueShip(std::move(req));
+}
+
+void SimulatorWidget::enqueueShip(WorldShipReq req) {
+  // A newer request supersedes everything older: bump the generation so a
+  // running build aborts at its next checkpoint and its result is discarded.
+  m_shipGen->fetch_add(1);
+  if (m_shipWatcher) { // one worker at a time; the latest request waits its turn
+    if (m_shipPending)
+      req.lift = req.lift || m_shipPending->lift;
+    m_shipPending = std::move(req);
     return;
   }
+  startShipJob(std::move(req));
+}
 
-  const uint32_t ntris = nverts / 3;
-  m_sim->sendWorldMesh(path, nverts, ntris, nodes, w.worldMeshRestitution,
-                       w.worldMeshDoubleSided);
-  appendLog("world", tr("world mesh → daemon: %1 tris, %2 nodes (%3 KiB)")
-                         .arg(ntris)
-                         .arg(nodes)
-                         .arg(blob.size() / 1024));
+void SimulatorWidget::startShipJob(WorldShipReq req) {
+  const int gen = m_shipGen->load();
+  const auto genPtr = m_shipGen;
+  const QString path = worldBlobPath();
+  // Unique per job so a superseded build can never clobber the next one's file.
+  const QString tmp = path + QStringLiteral(".") + QString::number(gen) +
+                      QStringLiteral(".tmp");
+  m_shipRunningTmp = tmp;
+  m_shipRunningLift = req.lift;
+  m_shipRunningCover = req.coverage;
+
+  auto *watcher = new QFutureWatcher<WorldShipResult>(this);
+  m_shipWatcher = watcher;
+  connect(watcher, &QFutureWatcherBase::finished, this,
+          [this, watcher, gen, path, tmp]() {
+            onShipFinished(watcher->result(), gen, path, tmp);
+            watcher->deleteLater();
+          });
+  // Everything heavy (flatten, BVH build, blob write) runs here; it touches only
+  // its own captured data, so it is safe even if the widget goes away first.
+  watcher->setFuture(QtConcurrent::run(
+      [genPtr, gen, tmp, mesh = req.mesh, chunks = std::move(req.chunks),
+        extra = std::move(req.extra), ds = req.doubleSided]() {
+        WorldShipResult r;
+        auto stale = [&] { return genPtr->load() != gen; };
+        if (stale())
+          return r;
+        QElapsedTimer t;
+        t.start();
+        std::vector<float> verts;
+        if (mesh) {
+          verts.reserve(mesh->positions.size() * 3);
+          for (const QVector3D &p : mesh->positions) {
+            verts.push_back(p.x());
+            verts.push_back(p.y());
+            verts.push_back(p.z());
+          }
+        } else {
+          std::size_t n = extra.size();
+          for (const auto &c : chunks)
+            n += c->positions.size();
+          verts.reserve(n * 3);
+          for (const auto &c : chunks)
+            for (const vsim::procgen::PgVec3 &p : c->positions) {
+              verts.push_back(p.x);
+              verts.push_back(p.y);
+              verts.push_back(p.z);
+            }
+          for (const QVector3D &p : extra) {
+            verts.push_back(p.x());
+            verts.push_back(p.y());
+            verts.push_back(p.z());
+          }
+        }
+        const uint32_t nverts = static_cast<uint32_t>(verts.size() / 3);
+        std::vector<uint8_t> blob =
+            vsim::buildWorldBvh(verts.data(), nverts, ds, r.nodes);
+        r.buildMs = t.nsecsElapsed() / 1.0e6;
+        if (blob.empty()) {
+          r.err = QStringLiteral("world mesh BVH build failed");
+          return r;
+        }
+        if (stale())
+          return r;
+        QFile f(tmp);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+          r.err = QStringLiteral("world mesh: cannot write %1").arg(tmp);
+          return r;
+        }
+        const qint64 wrote = f.write(reinterpret_cast<const char *>(blob.data()),
+                                     static_cast<qint64>(blob.size()));
+        f.close();
+        if (wrote != static_cast<qint64>(blob.size())) {
+          QFile::remove(tmp);
+          r.err = QStringLiteral("world mesh: short write to %1").arg(tmp);
+          return r;
+        }
+        r.ok = true;
+        r.nverts = nverts;
+        r.bytes = static_cast<qint64>(blob.size());
+        r.totalMs = t.nsecsElapsed() / 1.0e6;
+        return r;
+      }));
+}
+
+void SimulatorWidget::onShipFinished(const WorldShipResult &r, int gen,
+                                     const QString &path, const QString &tmp) {
+  const bool lift = m_shipRunningLift;
+  m_shipWatcher = nullptr;
+  m_shipRunningTmp.clear();
+  const bool stale = gen != m_shipGen->load();
+
+  if (!stale && m_sim && !r.err.isEmpty())
+    appendLog("world", r.err);
+
+  if (!stale && m_sim && r.ok) {
+    QElapsedTimer t; // the only main-thread cost left: rename + one ctl send
+    t.start();
+    // Publish atomically: rename() over the target so the daemon never mmaps a
+    // half-written blob.
+#ifdef _WIN32
+    // rename() will not replace an existing file on Windows; MoveFileEx will,
+    // and atomically on one volume -- which a temp file beside it is.
+    const bool moved = MoveFileExW(reinterpret_cast<LPCWSTR>(tmp.utf16()),
+                                   reinterpret_cast<LPCWSTR>(path.utf16()),
+                                   MOVEFILE_REPLACE_EXISTING);
+#else
+    const bool moved = ::rename(tmp.toLocal8Bit().constData(),
+                                path.toLocal8Bit().constData()) == 0;
+#endif
+    if (!moved) {
+      appendLog("world", tr("world mesh: rename to %1 failed").arg(path));
+      QFile::remove(tmp);
+    } else {
+      const vsim::WorldConfig &w = m_worldEditor->config();
+      const uint32_t ntris = r.nverts / 3;
+      m_sim->sendWorldMesh(path, r.nverts, ntris, r.nodes,
+                           w.worldMeshRestitution, w.worldMeshDoubleSided);
+      appendLog("world",
+                tr("world mesh → daemon: %1 tris, %2 nodes (%3 KiB); built in "
+                   "%4 ms off-thread, %5 ms on the UI thread")
+                    .arg(ntris)
+                    .arg(r.nodes)
+                    .arg(r.bytes / 1024)
+                    .arg(r.totalMs, 0, 'f', 1)
+                    .arg(t.nsecsElapsed() / 1.0e6, 0, 'f', 2));
+      // The collision under the drone is now really in the engine, so it is safe
+      // to re-drop a drone that fell through while it was being built.
+      // Only if the drone is actually over what shipped (a drone that outran the
+      // window is picked up by the next recentre's ship instead).
+      if (m_spawnResetPending) {
+        // Start's reset: collision is in, place the drone (this supersedes the lift).
+        m_spawnResetPending = false;
+        sendSpawnReset();
+      } else if (lift && (!m_shipRunningCover ||
+                   m_shipRunningCover->contains(m_lastDronePos.x(),
+                                                m_lastDronePos.y())))
+        liftDroneToSurface();
+    }
+  } else {
+    QFile::remove(tmp); // stale, sim gone, or failed
+  }
+
+  // Start the newest queued request, if a newer one arrived mid-build. A lift
+  // owed by a superseded request is inherited (liftDroneToSurface self-guards).
+  if (m_shipPending) {
+    WorldShipReq next = std::move(*m_shipPending);
+    m_shipPending.reset();
+    if (stale)
+      next.lift = next.lift || lift;
+    startShipJob(std::move(next));
+  } else if (m_spawnResetPending && m_sim && !m_collisionPending) {
+    // The collision Start was waiting for was dropped or failed and nothing
+    // newer is coming: reset anyway rather than leave the stale state.
+    m_spawnResetPending = false;
+    sendSpawnReset();
+  }
 }
 
 void SimulatorWidget::pushRatesToSim() {
@@ -3188,6 +3389,15 @@ void SimulatorWidget::startInAppSim() {
     SitlModule::instance().api()->set_telemetry_sink(
         &uart2_to_widget_trampoline, this);
 
+  {
+    QSettings st;
+    m_runSeed = vsim::SimWorker::resolveResetSeed(
+        st.value(kSeedRandomKey, false).toBool(),
+        static_cast<uint32_t>(st.value(kSeedKey, kDefaultResetSeed).toInt()),
+        QRandomGenerator::global()->generate());
+    appendLog("sim", tr("noise seed %1").arg(m_runSeed));
+  }
+  m_spawnResetPending = false;
   m_sim = new vsim::SimWorker(this);
   m_sim->setTelemetrySink(&uart2_to_widget_trampoline, this);
   connect(m_sim, &vsim::SimWorker::stoppedCleanly, this,
@@ -3249,6 +3459,14 @@ void SimulatorWidget::startInAppSim() {
     pushNoise();  // apply the configured sensor models (σ / enable)
     pushFaults(); // re-assert any latched faults across the restart
     loadWorldMeshToRenderer(); // re-loads + ships the collision BVH now m_sim exists
+    // Clean start: reset at the spawn pose with the run's seed, wiping whatever
+    // a previous Stop left in the engine. Held until the collision under the
+    // spawn has shipped (built off-thread) so the drone is never placed over
+    // terrain the engine does not have; with no world to collide with, now.
+    if (spawnResetWaitsForCollision())
+      m_spawnResetPending = true;
+    else
+      sendSpawnReset();
     // Restart any armed training course from the first gate, flying from the floor.
     if (m_training.active()) {
       m_training.resetProgress();
@@ -3375,6 +3593,8 @@ void SimulatorWidget::stopInAppSim() {
   // Detach, not shutdown(): those threads still hold the plumbing.
   if (SitlModule::instance().available())
     SitlModule::instance().api()->set_telemetry_sink(nullptr, nullptr);
+  cancelWorldShip(); // a build in flight must not ship into a stopped sim
+  m_spawnResetPending = false;
   m_sim->requestStop();
   if (!m_sim->wait(2000)) {
     m_sim->terminate();
