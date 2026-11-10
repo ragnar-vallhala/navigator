@@ -28,6 +28,7 @@
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QtTest>
+#include <functional>
 
 using namespace ws;
 
@@ -46,12 +47,25 @@ void countGlWarnings(QtMsgType t, const QMessageLogContext &c, const QString &m)
 struct Fixture {
   QMainWindow win;
   WorkspaceManager *wm;
-  GlPanel *gl = nullptr;
-  Fixture() {
+  QWidget *gl = nullptr;
+  std::function<int()> frames, inits, destroyed;
+  std::function<QImage()> grab;
+  template <class P> QWidget *make() {
+    auto *p = new P;
+    gl = p;
+    frames = [p] { return p->frames(); };
+    inits = [p] { return p->initCount(); };
+    destroyed = [p] { return p->ctxDestroyed(); };
+    grab = [p] { return p->grabFramebuffer(); };
+    return p;
+  }
+  explicit Fixture(bool window) {
     win.resize(1000, 700);
     wm = new WorkspaceManager(&win, std::make_unique<AdsBackend>(&win), &win);
     PanelRegistry r;
-    r.add("gl", "GL", [this] { gl = new GlPanel; return gl; });
+    r.add("gl", "GL", [this, window]() -> QWidget * {
+      return window ? this->make<GlWindowPanel>() : this->make<GlPanel>();
+    });
     for (const char *id : {"a", "b", "c"})
       r.add(id, QString(id).toUpper(), [id] { return new QLabel(id); });
     wm->registerPanels(r);
@@ -65,17 +79,17 @@ struct Fixture {
   }
   // Let the animation run; true if frames advanced and pixels are real.
   bool renders(const char *what) {
-    const int before = gl->frames();
+    const int before = frames();
     QTest::qWait(400);
-    const QImage img = gl->grabFramebuffer();
-    const bool moved = gl->frames() > before + 3;
+    const QImage img = grab();
+    const bool moved = frames() > before + 3;
     const bool real = !img.isNull() && img.width() > 10 && img.pixelColor(img.width() / 2, img.height() - 8) != QColor(0, 0, 0);
     int tops = 0; // visible top-level windows other than the main one
     for (QWidget *w : QApplication::topLevelWidgets())
       if (w != &win && w->isVisible())
         ++tops;
     qInfo("%-18s frames %d -> %d  init %d  ctx-destroyed %d  %dx%d  in-main-window %d  extra-top-levels %d  %s",
-          what, before, gl->frames(), gl->initCount(), gl->ctxDestroyed(),
+          what, before, frames(), inits(), destroyed(),
           img.width(), img.height(), gl->window() == &win, tops,
           (moved && real) ? "OK" : "NOT RENDERING");
     return moved && real;
@@ -97,10 +111,12 @@ private slots:
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_dir.path());
   }
 
-  void floatRedockAndSwitchKeepRendering() {
+  // Runs the full float / move / re-dock / switch / load / reset sequence and
+  // reports the number of GL presentation warnings.
+  void runSequence(bool window, int &warnings) {
     g_prev = qInstallMessageHandler(countGlWarnings);
     g_glWarnings = 0;
-    Fixture f;
+    Fixture f(window);
     auto *b = f.wm->backend();
     QVERIFY(f.renders("docked"));
     b->floatPanel("gl");
@@ -124,14 +140,28 @@ private slots:
     f.wm->resetLayout();
     QVERIFY(f.renders("reset"));
     qInstallMessageHandler(g_prev);
-    qInfo("GL presentation warnings: %d", g_glWarnings);
-    // The widget renders (its framebuffer is live) but the main window stops
-    // presenting it: a screenshot shows stale pixels and the layout does not
-    // repaint. Plain QDockWidget with the same panel on the same Qt/Xvfb gives
-    // 0 warnings; ADS 5.1.1 gives them even in a 30-line program with no
-    // WorkspaceManager (see the commit message). Flip this when it is fixed.
+    qInfo("GL presentation warnings (%s): %d", window ? "window container" : "QOpenGLWidget", g_glWarnings);
+    warnings = g_glWarnings;
+  }
+
+  // The supported combination: ADS + QOpenGLWindow in a window container.
+  void windowContainerKeepsRendering() {
+    int w = -1;
+    runSequence(true, w);
+    QCOMPARE(w, 0);
+  }
+
+  // A QOpenGLWidget under ADS re-runs initializeGL() on every re-parent and the
+  // main window then stops presenting (a screenshot shows stale pixels and a
+  // ghost of the floating window; also with Qt::AA_ShareOpenGLContexts and with
+  // a window manager). Plain QDockWidget with the same panel is clean, and ADS
+  // 5.1.1 shows it in a 30-line program with no WorkspaceManager. Flip this
+  // when it is fixed upstream.
+  void openGlWidgetStopsPresenting() {
+    int w = -1;
+    runSequence(false, w);
     QEXPECT_FAIL("", "ADS + QOpenGLWidget: main window stops presenting (Qt 6.4.2, xcb, software GL)", Continue);
-    QCOMPARE(g_glWarnings, 0);
+    QCOMPARE(w, 0);
   }
 };
 

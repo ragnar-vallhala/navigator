@@ -38,7 +38,13 @@ inline ws::PanelRegistry mockPanels() {
     });
   };
   // The simulator view is a real QOpenGLWidget, like SimRendererWidget.
-  r.add("sim.view", "Simulator view", [] { return new GlPanel; });
+  // Default: a QOpenGLWindow in a window container (see GlPanel.h for why).
+  // NAV_MOCK_GL=widget swaps in a QOpenGLWidget to reproduce the ADS problem.
+  r.add("sim.view", "Simulator view", []() -> QWidget * {
+    if (qEnvironmentVariable("NAV_MOCK_GL") == "widget")
+      return new GlPanel;
+    return new GlWindowPanel;
+  });
   add("sim.world", "World");
   add("sim.vehicle", "Vehicle");
   add("sim.tuning", "Tuning");
