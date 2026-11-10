@@ -17,6 +17,9 @@ function(navigator_test name)
       ${SRC} ${SRC}/core ${SRC}/core/ui ${SRC}/comm ${SRC}/protocol)
   target_link_libraries(${name} PRIVATE
       Qt6::Test Qt6::Widgets Qt6::Core Qt6::Network Qt6::SerialPort)
+  # qt_add_executable makes a GUI-subsystem exe on Windows, whose stdout is
+  # lost: a failing QtTest then prints nothing under --output-on-failure.
+  set_target_properties(${name} PROPERTIES WIN32_EXECUTABLE FALSE)
   add_test(NAME ${name} COMMAND ${name})
   set_tests_properties(${name} PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
