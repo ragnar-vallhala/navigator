@@ -3423,7 +3423,7 @@ void SimulatorWidget::pushAirframeGains(bool announce) {
   appendLog("geom",
             m_presetId.isEmpty()
                 ? tr("custom vehicle: firmware keeps its current gains")
-                : tr("sent %1 gains to firmware (saved to pid.bin)")
+                : tr("sent %1 gains to firmware")
                       .arg(m_presetId));
 }
 
