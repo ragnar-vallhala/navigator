@@ -257,7 +257,8 @@ void pushFirmwareMotorGeometry(const vsim::GeometryConfig &g) {
 
 // Send an airframe preset's gain set to the firmware as CMD_SET_PID, the frames
 // the autotuner's Apply sends. Same command gate as the geometry above, so it is
-// re-sent with it. The firmware persists applied gains (0:pid.bin).
+// re-sent with it. Whether the engine persists them to 0:pid.bin is not
+// verified (the private store stayed empty in a test), so do not rely on it.
 void pushPresetGains(const QString &presetId) {
   const vsim::AirframePreset *p = vsim::findAirframePreset(presetId);
   if (!p)
@@ -3466,8 +3467,8 @@ void SimulatorWidget::applyGeometryToRenderer() {
 }
 
 // Push the current airframe's gains and, when `announce`, say so in the log:
-// the firmware saves applied gains (0:pid.bin), so the user should be able to
-// see why their tune changed, or that it was deliberately left alone. With the
+// the push can overwrite a tune the firmware loaded at boot, so the user should
+// be able to see why their tune changed, or that it was deliberately left alone. With the
 // sim running the push is a Start command (see armStartCommand): sent once the
 // clock is synced and re-sent until the firmware ACKs all of the preset's
 // CMD_SET_PID slots.
