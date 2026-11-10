@@ -80,6 +80,10 @@ navigator_test(tst_sysid_rtos
     ${SRC}/autotune/Cost.cpp)
 target_include_directories(tst_sysid_rtos PRIVATE ${SRC}/autotune)
 
+# ---- Private firmware VFS dir: resolver + reset safety rule ----------------
+navigator_test(tst_vfs_dir tst_vfs_dir.cpp ${SRC}/vsim/VfsDir.cpp)
+target_include_directories(tst_vfs_dir PRIVATE ${SRC}/vsim ${CMAKE_CURRENT_SOURCE_DIR})
+
 # ---- C++ autotune engine (Space + orchestration, synthetic rollout) -------
 navigator_test(tst_autotune_engine
     tst_autotune_engine.cpp
@@ -185,9 +189,10 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
   navigator_test(tst_sitl_engine
       tst_sitl_engine.cpp
       ${SRC}/vsim/SitlModule.cpp ${SRC}/vsim/SitlModule.h
+      ${SRC}/vsim/VfsDir.cpp ${SRC}/vsim/VfsDir.h
       ${SRC}/vsim/SimWorker.cpp ${SRC}/vsim/SimWorker.h
       ${SRC}/vsim/RcBridge.cpp ${SRC}/vsim/RcBridge.h)
-  target_include_directories(tst_sitl_engine PRIVATE ${SRC}/vsim ${VAYU_SITL_SDK})
+  target_include_directories(tst_sitl_engine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${SRC}/vsim ${VAYU_SITL_SDK})
   target_link_libraries(tst_sitl_engine PRIVATE navlink_codec)
   if(WIN32)
     target_link_libraries(tst_sitl_engine PRIVATE winmm)

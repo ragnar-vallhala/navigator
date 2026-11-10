@@ -53,6 +53,7 @@
 #include <QPushButton>
 #include <QStringList>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QVBoxLayout>
@@ -63,6 +64,7 @@
 
 #ifdef NAVIGATOR_HAS_SITL
 #include "../../vsim/SitlModule.h"
+#include "../../vsim/VfsDir.h"
 // Commands reach the in-app sim as NavLink frames through SitlModule::send(),
 // the same frames a real FC gets. The firmware then runs its own CMD_SET_PID
 // handler, which validates, applies to the live controllers AND persists to
@@ -810,6 +812,43 @@ void MainWindow::buildMenuBar() {
          ui::Icon::Calib, [this] { showCalibration(); });
   addNav(toolsMenu, "nav.gyronotch", "&Gyro Notch", QKeySequence("Ctrl+9"),
          ui::Icon::Control, [this] { showGyroNotch(); });
+#ifdef NAVIGATOR_HAS_SITL
+  toolsMenu->addSeparator();
+  toolsMenu->addAction(m_cmds->add(
+      "tools.resetFirmwareSettings", "Reset &Firmware Settings…", "Tools",
+      QKeySequence(), CmdContext::Always, [this] {
+        // Only the app's private VFS dir is ever cleared; a user-set
+        // VAYU_VFS_DIR is refused (see vsim::resetPrivateVfs).
+        const QString priv = vsim::privateVfsDir();
+        const QString env = qEnvironmentVariable("VAYU_VFS_DIR");
+        const bool userSet = !env.isEmpty() && env != priv;
+        if (userSet) {
+          QMessageBox::information(
+              this, tr("Reset firmware settings"),
+              tr("Not reset: VAYU_VFS_DIR is set by you (%1). Clear that "
+                 "directory yourself.")
+                  .arg(env));
+          return;
+        }
+        if (QMessageBox::question(
+                this, tr("Reset firmware settings"),
+                tr("Stop the simulator and erase the simulator firmware's "
+                   "saved settings (tuned gains) in\n%1 ?")
+                    .arg(priv),
+                QMessageBox::Yes | QMessageBox::Cancel,
+                QMessageBox::Cancel) != QMessageBox::Yes)
+          return;
+        if (m_simulatorWidget)
+          m_simulatorWidget->stopInAppSim();
+        QString why;
+        const QString appData =
+            QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        if (vsim::resetPrivateVfs(priv, appData, false, &why))
+          m_logPanel->appendLog("[GCS] firmware settings reset: " + priv);
+        else
+          QMessageBox::warning(this, tr("Reset firmware settings"), why);
+      }));
+#endif
 
   // ---- Settings (a bare menu-bar action — clicking it opens the page
   // directly, no submenu) ----
