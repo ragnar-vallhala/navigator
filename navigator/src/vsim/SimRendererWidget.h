@@ -71,8 +71,27 @@ public:
   // window): `w` is never shown; each frame it is rendered at the window's size
   // into an image that is composited on top. Not owned. Used for the FPV
   // telemetry HUD, which used to be a child widget over the view.
+  // The widget's `changed()` signal (if it has one) marks the cached image
+  // stale; without it the HUD is re-rendered every frame.
   void setHudWidget(QWidget *w);
   void setHudVisible(bool on);
+  // The HUD image is cached and re-rendered only when the HUD says it changed,
+  // the window size or pixel ratio changed, or it was just shown. Off = render
+  // every frame (what it used to do); for measuring.
+  void setHudCache(bool on) { hudCache_ = on; }
+  int hudRenderCount() const { return hudRenders_; }
+  qint64 hudPaintNs() const { return hudNs_; } // total time inside paintHud
+  void resetHudStats() { hudRenders_ = 0; hudNs_ = 0; }
+public slots:
+  void invalidateHud(); // the HUD content changed: re-render before next paint
+public:
+
+  // Chunk read-back on a context reset uses glGetBufferSubData, which GLES
+  // lacks; there (or when forced here, for tests) a CPU copy of each chunk is
+  // kept instead. Set before chunks are loaded.
+  void setForceChunkCpuCopy(bool on) { forceChunkCpu_ = on; }
+  // Read-backs done so far by any renderer (a teardown must do none).
+  static int chunkReadBacks();
 
   // A screenshot of the view, HUD included: schedules a frame, waits (a nested
   // event loop, at most `timeoutMs`) until it has been presented, then reads it
@@ -299,10 +318,13 @@ private:
   // Builds every program and static mesh. Idempotent: safe to run again on a
   // new context (it first drops whatever a previous context left behind).
   void initResources();
-  // Frees every GL object with the context current and re-queues what must be
-  // re-uploaded into the next context (CPU copies / GPU read-back for chunks).
-  void releaseGLResources();
+  // Frees every GL object with the context current. With readBack, re-queues
+  // what must be re-uploaded into a context that follows (chunks are read back
+  // from the GPU, or taken from their CPU copy on GLES); without it (teardown:
+  // destructor, aboutToBeDestroyed) nothing is read, only released.
+  void releaseGLResources(bool readBack);
   void onContextGone(); // aboutToBeDestroyed slot: makeCurrent + release
+  bool chunkCpuMode() const; // keep CPU copies of chunks (GLES / forced)
   void eraseChunk(qint64 key); // release + erase (a Mesh dtor frees no GL)
   void eraseAllChunks();
 #ifdef VAYU_SIM_GRASS
@@ -452,6 +474,18 @@ private:
 
   QPointer<QWidget> hud_; // painted over the frame (see setHudWidget)
   bool hudVisible_ = false;
+  bool hudCache_ = true;
+  bool hudDirty_ = true;
+  bool hudHasSignal_ = false;
+  QImage hudImg_;
+  QSize hudSize_;
+  qreal hudDpr_ = 0;
+  int hudRenders_ = 0;
+  qint64 hudNs_ = 0;
+  bool forceChunkCpu_ = false;
+  // CPU copies of the loaded chunks, kept only where VBO read-back is not
+  // available (GLES) or forced.
+  std::map<qint64, std::vector<float>> chunkCpu_;
 
   // GL context lifetime bookkeeping.
   bool glLive_ = false; // resources exist in the current context
@@ -583,6 +617,7 @@ private:
     int count;
     float cx, cy, half;
   };
+  std::map<qint64, PendingFlora> floraCpu_; // as chunkCpu_, for flora
   std::vector<PendingFlora> pendingFloraUploads_;
   std::vector<qint64> pendingFloraRemovals_;
   bool floraDirty_ = false;

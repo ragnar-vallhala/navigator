@@ -35,22 +35,39 @@ SimHudWidget::SimHudWidget(QWidget *parent) : QWidget(parent) {
 void SimHudWidget::setSnapshot(const vsim::SimSnapshot &s) {
   // NED aerospace extraction — Qt's getEulerAngles (Y-up) permutes the axes for
   // an NED airframe, which rotated the ladder by the drifting heading.
-  vsim::quatToEulerNED(s.att, &roll_, &pitch_, &yaw_);
-  alt_ = -s.pos_w.z();                        // NED z down → altitude up
-  gs_ = std::hypot(s.vel_w.x(), s.vel_w.y()); // ground speed
-  vs_ = -s.vel_w.z();                         // +up
+  float roll, pitch, yaw;
+  vsim::quatToEulerNED(s.att, &roll, &pitch, &yaw);
+  const float alt = -s.pos_w.z();                        // NED z down → up
+  const float gs = std::hypot(s.vel_w.x(), s.vel_w.y()); // ground speed
+  const float vs = -s.vel_w.z();                         // +up
+  if (roll == roll_ && pitch == pitch_ && yaw == yaw_ && alt == alt_ &&
+      gs == gs_ && vs == vs_ && s.motor_duty == motor_)
+    return; // nothing the HUD draws has moved
+  roll_ = roll;
+  pitch_ = pitch;
+  yaw_ = yaw;
+  alt_ = alt;
+  gs_ = gs;
+  vs_ = vs;
   motor_ = s.motor_duty;
   update();
+  emit changed();
 }
 
 void SimHudWidget::setStatus(const QString &s) {
+  if (s == status_)
+    return;
   status_ = s;
   update();
+  emit changed();
 }
 
 void SimHudWidget::setFlightMode(const QString &m) {
+  if (m == mode_)
+    return;
   mode_ = m;
   update();
+  emit changed();
 }
 
 void SimHudWidget::setImu(const float acc[3], const float gyr[3]) {
@@ -63,6 +80,7 @@ void SimHudWidget::setImu(const float acc[3], const float gyr[3]) {
       gyrHist_[i].removeFirst();
   }
   update();
+  emit changed();
 }
 
 void SimHudWidget::paintEvent(QPaintEvent *) {

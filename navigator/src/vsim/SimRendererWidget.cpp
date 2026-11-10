@@ -17,6 +17,7 @@
 #include "SimRendererWidget.h"
 
 #include <QCursor>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QTimer>
 #include <QKeyEvent>
@@ -29,6 +30,7 @@
 #include <QtMath>
 
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <vector>
 
@@ -450,13 +452,27 @@ SimRendererWidget::SimRendererWidget(QWindow *parent)
 }
 
 void SimRendererWidget::setHudWidget(QWidget *w) {
+  if (hud_)
+    disconnect(hud_, nullptr, this, nullptr);
   hud_ = w;
+  hudDirty_ = true;
+  hudHasSignal_ = w && w->metaObject()->indexOfSignal("changed()") >= 0;
+  if (hudHasSignal_)
+    connect(w, SIGNAL(changed()), this, SLOT(invalidateHud()));
   update();
 }
 
 void SimRendererWidget::setHudVisible(bool on) {
+  if (on && !hudVisible_)
+    hudDirty_ = true; // content may have changed while it was hidden
   hudVisible_ = on;
   update();
+}
+
+void SimRendererWidget::invalidateHud() {
+  hudDirty_ = true;
+  if (hudVisible_)
+    update();
 }
 
 QImage SimRendererWidget::grabFrame(int timeoutMs) {
@@ -509,17 +525,32 @@ void SimRendererWidget::resetGlState() {
 void SimRendererWidget::paintHud() {
   if (!hud_ || !hudVisible_ || width() <= 0 || height() <= 0)
     return;
+  QElapsedTimer t;
+  t.start();
   const qreal dpr = devicePixelRatio();
-  QImage img(QSize(width(), height()) * dpr, QImage::Format_ARGB32_Premultiplied);
-  img.setDevicePixelRatio(dpr);
-  img.fill(Qt::transparent);
-  hud_->resize(width(), height());
-  hud_->render(&img);
+  const QSize sz(width(), height());
+  // Re-render only when the HUD changed, the size / pixel ratio changed, or
+  // the HUD cannot tell us (no changed() signal) or caching is off. An image
+  // that is unchanged keeps its cacheKey, so QPainter reuses the texture it
+  // already uploaded instead of sending the pixels again.
+  if (!hudCache_ || !hudHasSignal_ || hudDirty_ || sz != hudSize_ ||
+      dpr != hudDpr_ || hudImg_.isNull()) {
+    hudImg_ = QImage(sz * dpr, QImage::Format_ARGB32_Premultiplied);
+    hudImg_.setDevicePixelRatio(dpr);
+    hudImg_.fill(Qt::transparent);
+    hud_->resize(sz);
+    hud_->render(&hudImg_);
+    hudSize_ = sz;
+    hudDpr_ = dpr;
+    hudDirty_ = false;
+    ++hudRenders_;
+  }
   glDisable(GL_DEPTH_TEST);
   QPainter p(this);
-  p.drawImage(0, 0, img);
+  p.drawImage(0, 0, hudImg_);
   p.end();
   resetGlState();
+  hudNs_ += t.nsecsElapsed();
 }
 
 void SimRendererWidget::setMotorsEditable(bool on) {
@@ -553,6 +584,11 @@ void SimRendererWidget::selectObstacle(int index) {
   update();
 }
 
+namespace {
+std::atomic<int> g_chunkReadBacks{0};
+}
+int SimRendererWidget::chunkReadBacks() { return g_chunkReadBacks; }
+
 SimRendererWidget::~SimRendererWidget() {
   // Free the GL side while a context is still current. The context's own
   // aboutToBeDestroyed (connected in initResources) does the same on a
@@ -562,18 +598,24 @@ SimRendererWidget::~SimRendererWidget() {
 
 // Chunk bookkeeping that frees the GL objects: a Mesh's destructor does not
 // delete its QOpenGLBuffer, so every drop goes through release() first.
+bool SimRendererWidget::chunkCpuMode() const {
+  return forceChunkCpu_ || (context() && context()->isOpenGLES());
+}
+
 void SimRendererWidget::eraseChunk(qint64 key) {
   const auto it = worldChunks_.find(key);
   if (it == worldChunks_.end())
     return;
   it->second->release();
   worldChunks_.erase(it);
+  chunkCpu_.erase(key);
 }
 
 void SimRendererWidget::eraseAllChunks() {
   for (auto &kv : worldChunks_)
     kv.second->release();
   worldChunks_.clear();
+  chunkCpu_.clear();
 }
 
 template <class F> void SimRendererWidget::forEachMesh(F &&f) {
@@ -616,15 +658,19 @@ int SimRendererWidget::liveGlObjects() const {
 // pending queues whatever the next context has to re-upload. Nothing here may
 // assume the objects exist: it runs from the destructor and from the context's
 // aboutToBeDestroyed, possibly both.
-void SimRendererWidget::releaseGLResources() {
+void SimRendererWidget::releaseGLResources(bool readBack) {
   if (!glLive_)
     return;
   glLive_ = false;
 
-  // Streamed terrain chunks have no CPU copy (a copy would double the memory
-  // of the whole loaded terrain), so read each VBO back into the upload queue
-  // before the buffer goes. Queued ahead of anything still pending, which is
-  // newer and overrides it by key.
+  // Streamed terrain chunks normally have no CPU copy (a copy would double the
+  // memory of the whole loaded terrain), so when a following context needs
+  // them each VBO is read back into the upload queue before the buffer goes.
+  // glGetBufferSubData does not exist on GLES, so there (or when forced) the
+  // copy made at upload time is used instead. Teardown (destructor, context
+  // going away) reads nothing: the data is not wanted and the context may be
+  // on its way out. Re-queued chunks go ahead of anything still pending, which
+  // is newer and overrides them by key.
   if (clearAllChunks_) { // a queued clear: nothing of the old set survives
     eraseAllChunks();
     pendingChunkRemovals_.clear();
@@ -633,26 +679,33 @@ void SimRendererWidget::releaseGLResources() {
   for (const qint64 key : pendingChunkRemovals_)
     eraseChunk(key);
   pendingChunkRemovals_.clear();
-  std::vector<PendingChunk> back;
-  for (auto &kv : worldChunks_) {
-    Mesh &m = *kv.second;
-    PendingChunk pc;
-    pc.key = kv.first;
-    if (m.vbo.isCreated() && m.vbo.bind()) {
-      const int bytes = m.vbo.size();
-      pc.data.resize(size_t(std::max(bytes, 0)) / sizeof(float));
-      if (bytes > 0 && m.vbo.read(0, pc.data.data(), bytes))
+  if (readBack) {
+    std::vector<PendingChunk> back;
+    for (auto &kv : worldChunks_) {
+      PendingChunk pc;
+      pc.key = kv.first;
+      Mesh &m = *kv.second;
+      const auto cit = chunkCpu_.find(kv.first);
+      if (cit != chunkCpu_.end()) {
+        pc.data = std::move(cit->second);
         back.push_back(std::move(pc));
-      else
-        qWarning("[SimRenderer] chunk %lld could not be read back; dropped",
-                 static_cast<long long>(kv.first));
-      m.vbo.release();
+      } else if (!chunkCpuMode() && m.vbo.isCreated() && m.vbo.bind()) {
+        const int bytes = m.vbo.size();
+        pc.data.resize(size_t(std::max(bytes, 0)) / sizeof(float));
+        ++g_chunkReadBacks;
+        if (bytes > 0 && m.vbo.read(0, pc.data.data(), bytes))
+          back.push_back(std::move(pc));
+        else
+          qWarning("[SimRenderer] chunk %lld could not be read back; dropped",
+                   static_cast<long long>(kv.first));
+        m.vbo.release();
+      }
     }
+    for (PendingChunk &pc : pendingChunkUploads_)
+      back.push_back(std::move(pc));
+    pendingChunkUploads_ = std::move(back);
+    chunksDirty_ = !pendingChunkUploads_.empty();
   }
-  for (PendingChunk &pc : pendingChunkUploads_)
-    back.push_back(std::move(pc));
-  pendingChunkUploads_ = std::move(back);
-  chunksDirty_ = !pendingChunkUploads_.empty();
   eraseAllChunks();
 
 #ifdef VAYU_SIM_GRASS
@@ -664,29 +717,34 @@ void SimRendererWidget::releaseGLResources() {
   for (const qint64 key : pendingFloraRemovals_)
     eraseFlora(key);
   pendingFloraRemovals_.clear();
-  std::vector<PendingFlora> floraBack;
-  for (auto &kv : floraChunks_) {
-    FloraChunk &fc = *kv.second;
-    PendingFlora pf;
-    pf.key = kv.first;
-    pf.count = fc.count;
-    pf.cx = fc.cx;
-    pf.cy = fc.cy;
-    pf.half = fc.half;
-    if (fc.inst.isCreated() && fc.inst.bind()) {
-      const int bytes = fc.inst.size();
-      pf.data.resize(size_t(std::max(bytes, 0)) / sizeof(float));
-      if (bytes > 0 && fc.inst.read(0, pf.data.data(), bytes))
-        floraBack.push_back(std::move(pf));
-      fc.inst.release();
+  if (readBack) {
+    std::vector<PendingFlora> floraBack;
+    for (auto &kv : floraChunks_) {
+      FloraChunk &fc = *kv.second;
+      const auto cit = floraCpu_.find(kv.first);
+      if (cit != floraCpu_.end()) {
+        floraBack.push_back(std::move(cit->second));
+      } else if (!chunkCpuMode() && fc.inst.isCreated() && fc.inst.bind()) {
+        PendingFlora pf;
+        pf.key = kv.first;
+        pf.count = fc.count;
+        pf.cx = fc.cx;
+        pf.cy = fc.cy;
+        pf.half = fc.half;
+        const int bytes = fc.inst.size();
+        pf.data.resize(size_t(std::max(bytes, 0)) / sizeof(float));
+        ++g_chunkReadBacks;
+        if (bytes > 0 && fc.inst.read(0, pf.data.data(), bytes))
+          floraBack.push_back(std::move(pf));
+        fc.inst.release();
+      }
     }
-    fc.inst.destroy();
+    for (PendingFlora &pf : pendingFloraUploads_)
+      floraBack.push_back(std::move(pf));
+    pendingFloraUploads_ = std::move(floraBack);
+    floraDirty_ = !pendingFloraUploads_.empty();
   }
-  for (PendingFlora &pf : pendingFloraUploads_)
-    floraBack.push_back(std::move(pf));
-  pendingFloraUploads_ = std::move(floraBack);
-  floraDirty_ = !pendingFloraUploads_.empty();
-  floraChunks_.clear();
+  eraseAllFlora();
   gpuGrass_.release(this);
   for (QOpenGLBuffer &b : grassVbo_)
     b.destroy();
@@ -720,7 +778,7 @@ void SimRendererWidget::releaseGLResources() {
 
 void SimRendererWidget::resetGlResources() {
   makeCurrent();
-  releaseGLResources();
+  releaseGLResources(true);
   initResources();
   doneCurrent();
   update();
@@ -732,7 +790,7 @@ void SimRendererWidget::onContextGone() {
   if (!glLive_)
     return;
   makeCurrent();
-  releaseGLResources();
+  releaseGLResources(false); // teardown: nothing is read back
   doneCurrent();
 }
 
@@ -908,7 +966,7 @@ void SimRendererWidget::initResources() {
   // released first, so init can run any number of times without leaking or
   // adding shaders to an already-linked program.
   if (glLive_)
-    releaseGLResources();
+    releaseGLResources(false); // handles of a context that is already gone
   initializeOpenGLFunctions();
   if (context() != glCtx_) {
     glCtx_ = context();
@@ -1820,6 +1878,8 @@ void SimRendererWidget::flushChunkUpdates() {
     if (!mesh)
       mesh = std::make_unique<Mesh>();
     uploadColoredMesh(*mesh, pc.data);
+    if (chunkCpuMode())
+      chunkCpu_[pc.key] = std::move(pc.data);
   }
   pendingChunkUploads_.clear();
 }
@@ -1913,12 +1973,14 @@ void SimRendererWidget::eraseFlora(qint64 key) {
     return;
   it->second->inst.destroy();
   floraChunks_.erase(it);
+  floraCpu_.erase(key);
 }
 
 void SimRendererWidget::eraseAllFlora() {
   for (auto &kv : floraChunks_)
     kv.second->inst.destroy();
   floraChunks_.clear();
+  floraCpu_.clear();
 }
 
 void SimRendererWidget::flushFloraUpdates() {
@@ -1949,6 +2011,8 @@ void SimRendererWidget::flushFloraUpdates() {
     fc->cx = pf.cx;
     fc->cy = pf.cy;
     fc->half = pf.half;
+    if (chunkCpuMode())
+      floraCpu_[pf.key] = pf;
   }
   pendingFloraUploads_.clear();
 }

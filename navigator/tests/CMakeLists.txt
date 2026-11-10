@@ -209,8 +209,10 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
   navigator_test(tst_sim_gl_context
       tst_sim_gl_context.cpp
       ${SRC}/vsim/SimRendererWidget.cpp ${SRC}/vsim/SimRendererWidget.h
+      ${SRC}/ui/widgets/SimHudWidget.cpp ${SRC}/ui/widgets/SimHudWidget.h
+      ${SRC}/core/Units.cpp
       ${SRC}/vsim/DroneModel.cpp)
-  target_include_directories(tst_sim_gl_context PRIVATE ${SRC}/vsim ${VAYU_SITL_SDK})
+  target_include_directories(tst_sim_gl_context PRIVATE ${SRC}/vsim ${SRC}/ui/widgets ${VAYU_SITL_SDK})
   target_link_libraries(tst_sim_gl_context PRIVATE Qt6::OpenGL Qt6::OpenGLWidgets)
 endif()
 

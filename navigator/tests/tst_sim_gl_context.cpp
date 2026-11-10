@@ -26,6 +26,7 @@
 // a training gate) and a drone mesh, renders a frame, recreates the context,
 // renders again, and checks: the scene is not blank and looks the same, no GL
 // error was raised, no GL object leaks, and no stray top-level window remains.
+#include "SimHudWidget.h"
 #include "SimRendererWidget.h"
 
 #include <QGuiApplication>
@@ -192,11 +193,19 @@ struct Rig {
   QVBoxLayout *lay = nullptr;
   SimRendererWidget *r = nullptr;
   QWidget *box = nullptr;
-  Rig() {
+  SimHudWidget *hud = nullptr;
+  explicit Rig(bool cpuChunks = false, bool withHud = false) {
     lay = new QVBoxLayout(&host);
     lay->setContentsMargins(0, 0, 0, 0);
     r = new SimRendererWidget;
     r->setGlErrorCheck(true);
+    r->setForceChunkCpuCopy(cpuChunks);
+    if (withHud) {
+      hud = new SimHudWidget(&host);
+      hud->hide();
+      r->setHudWidget(hud);
+      r->setHudVisible(true);
+    }
     loadScene(r);
     box = QWidget::createWindowContainer(r, &host);
     box->setFixedSize(640, 480);
@@ -292,6 +301,115 @@ private slots:
     QCOMPARE(r->glInitCount(), inits + 6);
     QVERIFY2(probeBufferName(r) <= name0 + 2, "GL buffer names keep growing: leak");
     QCOMPARE(r->glErrorCount(), 0);
+  }
+
+  // Teardown reads nothing back from the GPU; a reset (which a following
+  // context needs) does, one per loaded chunk, unless the platform cannot
+  // (GLES) - then a CPU copy made at upload time stands in for it.
+  void readBackOnlyOnReset() {
+    const int base = SimRendererWidget::chunkReadBacks();
+    {
+      Rig rig;
+      QVERIFY(rig.showDocked());
+      const Views ref = capture(rig.r);
+      const char *why = nullptr;
+      QCOMPARE(SimRendererWidget::chunkReadBacks(), base);
+      rig.r->resetGlResources();
+      QVERIFY2(sameScene(ref, capture(rig.r), &why), why);
+      QVERIFY(SimRendererWidget::chunkReadBacks() > base); // reset reads back
+    }
+    QCoreApplication::processEvents();
+    const int afterReset = SimRendererWidget::chunkReadBacks();
+    {
+      Rig rig; // destroying a live renderer must read nothing
+      QVERIFY(rig.showDocked());
+      capture(rig.r);
+    }
+    QCoreApplication::processEvents();
+    QCOMPARE(SimRendererWidget::chunkReadBacks(), afterReset);
+    {
+      Rig rig(true); // the GLES path: copies kept, no read-back
+      QVERIFY(rig.showDocked());
+      const Views ref = capture(rig.r);
+      const char *why = nullptr;
+      rig.r->resetGlResources();
+      rig.r->resetGlResources();
+      QVERIFY2(sameScene(ref, capture(rig.r), &why), why);
+    }
+    QCOMPARE(SimRendererWidget::chunkReadBacks(), afterReset);
+  }
+
+  // The HUD image is re-rendered only when something changed, and this is the
+  // cost of that on software GL (not a GPU number).
+  void hudIsCached() {
+    Rig rig(false, true);
+    QVERIFY(rig.showDocked());
+    SimRendererWidget *r = rig.r;
+    r->grabFrame();
+    r->resetHudStats();
+    for (int i = 0; i < 5; ++i)
+      r->grabFrame();
+    QCOMPARE(r->hudRenderCount(), 0); // nothing changed: image reused
+
+    rig.hud->setStatus(QStringLiteral("ARMED"));
+    r->grabFrame();
+    QCOMPARE(r->hudRenderCount(), 1);
+    rig.hud->setStatus(QStringLiteral("ARMED")); // same value: not a change
+    r->grabFrame();
+    QCOMPARE(r->hudRenderCount(), 1);
+
+    vsim::SimSnapshot s;
+    s.pos_w = {0, 0, -3.0f};
+    rig.hud->setSnapshot(s);
+    r->grabFrame();
+    QCOMPARE(r->hudRenderCount(), 2);
+    rig.hud->setSnapshot(s); // identical telemetry: not a change
+    r->grabFrame();
+    QCOMPARE(r->hudRenderCount(), 2);
+
+    rig.box->setFixedSize(600, 440); // size change: re-render
+    QTest::qWait(100);
+    r->grabFrame();
+    QVERIFY(r->hudRenderCount() >= 3);
+
+    r->setHudVisible(false); // hidden: not painted, not rendered
+    r->resetHudStats();
+    r->grabFrame();
+    QCOMPARE(r->hudRenderCount(), 0);
+    rig.hud->setStatus(QStringLiteral("DISARMED"));
+    r->setHudVisible(true); // shown again: content may have moved meanwhile
+    r->grabFrame();
+    QCOMPARE(r->hudRenderCount(), 1);
+
+    // Cost of paintHud per frame over 300 frames, cached vs rendering every
+    // frame, with the HUD static and with it changing every frame.
+    auto bench = [&](bool cache, bool changing) {
+      r->setHudCache(cache);
+      r->grabFrame();
+      r->resetHudStats();
+      for (int i = 0; i < 300; ++i) {
+        if (changing) {
+          s.pos_w = {0, 0, -3.0f - 0.01f * float(i)};
+          rig.hud->setSnapshot(s);
+        }
+        r->grabFrame();
+      }
+      return std::pair<double, int>(double(r->hudPaintNs()) / 300.0 / 1e3,
+                                    r->hudRenderCount());
+    };
+    const auto offStatic = bench(false, false);
+    const auto onStatic = bench(true, false);
+    const auto offMoving = bench(false, true);
+    const auto onMoving = bench(true, true);
+    r->setHudCache(true);
+    qInfo("paintHud per grabFrame (2 paints), software GL, 300 grabs (us; HUD renders):");
+    qInfo("  static HUD:   every-frame %.0f (%d)   cached %.0f (%d)", offStatic.first,
+          offStatic.second, onStatic.first, onStatic.second);
+    qInfo("  changing HUD: every-frame %.0f (%d)   cached %.0f (%d)", offMoving.first,
+          offMoving.second, onMoving.first, onMoving.second);
+    QCOMPARE(onStatic.second, 0);
+    QVERIFY(onStatic.first < offStatic.first);
+    QCOMPARE(onMoving.second, 300);
   }
 
   // Hiding the container hides the native window; showing it again renders.
