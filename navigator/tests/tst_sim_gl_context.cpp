@@ -316,6 +316,53 @@ private slots:
     QCOMPARE(r->glErrorCount(), 0);
   }
 
+  // The context-destroyed path. Qt 6.4.2 does not destroy a QOpenGLWindow's
+  // context on QWindow::destroy()/hide-show, float or dock (tried: gone and
+  // init counts stay 0 / 1), so a native recreation cannot be provoked here.
+  // What this does instead is fire the genuine QOpenGLContext::
+  // aboutToBeDestroyed signal of the live context, which runs the renderer's
+  // real connected slot (onContextGone) - the same code Qt runs when it does
+  // destroy the context - then lets the next frame bring the renderer back up.
+  // The streamed terrain / flora live only in the old VBOs, so the scene only
+  // matches if the slot read them back.
+  void contextGoneReadsBack() {
+    const int base = SimRendererWidget::chunkReadBacks();
+    {
+      Rig rig;
+      QVERIFY(rig.showDocked());
+      const Views ref = capture(rig.r);
+      QCOMPARE(rig.r->glInitCount(), 1);
+      QCOMPARE(rig.r->contextGoneCount(), 0);
+      QCOMPARE(SimRendererWidget::chunkReadBacks(), base);
+      for (int round = 1; round <= 2; ++round) {
+        QOpenGLContext *ctx = rig.r->context();
+        QVERIFY(ctx);
+        emit ctx->aboutToBeDestroyed(); // the real signal, real connection
+        QCOMPARE(rig.r->contextGoneCount(), round); // the slot ran
+        QVERIFY(rig.r->contextWasCurrentWhenGone()); // with the context current
+        QCOMPARE(rig.r->liveGlObjects(), 0);          // everything released
+        rig.r->update();
+        rig.r->grabFrame(); // next frame re-creates the resources
+        qInfo("round %d: gone=%d inits=%d readbacks=%d", round,
+              rig.r->contextGoneCount(), rig.r->glInitCount(),
+              SimRendererWidget::chunkReadBacks() - base);
+        QCOMPARE(rig.r->glInitCount(), round + 1);
+        QVERIFY(SimRendererWidget::chunkReadBacks() > base);
+        const char *why = nullptr;
+        QVERIFY2(sameScene(ref, capture(rig.r), &why), why);
+      }
+    }
+    QCoreApplication::processEvents();
+    const int afterRecreate = SimRendererWidget::chunkReadBacks();
+    {
+      Rig rig; // destroying a live renderer reads nothing
+      QVERIFY(rig.showDocked());
+      capture(rig.r);
+    }
+    QCoreApplication::processEvents();
+    QCOMPARE(SimRendererWidget::chunkReadBacks(), afterRecreate);
+  }
+
   // Teardown reads nothing back from the GPU; a reset (which a following
   // context needs) does, one per loaded chunk, unless the platform cannot
   // (GLES) - then a CPU copy made at upload time stands in for it.

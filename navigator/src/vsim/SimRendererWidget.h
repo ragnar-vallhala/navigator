@@ -295,6 +295,8 @@ public:
   int liveGlObjects() const;
   // How many times initResources() has built the GL side (1 per context).
   int glInitCount() const { return glInitCount_; }
+  int contextGoneCount() const { return goneCount_; } // aboutToBeDestroyed seen
+  bool contextWasCurrentWhenGone() const { return goneCurrent_; }
   // Drops every GL object and builds them all again in the CURRENT context,
   // exactly what a context recreation does; for tests and tools that want the
   // re-init path without moving a window.
@@ -321,9 +323,12 @@ private:
   // Frees every GL object with the context current. With readBack, re-queues
   // what must be re-uploaded into a context that follows (chunks are read back
   // from the GPU, or taken from their CPU copy on GLES); without it (teardown:
-  // destructor, aboutToBeDestroyed) nothing is read, only released.
+  // destructor, init after the old context was lost) nothing is read, only
+  // released. Callers: onContextGone (true: the renderer survives and the data
+  // is still needed), resetGlResources (true: same), initResources (false:
+  // stale handles), destructor (false: nothing will use the data).
   void releaseGLResources(bool readBack);
-  void onContextGone(); // aboutToBeDestroyed slot: makeCurrent + release
+  void onContextGone(); // aboutToBeDestroyed slot: makeCurrent + release, reading back
   bool chunkCpuMode() const; // keep CPU copies of chunks (GLES / forced)
   void eraseChunk(qint64 key); // release + erase (a Mesh dtor frees no GL)
   void eraseAllChunks();
@@ -491,6 +496,8 @@ private:
   bool glLive_ = false; // resources exist in the current context
   QOpenGLContext *glCtx_ = nullptr;
   int glInitCount_ = 0;
+  int goneCount_ = 0;
+  bool goneCurrent_ = false;
   bool glErrorCheck_ = false;
   int glErrors_ = 0;
 

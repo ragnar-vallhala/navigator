@@ -590,10 +590,17 @@ std::atomic<int> g_chunkReadBacks{0};
 int SimRendererWidget::chunkReadBacks() { return g_chunkReadBacks; }
 
 SimRendererWidget::~SimRendererWidget() {
-  // Free the GL side while a context is still current. The context's own
-  // aboutToBeDestroyed (connected in initResources) does the same on a
-  // re-parent; this is idempotent.
-  onContextGone();
+  // Free the GL side while a context is still current. Nothing will use the
+  // streamed data again, so no read-back (readBack=false). Disconnect first so
+  // the context, which QOpenGLWindow deletes after this body has run, cannot
+  // call back into a half-destroyed object.
+  if (glCtx_)
+    disconnect(glCtx_, nullptr, this, nullptr);
+  if (glLive_) {
+    makeCurrent();
+    releaseGLResources(false);
+    doneCurrent();
+  }
 }
 
 // Chunk bookkeeping that frees the GL objects: a Mesh's destructor does not
@@ -778,19 +785,25 @@ void SimRendererWidget::releaseGLResources(bool readBack) {
 
 void SimRendererWidget::resetGlResources() {
   makeCurrent();
-  releaseGLResources(true);
+  releaseGLResources(true); // same context stays; later frames need the data
   initResources();
   doneCurrent();
   update();
 }
 
-// Context going away (re-parent, window close, destruction): release with it
-// current. Safe to call when nothing is live.
+// aboutToBeDestroyed slot: the window's native context is being destroyed
+// (undock / re-create) but THIS renderer lives on and will get a new context
+// from initializeGL. Qt emits the signal with the context still current-able,
+// so the VBOs can be read: readBack=true re-queues the streamed terrain and
+// flora, whose only copy is on the GPU, for the next context. Safe to call
+// when nothing is live.
 void SimRendererWidget::onContextGone() {
   if (!glLive_)
     return;
+  ++goneCount_;
   makeCurrent();
-  releaseGLResources(false); // teardown: nothing is read back
+  goneCurrent_ = QOpenGLContext::currentContext() == glCtx_;
+  releaseGLResources(true);
   doneCurrent();
 }
 
@@ -965,8 +978,10 @@ void SimRendererWidget::initResources() {
   // A new context: anything still held belongs to the previous one and is
   // released first, so init can run any number of times without leaking or
   // adding shaders to an already-linked program.
+  // Handles of a context that is already gone: the objects cannot be read
+  // (and onContextGone, which does read, has already run when it could).
   if (glLive_)
-    releaseGLResources(false); // handles of a context that is already gone
+    releaseGLResources(false);
   initializeOpenGLFunctions();
   if (context() != glCtx_) {
     glCtx_ = context();
@@ -1166,6 +1181,12 @@ QMatrix4x4 SimRendererWidget::cameraView() const {
 }
 
 void SimRendererWidget::paintGL() {
+  // After a context-gone the resources were released (and the streamed data
+  // queued); come back up on whatever context is current. initializeGL does
+  // this when Qt makes a new context; this covers a drop that Qt does not
+  // follow with initializeGL.
+  if (!glLive_)
+    initResources();
   resetGlState();
   if (glErrorCheck_)
     while (glGetError() != GL_NO_ERROR) {
