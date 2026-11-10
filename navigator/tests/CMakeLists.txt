@@ -280,3 +280,25 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
       ${SRC}/vsim ${SRC}/ui/widgets)
   target_link_libraries(tst_geometry_editor_preset PRIVATE assimp::assimp)
 endif()
+
+# ---- Simulator Stop -> Start twice against the real engine ------------------
+# Spawn pose, Start commands ACK OK, a single RC feeder, a steady arm state.
+# Needs the engine module like tst_sitl_engine; skips, saying why, without one.
+if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
+  navigator_test(tst_sim_restart
+      tst_sim_restart.cpp
+      ${SRC}/vsim/SitlModule.cpp ${SRC}/vsim/SitlModule.h
+      ${SRC}/vsim/VfsDir.cpp ${SRC}/vsim/VfsDir.h
+      ${SRC}/vsim/SimWorker.cpp ${SRC}/vsim/SimWorker.h
+      ${SRC}/protocol/CommandCodec.cpp ${SRC}/protocol/CommandCodec.h
+      ${SRC}/core/crc.cpp)
+  target_include_directories(tst_sim_restart PRIVATE
+      ${SRC}/vsim ${SRC}/ui/widgets ${VAYU_SITL_SDK})
+  target_link_libraries(tst_sim_restart PRIVATE navlink_codec)
+  if(WIN32)
+    target_link_libraries(tst_sim_restart PRIVATE winmm)
+  endif()
+  set_tests_properties(tst_sim_restart PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
+      TIMEOUT 120)
+endif()

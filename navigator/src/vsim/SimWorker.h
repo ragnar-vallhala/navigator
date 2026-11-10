@@ -100,6 +100,11 @@ public:
     telemetry_user_ = user;
   }
 
+  // The engine's serial RC feeder thread can be started once per process (it
+  // is detached and never ends), so only the first Start may ask for it: true
+  // for the first caller on `gate`, false afterwards. Exposed for the test.
+  static bool claimSerialRcStart(std::atomic<bool> &gate);
+
   // Snapshot getter for pull-style consumers.
   SimSnapshot snapshot() const;
 
