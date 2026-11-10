@@ -102,6 +102,19 @@ void loadScene(SimRendererWidget *r) {
   r->setWorldChunk(0x100000002LL, c2.pos, c2.nrm, c2.col);
   r->setWorldChunk(0x100000003LL, c2.pos, c2.nrm, c2.col);
   r->removeWorldChunk(0x100000003LL); // a removal in the stream must stay removed
+#ifdef VAYU_SIM_GRASS
+  { // flora on a chunk (blades: pos xyz, yaw, height, flower, tint rgb)
+    std::vector<float> bl;
+    for (int i = 0; i < 64; ++i) {
+      const float x = 26.0f + float(i % 8) * 1.5f, y = -5.0f + float(i / 8) * 1.5f;
+      for (float v : {x, y, 0.0f, 0.3f * float(i), 0.5f, float(i & 1), 0.3f, 0.6f, 0.2f})
+        bl.push_back(v);
+    }
+    r->setChunkFlora(0x100000001LL, bl, 64, 30.0f, 0.0f, 12.0f);
+    r->setChunkFlora(0x100000003LL, bl, 64, 30.0f, 0.0f, 12.0f);
+    r->removeChunkFlora(0x100000003LL);
+  }
+#endif
   vsim::Obstacle box;
   box.pos = {3, 2, -0.5f};
   vsim::Obstacle cyl;

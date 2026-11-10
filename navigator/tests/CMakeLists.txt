@@ -214,6 +214,10 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
       ${SRC}/vsim/DroneModel.cpp)
   target_include_directories(tst_sim_gl_context PRIVATE ${SRC}/vsim ${SRC}/ui/widgets ${VAYU_SITL_SDK})
   target_link_libraries(tst_sim_gl_context PRIVATE Qt6::OpenGL Qt6::OpenGLWidgets)
+  if(NAVIGATOR_SIM_GRASS) # same renderer configuration as the app
+    target_sources(tst_sim_gl_context PRIVATE ${SRC}/vsim/GpuGrass.cpp)
+    target_compile_definitions(tst_sim_gl_context PRIVATE VAYU_SIM_GRASS=1)
+  endif()
 endif()
 
 # ---- World tab preset wiring (headless widget test) ------------------------
