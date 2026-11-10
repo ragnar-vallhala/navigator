@@ -36,6 +36,7 @@
 #include "procgen/Flora.h" // procgen::GrassLook
 
 #include <cstdint>
+#include <memory>
 
 class QOpenGLExtraFunctions;
 
@@ -60,8 +61,13 @@ public:
     procgen::GrassLook look; // live shading knobs (drive draw/compute uniforms)
   };
 
-  ~GpuGrass();
+  ~GpuGrass(); // GL objects must have been release()d with a current context
   bool init(QOpenGLExtraFunctions *gl); // false if compute unsupported
+  // Frees every GL object (context current). init() may be called again on a
+  // new context afterwards; params are kept.
+  void release(QOpenGLExtraFunctions *gl);
+  // GL objects currently held (for leak checks).
+  int liveObjects() const;
   bool ready() const { return ready_; }
   void setParams(const Params &p);
 
@@ -84,9 +90,11 @@ private:
 
   bool ready_ = false;
   Params params_;
-  QOpenGLShaderProgram fill_;  // fill the height texture (noise once per texel)
-  QOpenGLShaderProgram comp_;  // generation (samples the height texture)
-  QOpenGLShaderProgram draw_;  // render
+  // Heap-held so release() can drop them and init() build fresh ones in a new
+  // context (a linked program cannot take shaders again, nor change context).
+  std::unique_ptr<QOpenGLShaderProgram> fill_; // fill the height texture
+  std::unique_ptr<QOpenGLShaderProgram> comp_; // generation (samples it)
+  std::unique_ptr<QOpenGLShaderProgram> draw_; // render
   unsigned int heightTex_ = 0; // R32F terrain-height image around the camera
   int texSize_ = 512;
   unsigned int ssbo_[kRings] = {0};     // per-ring blade instances

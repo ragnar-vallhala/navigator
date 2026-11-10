@@ -242,6 +242,22 @@ signals:
                       QVector3D rotate);
   void obstacleSelected(int index);
 
+public:
+  // ---- GL context lifetime (see initResources / releaseGL) ----
+  // Number of GL objects (buffers, VAOs, programs, textures, FBOs) this view
+  // currently holds. Zero before the first init and after the context is torn
+  // down; used by tests to prove nothing leaks across a context recreation.
+  int liveGlObjects() const;
+  // How many times initResources() has built the GL side (1 per context).
+  int glInitCount() const { return glInitCount_; }
+  // Drops every GL object and builds them all again in the CURRENT context,
+  // exactly what a context recreation does; for tests and tools that want the
+  // re-init path without moving a window.
+  void resetGlResources();
+  // Count GL errors (glGetError) at the end of every frame into glErrorCount().
+  void setGlErrorCheck(bool on) { glErrorCheck_ = on; }
+  int glErrorCount() const { return glErrors_; }
+
 protected:
   void initializeGL() override;
   void resizeGL(int w, int h) override;
@@ -253,13 +269,37 @@ protected:
   void keyPressEvent(QKeyEvent *e) override;
 
 private:
+  // Builds every program and static mesh. Idempotent: safe to run again on a
+  // new context (it first drops whatever a previous context left behind).
+  void initResources();
+  // Frees every GL object with the context current and re-queues what must be
+  // re-uploaded into the next context (CPU copies / GPU read-back for chunks).
+  void releaseGLResources();
+  void onContextGone(); // aboutToBeDestroyed slot: makeCurrent + release
+  void eraseChunk(qint64 key); // release + erase (a Mesh dtor frees no GL)
+  void eraseAllChunks();
+#ifdef VAYU_SIM_GRASS
+  void eraseFlora(qint64 key);
+  void eraseAllFlora();
+#endif
   // -- GL helpers --
   struct Mesh {
     QOpenGLVertexArrayObject vao;
     QOpenGLBuffer vbo{QOpenGLBuffer::VertexBuffer};
     int vertex_count = 0;
     GLenum primitive = GL_TRIANGLES;
+    // Frees the GL objects (context must be current) and returns the mesh to
+    // its never-uploaded state, so a later build/upload recreates them.
+    void release() {
+      vbo.destroy();
+      vao.destroy();
+      vertex_count = 0;
+    }
+    int liveObjects() const {
+      return (vao.isCreated() ? 1 : 0) + (vbo.isCreated() ? 1 : 0);
+    }
   };
+  template <class F> void forEachMesh(F &&f);
 
   void buildGroundGrid();
   void buildObstacleMeshes(); // unit box / sphere / cylinder (pos+normal)
@@ -333,13 +373,13 @@ private:
   bool freeFlyMove(int key, bool fast); // WASD/QE → move camPos_; true if used
 
   // Flat shader: vec3 position + uniform color + MVP (grid/axes/markers).
-  QOpenGLShaderProgram prog_;
+  std::unique_ptr<QOpenGLShaderProgram> prog_;
   int u_mvp_ = -1;
   int u_color_ = -1;
 
   // Lit shader: position + normal, directional Lambert + ambient, plus aerial
   // perspective (distance fog into the sky) and an ACES tonemap.
-  QOpenGLShaderProgram progLit_;
+  std::unique_ptr<QOpenGLShaderProgram> progLit_;
   int ul_mvp_ = -1;
   int ul_model_ = -1;
   int ul_nmat_ = -1;
@@ -364,7 +404,7 @@ private:
 
   // Shadow map: a directional depth buffer rendered from the sun's view each
   // frame (terrain casters); lit terrain + grass sample it to drop into shade.
-  QOpenGLShaderProgram progDepth_; // depth-only, light-space
+  std::unique_ptr<QOpenGLShaderProgram> progDepth_; // depth-only, light-space
   int ud_lightmvp_ = -1;
   unsigned int shadowFbo_ = 0;
   unsigned int shadowTex_ = 0;
@@ -375,11 +415,18 @@ private:
   int fbW_ = 1, fbH_ = 1;    // saved framebuffer size (viewport restore)
 
   // Sky shader: attribute-less fullscreen triangle, view-ray gradient + glow.
-  QOpenGLShaderProgram progSky_;
+  std::unique_ptr<QOpenGLShaderProgram> progSky_;
   int us_invvp_ = -1;
   int us_sundir_ = -1;
   int us_time_ = -1;
   QOpenGLVertexArrayObject skyVao_;
+
+  // GL context lifetime bookkeeping.
+  bool glLive_ = false; // resources exist in the current context
+  QOpenGLContext *glCtx_ = nullptr;
+  int glInitCount_ = 0;
+  bool glErrorCheck_ = false;
+  int glErrors_ = 0;
 
   // Animation clock (advances per paint); drives the sky glow AND, when built,
   // the grass wind — kept general so it survives with grass compiled out.
@@ -387,7 +434,7 @@ private:
 
 #ifdef VAYU_SIM_GRASS
   // Flora shader: instanced grass/flower blades, wind + distance fade + fog.
-  QOpenGLShaderProgram progFlora_;
+  std::unique_ptr<QOpenGLShaderProgram> progFlora_;
   int uf_vp_ = -1, uf_campos_ = -1, uf_time_ = -1;
   int uf_fadestart_ = -1, uf_fadeend_ = -1, uf_sundir_ = -1;
   int uf_fogdensity_ = -1, uf_fogstart_ = -1;
@@ -462,6 +509,8 @@ private:
   Mesh droneMesh_;
   bool hasMesh_ = false;
   bool meshDirty_ = false;
+  // CPU copies, kept for the life of the view: a new GL context re-uploads
+  // from them (meshDirty_ is raised again by releaseGLResources).
   std::vector<QVector3D> pendingPos_;
   std::vector<QVector3D> pendingNrm_;
 
@@ -469,6 +518,7 @@ private:
   Mesh worldMesh_;
   bool hasWorldMesh_ = false;
   bool worldMeshDirty_ = false;
+  // CPU copies, kept (see pendingPos_) so a new context can re-upload them.
   std::vector<QVector3D> pendingWorldPos_;
   std::vector<QVector3D> pendingWorldNrm_;
   std::vector<QVector3D> pendingWorldCol_; // per-vertex RGB (may be empty)

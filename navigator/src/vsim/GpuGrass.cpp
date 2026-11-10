@@ -338,20 +338,26 @@ static constexpr int kRingSeg[kNumRings] = {5, 4, 3, 2};
 GpuGrass::~GpuGrass() = default;
 
 bool GpuGrass::init(QOpenGLExtraFunctions *gl) {
-  if (!fill_.addShaderFromSourceCode(QOpenGLShader::Compute, kFill) ||
-      !fill_.link() ||
-      !comp_.addShaderFromSourceCode(QOpenGLShader::Compute, kCompute) ||
-      !comp_.link()) {
+  release(gl); // a re-init (new context) starts from nothing
+  fill_ = std::make_unique<QOpenGLShaderProgram>();
+  comp_ = std::make_unique<QOpenGLShaderProgram>();
+  draw_ = std::make_unique<QOpenGLShaderProgram>();
+  if (!fill_->addShaderFromSourceCode(QOpenGLShader::Compute, kFill) ||
+      !fill_->link() ||
+      !comp_->addShaderFromSourceCode(QOpenGLShader::Compute, kCompute) ||
+      !comp_->link()) {
     qInfo("[GpuGrass] compute unavailable -> CPU flora fallback. log:\n%s%s",
-          fill_.log().toLocal8Bit().constData(),
-          comp_.log().toLocal8Bit().constData());
+          fill_->log().toLocal8Bit().constData(),
+          comp_->log().toLocal8Bit().constData());
+    release(gl);
     return false; // compute unsupported -> caller falls back to CPU flora
   }
-  if (!draw_.addShaderFromSourceCode(QOpenGLShader::Vertex, kVert) ||
-      !draw_.addShaderFromSourceCode(QOpenGLShader::Fragment, kFrag) ||
-      !draw_.link()) {
+  if (!draw_->addShaderFromSourceCode(QOpenGLShader::Vertex, kVert) ||
+      !draw_->addShaderFromSourceCode(QOpenGLShader::Fragment, kFrag) ||
+      !draw_->link()) {
     qInfo("[GpuGrass] draw program failed: %s",
-          draw_.log().toLocal8Bit().constData());
+          draw_->log().toLocal8Bit().constData());
+    release(gl);
     return false;
   }
   qInfo("[GpuGrass] ready (compute + indirect).");
@@ -394,6 +400,37 @@ bool GpuGrass::init(QOpenGLExtraFunctions *gl) {
 }
 
 void GpuGrass::setParams(const Params &p) { params_ = p; }
+
+void GpuGrass::release(QOpenGLExtraFunctions *gl) {
+  ready_ = false;
+  fill_.reset();
+  comp_.reset();
+  draw_.reset();
+  if (ssbo_[0])
+    gl->glDeleteBuffers(kNumRings, ssbo_);
+  if (indirect_[0])
+    gl->glDeleteBuffers(kNumRings, indirect_);
+  if (counter_[0])
+    gl->glDeleteBuffers(kNumRings, counter_);
+  for (int i = 0; i < kNumRings; ++i) {
+    ssbo_[i] = indirect_[i] = counter_[i] = 0;
+    bladeVbo_[i].destroy();
+    vao_[i].destroy();
+    bladeVerts_[i] = 0;
+  }
+  if (heightTex_)
+    gl->glDeleteTextures(1, &heightTex_);
+  heightTex_ = 0;
+}
+
+int GpuGrass::liveObjects() const {
+  int n = (fill_ ? 1 : 0) + (comp_ ? 1 : 0) + (draw_ ? 1 : 0) +
+          (heightTex_ ? 1 : 0);
+  for (int i = 0; i < kNumRings; ++i)
+    n += (ssbo_[i] ? 1 : 0) + (indirect_[i] ? 1 : 0) + (counter_[i] ? 1 : 0) +
+         (bladeVbo_[i].isCreated() ? 1 : 0) + (vao_[i].isCreated() ? 1 : 0);
+  return n;
+}
 
 void GpuGrass::buildBlade(QOpenGLExtraFunctions *gl, int ring, int segments) {
   // Strap-leaf blade that RISES then ARCHES OVER (tip droops well below the apex)
@@ -571,52 +608,52 @@ void GpuGrass::render(QOpenGLExtraFunctions *gl, const QMatrix4x4 &proj,
                               float(originCellY - halfGrid) * ring.cell);
 
     // --- pass 1: fill the height texture (terrain noise once per texel) ---
-    fill_.bind();
-    gl->glUniform1ui(fill_.uniformLocation("u_seed"), params_.seed);
-    fill_.setUniformValue("u_heightM", params_.heightM);
-    fill_.setUniformValue("u_featureM", params_.featureM);
-    fill_.setUniformValue("u_macroM", params_.macroM);
-    fill_.setUniformValue("u_octaves", params_.octaves);
-    fill_.setUniformValue("u_lacunarity", params_.lacunarity);
-    fill_.setUniformValue("u_gain", params_.gain);
-    fill_.setUniformValue("u_mountainMix", params_.mountainMix);
-    fill_.setUniformValue("u_texSize", texSize_);
-    fill_.setUniformValue("u_regionMin", regionMin);
-    fill_.setUniformValue("u_regionSize", regionSize);
+    fill_->bind();
+    gl->glUniform1ui(fill_->uniformLocation("u_seed"), params_.seed);
+    fill_->setUniformValue("u_heightM", params_.heightM);
+    fill_->setUniformValue("u_featureM", params_.featureM);
+    fill_->setUniformValue("u_macroM", params_.macroM);
+    fill_->setUniformValue("u_octaves", params_.octaves);
+    fill_->setUniformValue("u_lacunarity", params_.lacunarity);
+    fill_->setUniformValue("u_gain", params_.gain);
+    fill_->setUniformValue("u_mountainMix", params_.mountainMix);
+    fill_->setUniformValue("u_texSize", texSize_);
+    fill_->setUniformValue("u_regionMin", regionMin);
+    fill_->setUniformValue("u_regionSize", regionSize);
     gl->glBindImageTexture(0, heightTex_, 0, GL_FALSE, 0, GL_WRITE_ONLY,
                            GL_R32F);
     const int fg = (texSize_ + 15) / 16;
     gl->glDispatchCompute(fg, fg, 1);
     gl->glMemoryBarrier(GL_ALL_BARRIER_BITS);
-    fill_.release();
+    fill_->release();
 
     // --- pass 2: place blades (sampling the height texture, no per-blade noise) ---
-    comp_.bind();
+    comp_->bind();
     // uint uniforms must go through glUniform1ui (Qt's GLuint overload no-ops here).
-    gl->glUniform1ui(comp_.uniformLocation("u_seed"), params_.seed);
-    comp_.setUniformValue("u_heightM", params_.heightM);
-    comp_.setUniformValue("u_grassMaxFrac", params_.grassMaxFrac);
-    comp_.setUniformValue("u_slopeLo", params_.slopeLo);
-    comp_.setUniformValue("u_slopeHi", params_.slopeHi);
-    comp_.setUniformValue("u_heightMean", params_.heightMean);
-    comp_.setUniformValue("u_heightStd", params_.heightStdDev);
-    comp_.setUniformValue("u_flowerFrac", params_.flowerFrac);
-    comp_.setUniformValue("u_facefrac", params_.look.faceCameraFrac);
-    comp_.setUniformValue("u_originCellX", originCellX);
-    comp_.setUniformValue("u_originCellY", originCellY);
-    comp_.setUniformValue("u_cell", ring.cell);
-    comp_.setUniformValue("u_G", params_.grid);
-    comp_.setUniformValue("u_texSize", texSize_);
-    comp_.setUniformValue("u_maxBlades", maxBladesPerRing_);
-    comp_.setUniformValue("u_regionMin", regionMin);
-    comp_.setUniformValue("u_regionSize", regionSize);
-    comp_.setUniformValue("u_camPos", camPos);
-    comp_.setUniformValue("u_vp", vp);
-    comp_.setUniformValue("u_falloffStart", ring.falloffStart);
-    comp_.setUniformValue("u_falloffEnd", ring.falloffEnd);
-    comp_.setUniformValue("u_innerStart", ring.innerStart);
-    comp_.setUniformValue("u_innerEnd", ring.innerEnd);
-    comp_.setUniformValue("u_farRadius", farRadius);
+    gl->glUniform1ui(comp_->uniformLocation("u_seed"), params_.seed);
+    comp_->setUniformValue("u_heightM", params_.heightM);
+    comp_->setUniformValue("u_grassMaxFrac", params_.grassMaxFrac);
+    comp_->setUniformValue("u_slopeLo", params_.slopeLo);
+    comp_->setUniformValue("u_slopeHi", params_.slopeHi);
+    comp_->setUniformValue("u_heightMean", params_.heightMean);
+    comp_->setUniformValue("u_heightStd", params_.heightStdDev);
+    comp_->setUniformValue("u_flowerFrac", params_.flowerFrac);
+    comp_->setUniformValue("u_facefrac", params_.look.faceCameraFrac);
+    comp_->setUniformValue("u_originCellX", originCellX);
+    comp_->setUniformValue("u_originCellY", originCellY);
+    comp_->setUniformValue("u_cell", ring.cell);
+    comp_->setUniformValue("u_G", params_.grid);
+    comp_->setUniformValue("u_texSize", texSize_);
+    comp_->setUniformValue("u_maxBlades", maxBladesPerRing_);
+    comp_->setUniformValue("u_regionMin", regionMin);
+    comp_->setUniformValue("u_regionSize", regionSize);
+    comp_->setUniformValue("u_camPos", camPos);
+    comp_->setUniformValue("u_vp", vp);
+    comp_->setUniformValue("u_falloffStart", ring.falloffStart);
+    comp_->setUniformValue("u_falloffEnd", ring.falloffEnd);
+    comp_->setUniformValue("u_innerStart", ring.innerStart);
+    comp_->setUniformValue("u_innerEnd", ring.innerEnd);
+    comp_->setUniformValue("u_farRadius", farRadius);
     gl->glBindImageTexture(0, heightTex_, 0, GL_FALSE, 0, GL_READ_ONLY,
                            GL_R32F);
     gl->glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, ssbo_[i]);
@@ -624,7 +661,7 @@ void GpuGrass::render(QOpenGLExtraFunctions *gl, const QMatrix4x4 &proj,
     const int groups = (params_.grid + 15) / 16;
     gl->glDispatchCompute(groups, groups, 1);
     gl->glMemoryBarrier(GL_ALL_BARRIER_BITS);
-    comp_.release();
+    comp_->release();
 
     // Copy this ring's generated count into its indirect command's instanceCount
     // (offset 4). A dedicated counter buffer is far more portable than aliasing
@@ -636,28 +673,28 @@ void GpuGrass::render(QOpenGLExtraFunctions *gl, const QMatrix4x4 &proj,
   gl->glMemoryBarrier(GL_ALL_BARRIER_BITS);
 
   // --- draw: one indirect draw per ring with its own LOD blade mesh ---
-  draw_.bind();
-  draw_.setUniformValue("u_vp", vp);
-  draw_.setUniformValue("u_campos", camPos);
-  draw_.setUniformValue("u_time", time);
+  draw_->bind();
+  draw_->setUniformValue("u_vp", vp);
+  draw_->setUniformValue("u_campos", camPos);
+  draw_->setUniformValue("u_time", time);
   // Height fade only at the very far edge — near grass keeps full height.
-  draw_.setUniformValue("u_fadestart", farRadius * 0.85f);
-  draw_.setUniformValue("u_fadeend", farRadius * 0.99f);
-  draw_.setUniformValue("u_sundir", sunDir);
-  draw_.setUniformValue("u_fogdensity", 1.0f / 420.0f);
-  draw_.setUniformValue("u_fogstart", 45.0f);
-  draw_.setUniformValue("u_lightvp", lightVP);
-  draw_.setUniformValue("u_shadowon", shadowOn ? 1.0f : 0.0f);
-  draw_.setUniformValue("u_shadowtex", 1); // sampler on texture unit 1
+  draw_->setUniformValue("u_fadestart", farRadius * 0.85f);
+  draw_->setUniformValue("u_fadeend", farRadius * 0.99f);
+  draw_->setUniformValue("u_sundir", sunDir);
+  draw_->setUniformValue("u_fogdensity", 1.0f / 420.0f);
+  draw_->setUniformValue("u_fogstart", 45.0f);
+  draw_->setUniformValue("u_lightvp", lightVP);
+  draw_->setUniformValue("u_shadowon", shadowOn ? 1.0f : 0.0f);
+  draw_->setUniformValue("u_shadowtex", 1); // sampler on texture unit 1
   // Live look knobs (procgen::GrassLook).
-  draw_.setUniformValue("u_sunint", params_.look.sunIntensity);
-  draw_.setUniformValue("u_ambstr", params_.look.ambientStrength);
-  draw_.setUniformValue("u_brightness", params_.look.brightness);
-  draw_.setUniformValue("u_tipwarm", params_.look.tipWarmth);
-  draw_.setUniformValue("u_backlight", params_.look.backlight);
-  draw_.setUniformValue("u_sheen", params_.look.sheen);
-  draw_.setUniformValue("u_veinstr", params_.look.veinStrength);
-  draw_.setUniformValue("u_rootao", params_.look.rootDarkness);
+  draw_->setUniformValue("u_sunint", params_.look.sunIntensity);
+  draw_->setUniformValue("u_ambstr", params_.look.ambientStrength);
+  draw_->setUniformValue("u_brightness", params_.look.brightness);
+  draw_->setUniformValue("u_tipwarm", params_.look.tipWarmth);
+  draw_->setUniformValue("u_backlight", params_.look.backlight);
+  draw_->setUniformValue("u_sheen", params_.look.sheen);
+  draw_->setUniformValue("u_veinstr", params_.look.veinStrength);
+  draw_->setUniformValue("u_rootao", params_.look.rootDarkness);
   gl->glActiveTexture(0x84C1 /*GL_TEXTURE1*/);
   gl->glBindTexture(0x0DE1 /*GL_TEXTURE_2D*/, shadowTex);
   gl->glActiveTexture(0x84C0 /*GL_TEXTURE0*/);
@@ -667,7 +704,7 @@ void GpuGrass::render(QOpenGLExtraFunctions *gl, const QMatrix4x4 &proj,
     gl->glDrawArraysIndirect(GL_TRIANGLES, nullptr);
     vao_[i].release();
   }
-  draw_.release();
+  draw_->release();
 }
 
 } // namespace vsim

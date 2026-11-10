@@ -201,6 +201,19 @@ navigator_test(tst_dronemodel
     ${SRC}/vsim/DroneModel.cpp)
 target_include_directories(tst_dronemodel PRIVATE ${SRC}/vsim)
 
+# ---- 3D sim view survives its GL context being recreated ------------------
+# Needs a real GL platform (xcb on an Xvfb, LIBGL_ALWAYS_SOFTWARE=1): it skips on
+# the offscreen platform ctest uses, which crashes QOpenGLWidget/QOpenGLWindow.
+if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
+  find_package(Qt6 REQUIRED COMPONENTS OpenGL OpenGLWidgets)
+  navigator_test(tst_sim_gl_context
+      tst_sim_gl_context.cpp
+      ${SRC}/vsim/SimRendererWidget.cpp ${SRC}/vsim/SimRendererWidget.h
+      ${SRC}/vsim/DroneModel.cpp)
+  target_include_directories(tst_sim_gl_context PRIVATE ${SRC}/vsim ${VAYU_SITL_SDK})
+  target_link_libraries(tst_sim_gl_context PRIVATE Qt6::OpenGL Qt6::OpenGLWidgets)
+endif()
+
 # ---- World tab preset wiring (headless widget test) ------------------------
 if(NAVIGATOR_SITL)
   navigator_test(tst_worldeditor
