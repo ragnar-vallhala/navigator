@@ -24,10 +24,13 @@
 #ifdef VAYU_SIM_GRASS
 #include "GpuGrass.h"
 #endif
+#include "DroneModel.h"
 #include "SimWorker.h"
 #include "TrainingCourse.h"
 
+#include <QElapsedTimer>
 #include <QMatrix4x4>
+#include <QString>
 #include <QOpenGLBuffer>
 #include <QOpenGLExtraFunctions>
 #include <QOpenGLShaderProgram>
@@ -68,6 +71,11 @@ public:
   void setMotorLayout(const std::array<QVector3D, 4> &pos,
                       const std::array<QVector3D, 4> &axis,
                       const std::array<int, 4> &spin);
+  // Which airframe the procedural model depicts (preset id such as "5in", or
+  // empty for a custom vehicle: classed by prop radius) and its prop radius [m].
+  // The model is sized from this and the motor layout; an imported mesh
+  // (setDroneMesh) replaces it.
+  void setAirframeStyle(const QString &presetId, float propRadius);
   // Body-frame center-of-mass marker (crosshair); diagnostic for how far
   // the modeled origin sits from the true CoM.
   void setComMarker(const QVector3D &com);
@@ -406,6 +414,20 @@ private:
   QVector<vsim::Obstacle> obstacles_;
   Mesh axes_;
   Mesh body_;
+  // Procedural airframe (DroneModel): one body mesh + a prop mesh per motor,
+  // rebuilt lazily when the layout/style changes, spun per real motor speed.
+  void rebuildDroneModel();
+  void updateRotors(float dt);
+  void drawDroneModel(const QMatrix4x4 &view, const QMatrix4x4 &model);
+  Mesh modelBody_;
+  std::array<Mesh, 4> modelProp_;
+  vsim::DroneModel model_;
+  bool modelDirty_ = true;
+  QString presetId_ = QStringLiteral("5in");
+  float propRadius_ = 0.0622f;
+  std::array<float, 4> rotorAngle_ = {0, 0, 0, 0}; // accumulated [rad]
+  std::array<float, 4> rotorBlur_ = {0, 0, 0, 0};  // blur-disc alpha 0..1
+  QElapsedTimer rotorClock_;
   Mesh rotor_;
   Mesh thrustLine_;   // unit segment along +Z, scaled per motor axis
   Mesh comMarker_;    // small 3-axis crosshair

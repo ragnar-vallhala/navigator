@@ -471,7 +471,98 @@ void SimRendererWidget::setMotorLayout(const std::array<QVector3D, 4> &pos,
   motorPos_ = pos;
   motorAxis_ = axis;
   motorSpin_ = spin;
+  modelDirty_ = true;
   update();
+}
+
+void SimRendererWidget::setAirframeStyle(const QString &presetId,
+                                         float propRadius) {
+  if (presetId == presetId_ && propRadius == propRadius_)
+    return;
+  presetId_ = presetId;
+  propRadius_ = propRadius;
+  modelDirty_ = true;
+  update();
+}
+
+void SimRendererWidget::rebuildDroneModel() {
+  modelDirty_ = false;
+  vsim::DroneModelInput in;
+  in.propRadius = propRadius_;
+  for (int i = 0; i < 4; ++i) {
+    in.motorPos[i] = {motorPos_[i].x(), motorPos_[i].y(), motorPos_[i].z()};
+    in.spin[i] = motorSpin_[i];
+  }
+  in.cls = vsim::droneClassFor(presetId_.toStdString(), propRadius_);
+  model_ = vsim::buildDroneModel(in);
+  uploadColoredMesh(modelBody_, model_.body.data);
+  for (int i = 0; i < 4; ++i)
+    uploadColoredMesh(modelProp_[i], model_.prop[i].data);
+}
+
+// Advance each prop by the real motor speed. The drawn rate is soft-capped
+// (tanh) below the blade-passing alias limit (~0.4 of the blade spacing per
+// frame) so it never strobes or appears to run backwards; the motion-blur
+// disc alpha carries "how fast" instead.
+void SimRendererWidget::updateRotors(float dt) {
+  const int nb = std::max(1, model_.bladeCount);
+  const float dtc = std::clamp(dt, 1.0f / 240.0f, 0.05f);
+  const float limitRps = 0.4f / (float(nb) * dtc); // revolutions / s
+  for (int i = 0; i < 4; ++i) {
+    const float rps = std::fabs(snap_.motor_omega[i]) / (2.0f * float(M_PI));
+    const float vis = limitRps * std::tanh(rps / limitRps);
+    const float dir = motorSpin_[i] >= 0 ? 1.0f : -1.0f;
+    rotorAngle_[i] = std::fmod(
+        rotorAngle_[i] + dir * vis * 2.0f * float(M_PI) * dt, 2.0f * float(M_PI));
+    const float t = std::clamp((rps - 25.0f) / 55.0f, 0.0f, 1.0f);
+    rotorBlur_[i] = t * t * (3.0f - 2.0f * t);
+  }
+}
+
+void SimRendererWidget::drawDroneModel(const QMatrix4x4 &view,
+                                       const QMatrix4x4 &modelIn) {
+  // Far-visibility boost: a 5-inch quad is ~3 px wide at 60 m, so past ~12 m the
+  // model grows gently about its origin (x1.4 at 20 m, x3.4 from ~60 m). Not in
+  // the editor, where the geometry must read true to scale.
+  QMatrix4x4 model = modelIn;
+  if (!editable_) {
+    const float d = (camEye_ - snap_.pos_w).length();
+    const float s = std::clamp(1.0f + (d - 12.0f) / 20.0f, 1.0f, 3.4f);
+    model.scale(s);
+  }
+  drawLit(modelBody_, view, model, QVector3D(1, 1, 1));
+  for (int i = 0; i < 4; ++i) {
+    QMatrix4x4 m = model;
+    m.translate(model_.hub[i][0], model_.hub[i][1], model_.hub[i][2]);
+    // +angle about body -Z (up) = counter-clockwise seen from above.
+    m.rotate(qRadiansToDegrees(rotorAngle_[i]), 0.0f, 0.0f, -1.0f);
+    drawLit(modelProp_[i], view, m, QVector3D(1, 1, 1));
+  }
+  // Motion-blur discs, after the opaque solids: constant-alpha blend so the
+  // flat-colour program needs no alpha channel.
+  bool any = false;
+  for (float a : rotorBlur_)
+    any = any || a > 0.01f;
+  if (!any)
+    return;
+  glEnable(GL_BLEND);
+  glDepthMask(GL_FALSE);
+  const float s = model_.visualPropRadius / kRotorR;
+  for (int i = 0; i < 4; ++i) {
+    if (rotorBlur_[i] <= 0.01f)
+      continue;
+    glBlendColor(0, 0, 0, 0.36f * rotorBlur_[i]);
+    glBlendFunc(GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA);
+    QMatrix4x4 m = model;
+    m.translate(model_.hub[i][0], model_.hub[i][1], model_.hub[i][2] - 0.0006f);
+    m.scale(s, s, 1.0f);
+    const auto tip = vsim::propTipColor(motorSpin_[i]);
+    drawMesh(rotor_, view * m,
+             QVector3D(0.55f + 0.25f * tip[0], 0.58f + 0.25f * tip[1],
+                       0.62f + 0.25f * tip[2]));
+  }
+  glDepthMask(GL_TRUE);
+  glDisable(GL_BLEND);
 }
 
 void SimRendererWidget::setComMarker(const QVector3D &com) {
@@ -815,14 +906,26 @@ void SimRendererWidget::paintGL() {
     if (hasMesh_) {
       drawLit(droneMesh_, view, model, QVector3D(0.80f, 0.81f, 0.85f));
     } else {
-      drawMesh(body_, view * model, QVector3D(0.85f, 0.55f, 0.20f));
+      if (modelDirty_)
+        rebuildDroneModel();
+      const float dt = rotorClock_.isValid()
+                           ? float(rotorClock_.restart()) * 1e-3f
+                           : 0.0f;
+      if (!rotorClock_.isValid())
+        rotorClock_.start();
+      updateRotors(dt);
+      drawDroneModel(view, model);
     }
   }
   if (!hideBody) {
 
     // Motor markers (disk colored by spin + activity) and a thrust-axis
     // line, at the editable body-frame positions/axes.
-    for (int i = 0; i < 4; ++i) {
+    // The procedural airframe has its own rotors; the flat disks + thrust
+    // lines remain for the editor (where they are the editable handles) and
+    // over a user-imported mesh (which has no rotors of its own).
+    const bool markers = editable_ || hasMesh_;
+    for (int i = 0; markers && i < 4; ++i) {
       QVector3D axisN = motorAxis_[i];
       if (axisN.lengthSquared() < 1e-12f)
         axisN = QVector3D(0, 0, -1);
@@ -851,10 +954,13 @@ void SimRendererWidget::paintGL() {
       drawMesh(thrustLine_, view * ml, QVector3D(0.95f, 0.95f, 0.40f));
     }
 
-    // Center-of-mass crosshair (body frame, diagnostic).
-    QMatrix4x4 mc = model;
-    mc.translate(comOffset_);
-    drawMesh(comMarker_, view * mc, QVector3D(0.95f, 0.35f, 0.95f));
+    // Center-of-mass crosshair (body frame, diagnostic): editor / imported
+    // mesh only, it would clutter the flying model.
+    if (markers) {
+      QMatrix4x4 mc = model;
+      mc.translate(comOffset_);
+      drawMesh(comMarker_, view * mc, QVector3D(0.95f, 0.35f, 0.95f));
+    }
 
     // Motor gizmo (only when editing and a motor is selected).
     if (editable_ && selected_ >= 0)
