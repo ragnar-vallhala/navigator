@@ -308,3 +308,10 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
       TIMEOUT 120)
 endif()
+
+# ---- Workspace manager (docking layer behind the workspace mock) -----------
+# Needs Qt Advanced Docking System; skipped, like the mock, when it is absent.
+if(TARGET navigator_workspace)
+    navigator_test(tst_workspace_manager tst_workspace_manager.cpp)
+    target_link_libraries(tst_workspace_manager PRIVATE navigator_workspace)
+endif()
