@@ -67,8 +67,37 @@ void onUart2(void *, const uint8_t *data, size_t n) {
 class TstSitlEngine : public QObject {
   Q_OBJECT
 private slots:
+  void resetBodyCarriesPoseAndSeed();
+  void seedResolution();
   void engineRunsWithRcFromTheBridge();
 };
+
+// The reset message the GCS sends on Start / Reset: pose, level attitude, zero
+// velocity, and the noise seed in the new tail field (no engine needed).
+void TstSitlEngine::resetBodyCarriesPoseAndSeed() {
+  const vsim_ctl_reset_t b = vsim::SimWorker::resetBody(1.5f, -2.0f, -0.4f, 1337u);
+  QCOMPARE(b.pos_w[0], 1.5f);
+  QCOMPARE(b.pos_w[1], -2.0f);
+  QCOMPARE(b.pos_w[2], -0.4f);
+  QCOMPARE(b.quat_wxyz[0], 1.0f);
+  QCOMPARE(b.quat_wxyz[1], 0.0f);
+  for (int i = 0; i < 3; ++i) {
+    QCOMPARE(b.vel_w[i], 0.0f);
+    QCOMPARE(b.omega_b[i], 0.0f);
+  }
+  QCOMPARE(b.seed, 1337u);
+  // Legacy callers still send seed 0 (free-running noise).
+  QCOMPARE(vsim::SimWorker::resetBody(0, 0, 0, 0).seed, 0u);
+}
+
+void TstSitlEngine::seedResolution() {
+  using vsim::SimWorker;
+  QCOMPARE(SimWorker::resolveResetSeed(false, 42u, 7u), 42u); // fixed wins
+  QCOMPARE(SimWorker::resolveResetSeed(true, 42u, 7u), 7u);   // random per start
+  // Never 0: that would mean "do not seed".
+  QCOMPARE(SimWorker::resolveResetSeed(false, 0u, 7u), 1u);
+  QCOMPARE(SimWorker::resolveResetSeed(true, 42u, 0u), 1u);
+}
 
 void TstSitlEngine::engineRunsWithRcFromTheBridge() {
   // Before SitlModule::instance(): the module reads the VFS dir when it loads.

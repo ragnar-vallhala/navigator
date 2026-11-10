@@ -98,6 +98,13 @@ public:
   // Far clip [m]. Fog (see drawLit) has fully taken over well before this; the
   // old 200 m clip chopped the terrain off in a hard line against the sky.
   static constexpr float kFarPlaneM = 3000.0f;
+  // Near clip [m]. A 24-bit depth buffer resolves about d^2 / (near * 2^24) at
+  // distance d, so 0.05 m against a 3000 m far plane could not tell surfaces
+  // 5 cm apart apart beyond ~200 m (horizon plane vs arena, decals). The chase
+  // camera never needs to see closer than this; FPV and the belly camera do
+  // (the lens sits near the ground when landed), so they keep the small one.
+  static constexpr float kNearChaseM = 0.25f;
+  static constexpr float kNearLensM = 0.05f;
   // Cylinders at or below this radius [m] are drawn as banded survey poles.
   static constexpr float kPoleMaxR = 0.12f;
   // True for a finite procedural arena: its terrain gets the ground detail and
@@ -537,6 +544,8 @@ private:
   QPoint last_mouse_;
 
   QMatrix4x4 proj_;
+  float nearCur_ = 0.0f; // near plane proj_ was built with
+  void updateProjection(); // rebuild proj_ if the near plane for the mode changed
   vsim::SimSnapshot snap_;
 };
 
