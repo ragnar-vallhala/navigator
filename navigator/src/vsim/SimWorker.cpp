@@ -278,9 +278,22 @@ void SimWorker::runEngine() {
   // every call: after Stop -> Start two feeders read the one pty, each taking
   // whatever bytes it wins, so frames reach the firmware torn and the arm
   // switch flickers. Ask for it once per process, like boot().
+  // (The gate is per process, not per module: fine while a module is never
+  // unloaded and a second one is never loaded in the same process.)
   static std::atomic<bool> serialRcStarted{false};
-  if (claimSerialRcStart(serialRcStarted))
+  static QString feederPty; // the pty the one feeder opened
+  const QString rcPath = qEnvironmentVariable("VAYU_UART_RC_PATH");
+  if (claimSerialRcStart(serialRcStarted)) {
+    feederPty = rcPath;
     sitl()->enable_serial_rc();
+    emit logLine("rtos engine: RC feeder reads " + feederPty);
+  } else if (rcPath != feederPty) {
+    // The feeder keeps the pty it opened first; a bridge that moved to a new
+    // path leaves RC silently not reaching the firmware.
+    emit logLine("rtos engine: WARNING: RC bridge pty is now " + rcPath +
+                 " but the engine's feeder still reads " + feederPty +
+                 "; RC will not reach the firmware until the app restarts");
+  }
   sitl()->run_begin();
   emit logLine("rtos engine: online");
   emit online();
