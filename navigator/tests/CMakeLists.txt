@@ -196,3 +196,31 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
       TIMEOUT 60)
 endif()
+
+# ---- Airframe presets: data checks (no engine needed) ---------------------
+navigator_test(tst_airframe_presets
+    tst_airframe_presets.cpp
+    ${SRC}/vsim/AirframePresets.cpp
+    ${SRC}/vsim/VehicleJson.cpp)
+target_include_directories(tst_airframe_presets PRIVATE ${SRC}/vsim ${SRC}/ui/widgets)
+target_compile_definitions(tst_airframe_presets PRIVATE
+    AIRFRAME_VEHICLE_DIR="${CMAKE_SOURCE_DIR}/docs/vehicles")
+
+# ---- Airframe presets flown in the real firmware (SITL builds only) -------
+# Hover + yaw-sign per preset. Needs the engine module like tst_sitl_engine and
+# skips, saying why, without one. About a minute of wall-clock-paced sim.
+if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
+  navigator_test(tst_airframe_flight
+      tst_airframe_flight.cpp
+      ${SRC}/vsim/SitlModule.cpp ${SRC}/vsim/SitlModule.h
+      ${SRC}/vsim/SimWorker.cpp ${SRC}/vsim/SimWorker.h
+      ${SRC}/vsim/AirframePresets.cpp
+      ${SRC}/protocol/CommandCodec.cpp
+      ${SRC}/core/crc.cpp)
+  target_include_directories(tst_airframe_flight PRIVATE
+      ${SRC}/vsim ${SRC}/ui/widgets ${SRC}/protocol ${SRC}/core ${VAYU_SITL_SDK})
+  target_link_libraries(tst_airframe_flight PRIVATE navlink_codec)
+  set_tests_properties(tst_airframe_flight PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
+      TIMEOUT 300)
+endif()
