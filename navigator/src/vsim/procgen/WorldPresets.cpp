@@ -152,6 +152,7 @@ void layoutRacing(const Ground &g, uint32_t seed, PresetData &d) {
     bar.sy = width + 2 * postR + 0.1f;
     bar.sz = 0.2f;
     bar.zc = -(top + 0.1f);
+    bar.style = kPropGate;
     bar.yawDeg = yaw * 180.0f / kPi;
     d.obstacles.push_back(bar);
     RaceGate rg;
@@ -174,6 +175,7 @@ void layoutRacing(const Ground &g, uint32_t seed, PresetData &d) {
     pyl.x = mx + mx / len * 8.0f;
     pyl.y = my + my / len * 8.0f;
     pyl.sx = 0.35f;
+    pyl.style = kPropGate;
     seatUpright(g, pyl, 0.35f, 4.0f);
     d.obstacles.push_back(pyl);
   }
@@ -214,6 +216,7 @@ void layoutYard(const Ground &g, uint32_t seed, PresetData &d) {
     o.sx = rng.range(10.0f, 16.0f);
     o.sy = rng.range(6.0f, 9.0f);
     o.yawDeg = 90.0f * static_cast<float>(rng.next() % 2u);
+    o.style = kPropBuilding;
     tryPlace(o, 0.5f * std::hypot(o.sx, o.sy), rng.range(4.5f, 6.5f), 6.0f);
   }
   const int crates = 45 + static_cast<int>(rng.next() % 12u);
@@ -222,12 +225,14 @@ void layoutYard(const Ground &g, uint32_t seed, PresetData &d) {
     if (rng.uni() < 0.35f) { // tank / silo
       o.type = 2;
       o.sx = rng.range(0.8f, 2.2f);
+      o.style = kPropSilo;
       tryPlace(o, o.sx, rng.range(3.0f, 7.0f), 3.0f);
     } else { // shipping-container-ish box
       o.type = 0;
       o.sx = rng.range(2.0f, 6.0f);
       o.sy = rng.range(2.0f, 3.2f);
       o.yawDeg = 15.0f * static_cast<float>(rng.next() % 12u);
+      o.style = kPropContainer;
       tryPlace(o, 0.5f * std::hypot(o.sx, o.sy), rng.range(1.6f, 3.2f), 3.0f);
     }
   }
@@ -259,6 +264,7 @@ void layoutForest(const Ground &g, uint32_t seed, PresetData &d) {
     trunk.x = x;
     trunk.y = y;
     trunk.sx = trunkR;
+    trunk.style = kPropTrunk;
     seatUpright(g, trunk, trunkR, trunkH);
     d.obstacles.push_back(trunk);
     // Crown: a sphere resting on the trunk top.
@@ -267,6 +273,7 @@ void layoutForest(const Ground &g, uint32_t seed, PresetData &d) {
     top.x = x;
     top.y = y;
     top.sx = crown;
+    top.style = kPropCanopy;
     top.zc = trunk.zc - trunk.sz * 0.5f - crown * 0.55f;
     d.obstacles.push_back(top);
     placed.push_back({x, y, crown});
@@ -361,7 +368,7 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     f.mountainMix = 0.35f;
     f.mountainBias = 0.6f;
     f.maxSlope = 0.5f;
-    f.palette = 3;
+    f.palette = kPalHills;
     noSnowNoRock(f);
     f.colSlopeT = 0.9f;
   } else if (id == "alpine") {
@@ -370,7 +377,7 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     f.mountainMix = 0.85f;
     f.mountainBias = 0.15f;
     f.maxSlope = 0.9f;
-    f.palette = 3;
+    f.palette = kPalAlpine;
     f.colBrownT = 0.28f;
     f.colRockT = 0.55f;
     f.colSnowT = 0.58f;
@@ -382,14 +389,14 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     f.heightM = 1.2f;
     f.mountainMix = 0.0f;
     f.maxSlope = 0.3f;
-    f.palette = 3;
+    f.palette = kPalFlat;
     noSnowNoRock(f);
   } else if (id == "desert") {
     f.shape = 1;
     f.heightM = 16.0f;
     f.featureM = 75.0f; // dune wavelength
     f.maxSlope = 0.5f;
-    f.palette = 1;
+    f.palette = kPalDesert;
     noSnowNoRock(f);
     f.colBrownT = 0.35f;
     f.colSlopeT = 0.9f;
@@ -401,7 +408,7 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     f.mountainMix = 0.1f;
     f.mountainBias = 0.5f;
     f.maxSlope = 0.5f;
-    f.palette = 2;
+    f.palette = kPalForest;
     noSnowNoRock(f);
     f.colSlopeT = 0.8f;
   } else if (id == "racing") {
@@ -410,7 +417,7 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     f.heightM = 5.0f;
     f.mountainMix = 0.0f;
     f.maxSlope = 0.25f;
-    f.palette = 3;
+    f.palette = kPalRacing;
     noSnowNoRock(f);
   } else { // yard
     d.sizeM = 240.0f;
@@ -418,7 +425,7 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     f.heightM = 0.6f;
     f.mountainMix = 0.0f;
     f.maxSlope = 0.2f;
-    f.palette = 4;
+    f.palette = kPalYard;
     noSnowNoRock(f);
   }
   const TerrainField field(f);

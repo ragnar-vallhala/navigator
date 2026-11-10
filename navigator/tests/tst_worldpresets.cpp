@@ -97,8 +97,57 @@ private slots:
   void openPresetsGetMarkerPoles();
   void racingGatesEvenlySpacedAndPassable();
   void windPresetsMagnitudes();
+  void propsAreStyledAndNeverNearBlack();
   void generateReappliesOnlyOnPresetOrSeedChange();
 };
+
+void TstWorldPresets::propsAreStyledAndNeverNearBlack() {
+  for (const PresetInfo &pi : worldPresets()) {
+    PresetData d;
+    QVERIFY(buildWorldPreset(pi.id, 21u, d));
+    for (const PgObstacle &o : d.obstacles) {
+      const PgVec3 c = propColor(o.style, o.type, o.x, o.y);
+      for (float v : {c.x, c.y, c.z}) {
+        QVERIFY(std::isfinite(v));
+        QVERIFY(v >= 0.0f && v <= 1.0f);
+      }
+      QVERIFY2(0.3f * c.x + 0.59f * c.y + 0.11f * c.z > 0.14f, pi.id);
+    }
+  }
+  PresetData f;
+  QVERIFY(buildWorldPreset("forest", 21u, f));
+  int trunks = 0, crowns = 0, conifers = 0, leafy = 0;
+  for (const PgObstacle &o : f.obstacles) {
+    if (o.style == kPropTrunk) {
+      ++trunks;
+      const PgVec3 c = propColor(o.style, o.type, o.x, o.y);
+      QVERIFY(c.x > c.z); // bark is brown, not blue/grey
+    } else if (o.style == kPropCanopy) {
+      ++crowns;
+      QCOMPARE(o.type, 1);
+      (propIsConifer(o.x, o.y) ? conifers : leafy)++;
+      const PgVec3 c = propColor(o.style, o.type, o.x, o.y);
+      QVERIFY(c.y > c.z); // green-ish (or autumn: red/orange > blue)
+    }
+  }
+  QVERIFY(trunks > 50);
+  QCOMPARE(trunks, crowns);
+  QVERIFY(conifers > 10 && leafy > 40); // a mixed forest
+  PresetData y;
+  QVERIFY(buildWorldPreset("yard", 21u, y));
+  int buildings = 0, containers = 0;
+  for (const PgObstacle &o : y.obstacles) {
+    buildings += o.style == kPropBuilding;
+    containers += o.style == kPropContainer;
+  }
+  QVERIFY(buildings >= 2 && containers > 10);
+  PresetData r;
+  QVERIFY(buildWorldPreset("racing", 21u, r));
+  int gate = 0;
+  for (const PgObstacle &o : r.obstacles)
+    gate += o.style == kPropGate;
+  QVERIFY(gate >= 8);
+}
 
 void TstWorldPresets::generateReappliesOnlyOnPresetOrSeedChange() {
   QVERIFY(!presetNeedsReapply("hills", 5, "", 5));      // custom world

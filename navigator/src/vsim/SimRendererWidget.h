@@ -323,6 +323,10 @@ private:
   void drawLit(const Mesh &m, const QMatrix4x4 &view, const QMatrix4x4 &model,
                const QVector3D &color, bool terrain = false, float bands = 0.0f);
 
+  // Tree crown as lumpy blobs / conifer tiers inside the obstacle's sphere.
+  void drawCrown(const QMatrix4x4 &view, const vsim::Obstacle &o,
+                 const QVector3D &col);
+
   QMatrix4x4 cameraView() const;
   QVector3D freeForward() const; // free-cam look direction from yaw/pitch
   float bodyYawRad() const;      // drone heading (yaw about world Z, NED)
