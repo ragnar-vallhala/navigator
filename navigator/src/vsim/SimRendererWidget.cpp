@@ -286,7 +286,24 @@ const char *kShadowGLSL = R"GLSL(
 uniform sampler2D u_shadowtex;
 uniform mat4 u_lightvp;
 uniform float u_shadowon;
-float shadowFactor(vec3 wpos, vec3 nrm, vec3 lightDir) {
+uniform vec3 u_drone;     // drone position (world, NED)
+uniform float u_droner;   // drone shadow radius [m]; 0 = off
+// Analytic soft shadow of the drone: a cylinder along the sun ray from the
+// drone, with the penumbra growing with distance. The 260 m shadow map cannot
+// resolve a 0.25 m quad, and this needs no ground height, so it lands on any
+// terrain and doubles as a height cue.
+float droneShadow(vec3 wpos, vec3 lightDir) {
+  if (u_droner <= 0.0) return 1.0;
+  vec3 L = normalize(lightDir);
+  vec3 v = wpos - u_drone;
+  float a = dot(v, -L);               // distance past the drone, away from the sun
+  if (a < u_droner) return 1.0;       // not below the drone (also spares the body)
+  float perp = length(v + L * a);
+  float pen = u_droner * (1.0 + a * 0.03);
+  float cover = 1.0 - smoothstep(pen * 0.45, pen * 1.35, perp);
+  return 1.0 - 0.6 * cover / (1.0 + a / 150.0);
+}
+float shadowMapFactor(vec3 wpos, vec3 nrm, vec3 lightDir) {
   if (u_shadowon < 0.5) return 1.0;
   vec3 n = normalize(nrm);
   float ndl = clamp(dot(n, normalize(lightDir)), 0.0, 1.0);
@@ -308,6 +325,9 @@ float shadowFactor(vec3 wpos, vec3 nrm, vec3 lightDir) {
       s += (p.z - bias > d) ? 0.0 : 1.0;
     }
   return s / 9.0;
+}
+float shadowFactor(vec3 wpos, vec3 nrm, vec3 lightDir) {
+  return shadowMapFactor(wpos, nrm, lightDir) * droneShadow(wpos, lightDir);
 }
 )GLSL";
 
@@ -643,6 +663,8 @@ void SimRendererWidget::initializeGL() {
   ul_lightvp_ = progLit_.uniformLocation("u_lightvp");
   ul_shadowtex_ = progLit_.uniformLocation("u_shadowtex");
   ul_shadowon_ = progLit_.uniformLocation("u_shadowon");
+  ul_drone_ = progLit_.uniformLocation("u_drone");
+  ul_droner_ = progLit_.uniformLocation("u_droner");
   ul_sunint_ = progLit_.uniformLocation("u_sunint");
   ul_ambstr_ = progLit_.uniformLocation("u_ambstr");
   ul_terrain_ = progLit_.uniformLocation("u_terrain");
@@ -842,6 +864,21 @@ void SimRendererWidget::paintGL() {
   // Shadow map: render terrain depth from the sun's view into the FBO first, so
   // the lit terrain + grass can sample it. Restores the default FBO + viewport.
   renderShadowPass(showWorld, showChunks);
+
+  // Analytic drone shadow: radius follows the drawn model (same distance boost
+  // as drawDroneModel); off in the editor, where the drone is a fixed marker.
+  droneShadowPos_ = snap_.pos_w;
+  if (editable_) {
+    droneShadowR_ = 0.0f;
+  } else {
+    float half = model_.visualPropRadius;
+    for (int i = 0; i < 4; ++i)
+      half = std::max(half, std::hypot(model_.hub[i][0], model_.hub[i][1]) +
+                                model_.visualPropRadius);
+    const float d = (camEye_ - snap_.pos_w).length();
+    const float boost = std::clamp(1.0f + (d - 12.0f) / 40.0f, 1.0f, 1.5f);
+    droneShadowR_ = std::clamp(half * boost, 0.08f, 1.5f);
+  }
 
   // Sky-dome background (gradient + sun glow along the per-pixel view ray).
   // Drawn first with depth test off so the scene paints over it.
@@ -1147,6 +1184,8 @@ void SimRendererWidget::drawLit(const Mesh &m, const QMatrix4x4 &view,
   progLit_.setUniformValue(ul_fogstart_, 45.0f);
   progLit_.setUniformValue(ul_lightvp_, lightVP_);
   progLit_.setUniformValue(ul_shadowon_, shadowOn_ ? 1.0f : 0.0f);
+  progLit_.setUniformValue(ul_drone_, droneShadowPos_);
+  progLit_.setUniformValue(ul_droner_, droneShadowR_);
   progLit_.setUniformValue(ul_shadowtex_, 1); // sampler on texture unit 1
   progLit_.setUniformValue(ul_sunint_, litSunInt_);
   progLit_.setUniformValue(ul_ambstr_, litAmbStr_);
