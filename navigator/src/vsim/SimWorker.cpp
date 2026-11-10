@@ -273,7 +273,14 @@ void SimWorker::runEngine() {
   }
   emit logLine("rtos engine: loaded " + SitlModule::instance().path() + " [" +
                SitlModule::instance().buildId() + "]");
-  sitl()->enable_serial_rc(); // RC from RcBridge pty / remote transmitter
+  // RC from the RcBridge pty / remote transmitter. The engine's feeder is a
+  // detached thread that never exits, and enable_serial_rc() starts a NEW one
+  // every call: after Stop -> Start two feeders read the one pty, each taking
+  // whatever bytes it wins, so frames reach the firmware torn and the arm
+  // switch flickers. Ask for it once per process, like boot().
+  static std::atomic<bool> serialRcStarted{false};
+  if (claimSerialRcStart(serialRcStarted))
+    sitl()->enable_serial_rc();
   sitl()->run_begin();
   emit logLine("rtos engine: online");
   emit online();
