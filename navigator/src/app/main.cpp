@@ -18,6 +18,9 @@
 #include "MainWindow.h"
 #include "Theme.h"
 #include "WheelGuard.h"
+#ifdef NAVIGATOR_HAS_SITL
+#include "../vsim/SimPaths.h"
+#endif
 #include <QApplication>
 #include <QSurfaceFormat>
 
@@ -58,6 +61,12 @@ int main(int argc, char *argv[]) {
   // Defaults are sensible (AppDataLocation/logs, 5 MB rotation,
   // 10 files retained); override via Logger::init({...}) if needed.
   Logger::init();
+
+#ifdef NAVIGATOR_HAS_SITL
+  // World-export temp files (vsim_world*.bin.N.tmp) a crashed run left behind.
+  // Only files that old are touched: a running Navigator's export is seconds old.
+  vsim::sweepStaleWorldTmp(vsim::worldTmpDir(), 3600);
+#endif
 
   MainWindow w;
   w.show();
