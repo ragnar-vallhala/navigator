@@ -240,6 +240,7 @@ set(GCS_SITL_HEADERS
     src/autotune/SysId.h
     src/autotune/AutotuneWorker.h
     src/ui/widgets/SimulatorWidget.h
+    src/ui/widgets/PanelWidgets.h
     src/ui/widgets/GeometryEditorWidget.h
     src/ui/widgets/WorldEditorWidget.h
     src/ui/widgets/ContourMinimapWidget.h

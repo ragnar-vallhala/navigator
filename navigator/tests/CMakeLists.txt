@@ -175,6 +175,9 @@ navigator_test(tst_procgen
     ${SRC}/vsim/ChunkStreamer.cpp)
 target_include_directories(tst_procgen PRIVATE ${SRC}/vsim)
 
+# ---- Side-panel sizing helpers (no splitter may crop a panel) -------------
+navigator_test(tst_panel_widgets tst_panel_widgets.cpp)
+
 # ---- In-app simulator end to end (SITL builds only) -----------------------
 # Navigator's SitlModule + SimWorker + RcBridge against the real engine module:
 # it loads, boots and steps, telemetry reaches the sink, and RcBridge's RC gets
