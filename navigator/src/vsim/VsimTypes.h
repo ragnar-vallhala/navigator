@@ -120,6 +120,9 @@ struct Obstacle {
   QVector3D size{1.0f, 1.0f, 1.0f};
   QVector3D rotate{0.0f, 0.0f, 0.0f}; // Euler XYZ [deg]
   float restitution = 0.3f;
+  // Look only (procgen::PropStyle): tree trunk / crown, warehouse, container...
+  // 0 = by shape. Not used by the physics.
+  int style = 0;
 };
 
 struct WorldConfig {
