@@ -721,7 +721,9 @@ void SimulatorWidget::buildUi() {
         QString("color: %1;").arg(Theme::hex(Theme::kTextMuted)));
     sv->addWidget(m_simStatusLabel);
 
-    auto *runRow = new QHBoxLayout();
+    auto *runRow = new QGridLayout();
+    runRow->setContentsMargins(0, 0, 0, 0);
+    QList<QWidget *> runWidgets;
     m_simStartBtn = new ui::SuccessButton(tr("Start"), simBody);
     m_simStartBtn->setToolTip(tr("Boot firmware (first time) + start the sim"));
     connect(m_simStartBtn, &QPushButton::clicked, this,
@@ -762,11 +764,10 @@ void SimulatorWidget::buildUi() {
         tr("Attaching to an external sim needs a POSIX host (its pose stream "
            "is a FIFO). Use Start to run the simulator in-app."));
 #endif
-    runRow->addWidget(m_simStartBtn);
-    runRow->addWidget(m_simStopBtn);
-    runRow->addWidget(m_simResetBtn);
-    runRow->addWidget(m_simAttachBtn);
-    runRow->addStretch();
+    runWidgets << m_simStartBtn;
+    runWidgets << m_simStopBtn;
+    runWidgets << m_simResetBtn;
+    runWidgets << m_simAttachBtn;
     m_fpvCheck = new QCheckBox(tr("FPV cam"), simBody);
     m_fpvCheck->setToolTip(
         tr("Onboard first-person camera that rides the drone "
@@ -777,7 +778,7 @@ void SimulatorWidget::buildUi() {
       if (m_renderer)
         m_renderer->setFpv(on);
     });
-    runRow->addWidget(m_fpvCheck);
+    runWidgets << m_fpvCheck;
 
     // PiP visibility toggles (mockup Down Cam / Horizon chips).
     auto *downChk = new QCheckBox(tr("Down Cam"), simBody);
@@ -787,7 +788,7 @@ void SimulatorWidget::buildUi() {
       if (m_downPip)
         m_downPip->setVisible(on);
     });
-    runRow->addWidget(downChk);
+    runWidgets << downChk;
 
     auto *horizonChk = new QCheckBox(tr("Horizon"), simBody);
     horizonChk->setChecked(true);
@@ -796,7 +797,7 @@ void SimulatorWidget::buildUi() {
       if (m_horizonPip)
         m_horizonPip->setVisible(on);
     });
-    runRow->addWidget(horizonChk);
+    runWidgets << horizonChk;
 
     auto *contourChk = new QCheckBox(tr("Contours"), simBody);
     contourChk->setChecked(true);
@@ -806,7 +807,7 @@ void SimulatorWidget::buildUi() {
       if (m_minimapPip)
         m_minimapPip->setVisible(on);
     });
-    runRow->addWidget(contourChk);
+    runWidgets << contourChk;
 
 #ifdef VAYU_SIM_GRASS
     auto *grassChk = new QCheckBox(tr("Grass"), simBody);
@@ -827,7 +828,7 @@ void SimulatorWidget::buildUi() {
           m_downRenderer->setGpuGrassActive(on);
       }
     });
-    runRow->addWidget(grassChk);
+    runWidgets << grassChk;
     // Apply the unchecked default to the renderers now (an unchecked box emits
     // no toggled signal at startup).
     if (m_renderer)
@@ -848,7 +849,7 @@ void SimulatorWidget::buildUi() {
       QSettings().setValue(kAudioKey, on);
       m_propAudio.setEnabled(on);
     });
-    runRow->addWidget(m_propAudioChk);
+    runWidgets << m_propAudioChk;
     sv->addLayout(runRow);
 
     // -- Loop rates (IMU/firmware, physics substeps, render) --
@@ -1005,23 +1006,29 @@ void SimulatorWidget::buildUi() {
           m_rc->setAcro(on); // toggles ch6 -> firmware switches mode
       });
       // Optional wrapped layout so the panel can be narrower; layout only.
-      auto *compactChk = new QCheckBox(tr("Compact RC controls"), simBody);
-      compactChk->setToolTip(tr("Wrap the RC controls over two lines so the "
-                                "side panel can be made narrower."));
+      auto *compactChk = new QCheckBox(tr("Compact controls"), simBody);
+      compactChk->setToolTip(tr("Wrap the run and RC control rows over several "
+                                "lines so the side panel can be narrower."));
       sv->addWidget(compactChk);
       sv->addLayout(rcRow);
       const QList<QWidget *> rcWidgets{m_rcEnable, m_rcSource, m_rcPath,
                                        m_rcBaud,   m_rcConnect, m_acroChk};
       connect(compactChk, &QCheckBox::toggled, this,
-              [this, rcRow, rcWidgets](bool on) {
+              [this, compactChk, rcRow, rcWidgets, runRow, runWidgets](bool on) {
                 QSettings().setValue(kRcCompactKey, on);
                 ui::layoutWrappedRow(rcRow, rcWidgets, on, m_rcPath);
-                if (QWidget *p = parentWidget())
-                  p->updateGeometry();
-                updateGeometry();
+                ui::layoutWrappedRow(runRow, runWidgets, on, nullptr, 3, 3);
+                // Invalidate every enclosing layout so the panel minimum
+                // (MinWidthScrollArea) follows live.
+                for (QWidget *w = compactChk; w; w = w->parentWidget()) {
+                  if (w->layout())
+                    w->layout()->invalidate();
+                  w->updateGeometry();
+                }
               });
       const bool compactOn = st.value(kRcCompactKey, false).toBool();
       ui::layoutWrappedRow(rcRow, rcWidgets, compactOn, m_rcPath);
+      ui::layoutWrappedRow(runRow, runWidgets, compactOn, nullptr, 3, 3);
       compactChk->setChecked(compactOn);
 
       m_flightModeLabel = new QLabel(tr("mode: —"), simBody);

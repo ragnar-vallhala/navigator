@@ -24,20 +24,32 @@ inline int scrollAreaMinWidth(int contentMinWidth, int scrollBarWidth,
   return contentMinWidth + scrollBarWidth + 2 * frameWidth;
 }
 
-// Lays `row` out in `grid`: one line, or (compact) wrapped over two lines so the
-// grid's minimum width drops. Only moves widgets; `stretch` (if any) is the one
-// that takes the spare width. Re-callable to switch modes live.
+// Lays `row` out in `grid`: one line, or (compact) wrapped over `lines` lines
+// so the grid's minimum width drops. Only moves widgets; `stretch` (if any) is
+// the one that takes the spare width. Non-compact, an empty stretching column
+// is put after widget index `spacerAfter` (>= 0), like a QHBoxLayout stretch.
+// Re-callable to switch modes live.
 inline void layoutWrappedRow(QGridLayout *grid, const QList<QWidget *> &row,
-                             bool compact, QWidget *stretch = nullptr) {
+                             bool compact, QWidget *stretch = nullptr,
+                             int lines = 2, int spacerAfter = -1) {
   for (QWidget *w : row)
     grid->removeWidget(w);
-  for (int c = 0; c < row.size(); ++c)
+  for (int c = 0; c <= row.size() + 1; ++c)
     grid->setColumnStretch(c, 0);
-  const int perLine = compact ? (row.size() + 1) / 2 : row.size();
+  const int perLine = compact ? (row.size() + lines - 1) / lines : row.size();
+  int col = 0;
   for (int i = 0; i < row.size(); ++i) {
-    grid->addWidget(row[i], i / perLine, i % perLine);
+    const int r = i / perLine;
+    if (i > 0 && r != (i - 1) / perLine)
+      col = 0;
+    grid->addWidget(row[i], r, col);
     if (row[i] == stretch)
-      grid->setColumnStretch(i % perLine, 1);
+      grid->setColumnStretch(col, 1);
+    ++col;
+    if (!compact && i == spacerAfter) {
+      grid->setColumnStretch(col, 1);
+      ++col;
+    }
   }
   grid->invalidate();
 }

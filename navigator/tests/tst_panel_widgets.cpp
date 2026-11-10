@@ -88,6 +88,22 @@ private slots:
     ui::layoutWrappedRow(grid, row, false, row[2]);
     QCOMPARE(page.minimumSizeHint().width(), normal);
   }
+
+  void threeLineRowWithSpacer() {
+    QWidget page;
+    auto *grid = new QGridLayout(&page);
+    QList<QWidget *> row;
+    for (const char *t : {"Start", "Stop", "Reset", "Attach Ext", "FPV cam",
+                          "Down Cam", "Horizon", "Contours", "Prop audio"})
+      row << new QPushButton(QString::fromLatin1(t), &page);
+    ui::layoutWrappedRow(grid, row, false, nullptr, 3, 3);
+    const int normal = page.minimumSizeHint().width();
+    QCOMPARE(grid->rowCount(), 1);
+    ui::layoutWrappedRow(grid, row, true, nullptr, 3, 3);
+    QCOMPARE(grid->rowCount(), 3);
+    QCOMPARE(grid->count(), row.size());
+    QVERIFY(page.minimumSizeHint().width() < normal * 2 / 3);
+  }
 };
 
 QTEST_MAIN(PanelWidgetsTest)
