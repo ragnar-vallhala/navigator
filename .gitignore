@@ -11,6 +11,8 @@ build_vsim/
 
 # sim world / vehicle assets + tuner run artifacts (not source)
 *.vveh
+# ...except the shipped airframe presets (navigator/docs/vehicles), which tests read
+!navigator/docs/vehicles/*.vveh
 *.vworld
 *.glb
 tools/autotune/*.json
