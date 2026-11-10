@@ -14,12 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-// tst_sim_gl_context.cpp - the 3D sim view survives its OpenGL context being
-// destroyed and created again (undock / re-dock re-parents the native surface).
+// tst_sim_gl_context.cpp - the 3D sim view survives being undocked and docked
+// again, and its OpenGL context being destroyed and created again.
 //
-// Needs a real GL platform plugin: run with QT_QPA_PLATFORM=xcb on an Xvfb and
-// LIBGL_ALWAYS_SOFTWARE=1. On "offscreen" (ctest's default) it skips, because
-// QOpenGLWidget/QOpenGLWindow crash there.
+// The view is a QOpenGLWindow hosted by QWidget::createWindowContainer, the way
+// the Simulator page and a docking system use it. Needs a real GL platform
+// plugin: run with QT_QPA_PLATFORM=xcb on an Xvfb and LIBGL_ALWAYS_SOFTWARE=1.
+// On "offscreen" (ctest's default) it skips, because QOpenGLWindow crashes there.
 //
 // It loads a small world (imported mesh + streamed chunk + obstacles + helipad +
 // a training gate) and a drone mesh, renders a frame, recreates the context,
@@ -28,6 +29,8 @@
 #include "SimRendererWidget.h"
 
 #include <QGuiApplication>
+#include <QSurfaceFormat>
+#include <QVBoxLayout>
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
 #include <QtTest>
@@ -162,10 +165,10 @@ Views capture(SimRendererWidget *r) {
   vsim::SimSnapshot s;
   s.pos_w = {0, 0, -0.6f};
   r->setSnapshot(s);
-  v.mesh = r->grabFramebuffer();
+  v.mesh = r->grabFrame();
   s.pos_w = {30, 0, -0.6f};
   r->setSnapshot(s);
-  v.chunk = r->grabFramebuffer();
+  v.chunk = r->grabFrame();
   s.pos_w = {0, 0, -0.6f};
   r->setSnapshot(s);
   return v;
@@ -181,10 +184,46 @@ bool sameScene(const Views &ref, const Views &v, const char **why) {
   return !*why;
 }
 
-int visibleTopLevelsExcept(const QWidget *keep) {
+// A docked-looking host (a window with a layout) and the renderer inside its
+// window container; "float" makes the container a top-level of its own and
+// "dock" puts it back, which is what a docking system does to a panel.
+struct Rig {
+  QWidget host;
+  QVBoxLayout *lay = nullptr;
+  SimRendererWidget *r = nullptr;
+  QWidget *box = nullptr;
+  Rig() {
+    lay = new QVBoxLayout(&host);
+    lay->setContentsMargins(0, 0, 0, 0);
+    r = new SimRendererWidget;
+    r->setGlErrorCheck(true);
+    loadScene(r);
+    box = QWidget::createWindowContainer(r, &host);
+    box->setFixedSize(640, 480);
+    lay->addWidget(box);
+  }
+  bool showDocked() {
+    host.show();
+    return QTest::qWaitForWindowExposed(r);
+  }
+  bool floatOut() {
+    box->setParent(nullptr);
+    box->setFixedSize(640, 480);
+    box->show();
+    return QTest::qWaitForWindowExposed(r);
+  }
+  bool dock() {
+    lay->addWidget(box); // re-parents into host
+    host.show();
+    box->show();
+    return QTest::qWaitForWindowExposed(r);
+  }
+};
+
+int visibleWindows() {
   int n = 0;
-  for (QWidget *w : QApplication::topLevelWidgets())
-    if (w != keep && w->isVisible())
+  for (QWindow *w : QGuiApplication::allWindows())
+    if (w->isVisible())
       ++n;
   return n;
 }
@@ -198,78 +237,75 @@ private slots:
     if (QGuiApplication::platformName() == "offscreen")
       QSKIP("the GL view needs a real platform: set QT_QPA_PLATFORM=xcb, DISPLAY "
             "to an Xvfb and LIBGL_ALWAYS_SOFTWARE=1");
+    QSurfaceFormat fmt; // what the app asks for in main()
+    fmt.setVersion(4, 6);
+    fmt.setProfile(QSurfaceFormat::CoreProfile);
+    fmt.setSamples(4);
+    QSurfaceFormat::setDefaultFormat(fmt);
   }
 
-  // The context is recreated for real by moving the view between top-level
-  // windows; every step must render the same scene.
-  void survivesReparent() {
-    QWidget host;
-    host.resize(700, 500);
-    auto *r = new SimRendererWidget;
-    r->setGlErrorCheck(true);
-    loadScene(r);
-    r->resize(640, 480);
-    r->show();
-    QVERIFY(QTest::qWaitForWindowExposed(r));
-    const Views ref = capture(r);
-    const char *why = nullptr;
-    QVERIFY2(sameScene(ref, ref, &why), why);
-    QVERIFY(ref.mesh != ref.chunk);
-    QCOMPARE(r->glInitCount(), 1);
-    const int live = r->liveGlObjects();
-    QVERIFY(live > 20);
-
-    // into a host window (a different top-level: new context)...
-    r->setParent(&host);
-    r->setGeometry(0, 0, 640, 480);
-    host.show();
-    r->show();
-    QVERIFY(QTest::qWaitForWindowExposed(&host));
-    const Views second = capture(r);
-    QVERIFY2(r->glInitCount() >= 2, "context was not recreated by the re-parent");
-    QVERIFY2(sameScene(ref, second, &why), why);
-    QCOMPARE(r->liveGlObjects(), live);
-
-    // ... and back out to a top-level of its own.
-    r->setParent(nullptr);
-    r->resize(640, 480);
-    r->show();
-    QVERIFY(QTest::qWaitForWindowExposed(r));
-    const Views third = capture(r);
-    QVERIFY2(r->glInitCount() >= 3, "context was not recreated by the second re-parent");
-    QVERIFY2(sameScene(ref, third, &why), why);
-    QCOMPARE(r->liveGlObjects(), live);
-    QCOMPARE(r->glErrorCount(), 0);
-
-    host.hide();
-    delete r;
+  // Undock (float) and re-dock the view twice; every step must render the same
+  // scene with no GL error, and no window may be left behind.
+  void survivesFloatAndDock() {
+    const int windowsBefore = visibleWindows();
+    {
+      Rig rig;
+      QVERIFY(rig.showDocked());
+      const Views ref = capture(rig.r);
+      const char *why = nullptr;
+      QVERIFY2(sameScene(ref, ref, &why), why);
+      QVERIFY(ref.mesh != ref.chunk);
+      const int live = rig.r->liveGlObjects();
+      QVERIFY(live > 20);
+      for (int round = 0; round < 2; ++round) {
+        QVERIFY(rig.floatOut());
+        QVERIFY2(sameScene(ref, capture(rig.r), &why), why);
+        QCOMPARE(rig.r->liveGlObjects(), live);
+        QVERIFY(rig.dock());
+        QVERIFY2(sameScene(ref, capture(rig.r), &why), why);
+        QCOMPARE(rig.r->liveGlObjects(), live);
+      }
+      qInfo("GL initialisations over 2 float/dock rounds: %d", rig.r->glInitCount());
+      QCOMPARE(rig.r->glErrorCount(), 0);
+    }
     QCoreApplication::processEvents();
-    QCOMPARE(visibleTopLevelsExcept(&host), 0);
+    QCOMPARE(visibleWindows(), windowsBefore);
   }
 
-  // Init is safe to run again on the SAME context: nothing is re-added to a
-  // linked program and no GL name leaks, however often it runs.
+  // The context is torn down and rebuilt for real: the renderer frees every GL
+  // object and builds them again (what Qt does when it recreates the context),
+  // repeatedly and on the same context, and nothing leaks.
   void resetIsIdempotent() {
-    auto *r = new SimRendererWidget;
-    r->setGlErrorCheck(true);
-    loadScene(r);
-    r->resize(640, 480);
-    r->show();
-    QVERIFY(QTest::qWaitForWindowExposed(r));
+    Rig rig;
+    QVERIFY(rig.showDocked());
+    SimRendererWidget *r = rig.r;
     const Views ref = capture(r);
     const char *why = nullptr;
     const int live = r->liveGlObjects();
+    const int inits = r->glInitCount();
     const GLuint name0 = probeBufferName(r);
     for (int i = 0; i < 6; ++i) {
       r->resetGlResources();
-      const Views v = capture(r);
-      QVERIFY2(sameScene(ref, v, &why), why);
+      QVERIFY2(sameScene(ref, capture(r), &why), why);
       QCOMPARE(r->liveGlObjects(), live);
     }
-    QCOMPARE(r->glInitCount(), 7);
+    QCOMPARE(r->glInitCount(), inits + 6);
     QVERIFY2(probeBufferName(r) <= name0 + 2, "GL buffer names keep growing: leak");
     QCOMPARE(r->glErrorCount(), 0);
-    delete r;
+  }
+
+  // Hiding the container hides the native window; showing it again renders.
+  void survivesHideShow() {
+    Rig rig;
+    QVERIFY(rig.showDocked());
+    const Views ref = capture(rig.r);
+    const char *why = nullptr;
+    rig.box->hide();
+    QTest::qWait(100);
+    rig.box->show();
+    QVERIFY(QTest::qWaitForWindowExposed(rig.r));
+    QVERIFY2(sameScene(ref, capture(rig.r), &why), why);
+    QCOMPARE(rig.r->glErrorCount(), 0);
   }
 };
 

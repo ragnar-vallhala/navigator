@@ -35,7 +35,9 @@
 #include <QOpenGLExtraFunctions>
 #include <QOpenGLShaderProgram>
 #include <QOpenGLVertexArrayObject>
-#include <QOpenGLWidget>
+#include <QImage>
+#include <QOpenGLWindow>
+#include <QPointer>
 #include <QPoint>
 
 #include <array>
@@ -49,12 +51,36 @@ namespace vsim {
 // drone in NED world coordinates directly (camera "up" vector is
 // (0,0,-1)), so the world axes you see line up with what the IMU /
 // firmware actually sees.
-class SimRendererWidget : public QOpenGLWidget,
+//
+// This is a QOpenGLWindow, not a QOpenGLWidget: host it with
+// QWidget::createWindowContainer(renderer, parent). A QOpenGLWidget renders
+// into the top-level's backing store, which breaks presentation of the main
+// window when its panel floats under the docking system; a window container
+// gives the view its own native surface and context. Consequences for
+// callers: overlay widgets cannot be stacked over it (a native window is
+// always on top), so the HUD is painted by the renderer itself (setHudWidget)
+// and picture-in-picture panes sit beside it; input arrives at the window.
+class SimRendererWidget : public QOpenGLWindow,
                           protected QOpenGLExtraFunctions {
   Q_OBJECT
 public:
-  explicit SimRendererWidget(QWidget *parent = nullptr);
+  explicit SimRendererWidget(QWindow *parent = nullptr);
   ~SimRendererWidget() override;
+
+  // Overlay painted over the 3D frame by the renderer (QPainter on the GL
+  // window): `w` is never shown; each frame it is rendered at the window's size
+  // into an image that is composited on top. Not owned. Used for the FPV
+  // telemetry HUD, which used to be a child widget over the view.
+  void setHudWidget(QWidget *w);
+  void setHudVisible(bool on);
+
+  // A screenshot of the view, HUD included: schedules a frame, waits (a nested
+  // event loop, at most `timeoutMs`) until it has been presented, then reads it
+  // back with QOpenGLWindow::grabFramebuffer. grabFramebuffer alone only reads
+  // whatever the framebuffer holds, which after a swap need not be the latest
+  // frame. Null image if the window is not exposed. This replaces
+  // QWidget::grab(), which cannot capture a native GL window.
+  QImage grabFrame(int timeoutMs = 2000);
 
 public slots:
   void setSnapshot(const vsim::SimSnapshot &s);
@@ -263,6 +289,7 @@ protected:
   void resizeGL(int w, int h) override;
   void paintGL() override;
 
+  // Input arrives at the native window (the container forwards focus to it).
   void mousePressEvent(QMouseEvent *e) override;
   void mouseMoveEvent(QMouseEvent *e) override;
   void wheelEvent(QWheelEvent *e) override;
@@ -360,6 +387,8 @@ private:
   void drawMesh(const Mesh &m, const QMatrix4x4 &model, const QVector3D &color);
   // Draws a pos+normal mesh through the lit program. view and model are
   // kept separate so normals transform by mat3(model) in world space.
+  void resetGlState();  // known GL state at the start of a frame (QPainter dirties it)
+  void paintHud();      // composites the HUD widget over the finished frame
   void drawLit(const Mesh &m, const QMatrix4x4 &view, const QMatrix4x4 &model,
                const QVector3D &color, bool terrain = false, float bands = 0.0f);
 
@@ -420,6 +449,9 @@ private:
   int us_sundir_ = -1;
   int us_time_ = -1;
   QOpenGLVertexArrayObject skyVao_;
+
+  QPointer<QWidget> hud_; // painted over the frame (see setHudWidget)
+  bool hudVisible_ = false;
 
   // GL context lifetime bookkeeping.
   bool glLive_ = false; // resources exist in the current context

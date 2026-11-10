@@ -17,8 +17,14 @@
 #include "SimRendererWidget.h"
 
 #include <QCursor>
+#include <QEventLoop>
+#include <QTimer>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QOpenGLContext>
+#include <QPainter>
+#include <QSurfaceFormat>
+#include <QWidget>
 #include <QWheelEvent>
 #include <QtMath>
 
@@ -431,10 +437,89 @@ void main() {
 
 } // namespace
 
-SimRendererWidget::SimRendererWidget(QWidget *parent) : QOpenGLWidget(parent) {
-  setMouseTracking(false);
-  setMinimumSize(400, 300);
-  setFocusPolicy(Qt::StrongFocus); // needs key focus for G/R/X/Y/Z/Esc
+SimRendererWidget::SimRendererWidget(QWindow *parent)
+    : QOpenGLWindow(NoPartialUpdate, parent) {
+  // The widget used to get depth/stencil from its FBO; a window must ask for
+  // them (QPainter needs the stencil for the HUD's clipping).
+  // (Mouse tracking needs no switch here: a QWindow always receives moves with
+  // no button held, which the G/R/S gizmo tools rely on.)
+  QSurfaceFormat f = QSurfaceFormat::defaultFormat();
+  f.setDepthBufferSize(24);
+  f.setStencilBufferSize(8);
+  setFormat(f);
+}
+
+void SimRendererWidget::setHudWidget(QWidget *w) {
+  hud_ = w;
+  update();
+}
+
+void SimRendererWidget::setHudVisible(bool on) {
+  hudVisible_ = on;
+  update();
+}
+
+QImage SimRendererWidget::grabFrame(int timeoutMs) {
+  if (!isExposed())
+    return QImage();
+  QEventLoop loop;
+  QTimer guard;
+  guard.setSingleShot(true);
+  connect(&guard, &QTimer::timeout, &loop, &QEventLoop::quit);
+  int swaps = 0; // the first swap may be a frame that started before this call
+  const QMetaObject::Connection c =
+      connect(this, &QOpenGLWindow::frameSwapped, &loop, [&] {
+        if (++swaps >= 2)
+          loop.quit();
+        else
+          update();
+      });
+  update();
+  guard.start(timeoutMs);
+  loop.exec();
+  disconnect(c);
+  return grabFramebuffer();
+}
+
+// QPainter leaves blending, depth, stencil, scissor, the bound program and VAO
+// in its own state; every frame starts from the one the scene expects.
+void SimRendererWidget::resetGlState() {
+  glBindFramebuffer(GL_FRAMEBUFFER, context()->defaultFramebufferObject());
+  glViewport(0, 0, fbW_, fbH_);
+  glUseProgram(0);
+  glBindVertexArray(0);
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, 0);
+  glDisable(GL_BLEND);
+  glDisable(GL_SCISSOR_TEST);
+  glDisable(GL_STENCIL_TEST);
+  glDisable(GL_CULL_FACE);
+  glEnable(GL_DEPTH_TEST);
+  glDepthFunc(GL_LESS);
+  glDepthMask(GL_TRUE);
+  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+  glEnable(GL_LINE_SMOOTH);
+  glClearColor(0.08f, 0.09f, 0.11f, 1.0f);
+}
+
+// Composites the HUD widget over the finished frame. The widget is never on
+// screen: it is rendered into an ARGB image at the window's size (device pixels
+// honoured) and drawn with QPainter on the GL window.
+void SimRendererWidget::paintHud() {
+  if (!hud_ || !hudVisible_ || width() <= 0 || height() <= 0)
+    return;
+  const qreal dpr = devicePixelRatio();
+  QImage img(QSize(width(), height()) * dpr, QImage::Format_ARGB32_Premultiplied);
+  img.setDevicePixelRatio(dpr);
+  img.fill(Qt::transparent);
+  hud_->resize(width(), height());
+  hud_->render(&img);
+  glDisable(GL_DEPTH_TEST);
+  QPainter p(this);
+  p.drawImage(0, 0, img);
+  p.end();
+  resetGlState();
 }
 
 void SimRendererWidget::setMotorsEditable(bool on) {
@@ -912,10 +997,12 @@ void SimRendererWidget::initResources() {
   buildGuideArrow();
 }
 
-void SimRendererWidget::resizeGL(int w, int h) {
-  fbW_ = w;
-  fbH_ = h;
-  glViewport(0, 0, w, h);
+void SimRendererWidget::resizeGL(int, int) {
+  // Device pixels, whatever the framework passes: the GL viewport and the
+  // projection aspect need them; input and picking stay in logical pixels.
+  fbW_ = std::max(1, int(std::lround(width() * devicePixelRatio())));
+  fbH_ = std::max(1, int(std::lround(height() * devicePixelRatio())));
+  glViewport(0, 0, fbW_, fbH_);
   nearCur_ = 0.0f; // force a rebuild with the new aspect
   updateProjection();
 }
@@ -1021,6 +1108,7 @@ QMatrix4x4 SimRendererWidget::cameraView() const {
 }
 
 void SimRendererWidget::paintGL() {
+  resetGlState();
   if (glErrorCheck_)
     while (glGetError() != GL_NO_ERROR) {
     } // not ours: whatever the framework left
@@ -1257,6 +1345,7 @@ void SimRendererWidget::paintGL() {
     // Body +X / north arrow: shown in both Vehicle and World modes.
     drawNorthIndicator(view);
   } // end if (!hideBody)
+  paintHud();
   if (glErrorCheck_)
     while (glGetError() != GL_NO_ERROR)
       ++glErrors_;
@@ -1300,7 +1389,7 @@ void SimRendererWidget::buildShadowMap() {
   shadowReady_ =
       glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
   glBindTexture(GL_TEXTURE_2D, 0);
-  glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
+  glBindFramebuffer(GL_FRAMEBUFFER, context()->defaultFramebufferObject());
   if (!shadowReady_)
     qInfo("[SimRenderer] shadow FBO incomplete -> shadows disabled.");
 }
@@ -1352,7 +1441,7 @@ void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks) {
     }
   progDepth_->release();
 
-  glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
+  glBindFramebuffer(GL_FRAMEBUFFER, context()->defaultFramebufferObject());
   glViewport(0, 0, fbW_, fbH_);
   shadowOn_ = true;
 }
@@ -2471,7 +2560,7 @@ void SimRendererWidget::drawTraining(const QMatrix4x4 &view) {
 // ---------- camera controls ----------
 
 void SimRendererWidget::mousePressEvent(QMouseEvent *e) {
-  setFocus();
+  requestActivate(); // key focus for G/R/X/Y/Z/Esc/WASD (the widget used setFocus)
   last_mouse_ = e->pos();
 
   // Obstacle editing (World mode) takes precedence over camera orbit.
@@ -2611,7 +2700,7 @@ void SimRendererWidget::keyPressEvent(QKeyEvent *e) {
         commitObsTool(true);
         break;
       default:
-        QOpenGLWidget::keyPressEvent(e);
+        QOpenGLWindow::keyPressEvent(e);
         return;
       }
       return;
@@ -2638,7 +2727,7 @@ void SimRendererWidget::keyPressEvent(QKeyEvent *e) {
     }
     if (freeFlyMove(e->key(), e->modifiers() & Qt::ShiftModifier))
       return;
-    QOpenGLWidget::keyPressEvent(e);
+    QOpenGLWindow::keyPressEvent(e);
     return;
   }
   if (obsMode_) {
@@ -2688,13 +2777,13 @@ void SimRendererWidget::keyPressEvent(QKeyEvent *e) {
         commitObsTool(true);
       break;
     default:
-      QOpenGLWidget::keyPressEvent(e);
+      QOpenGLWindow::keyPressEvent(e);
       return;
     }
     return;
   }
   if (!editable_) {
-    QOpenGLWidget::keyPressEvent(e);
+    QOpenGLWindow::keyPressEvent(e);
     return;
   }
   switch (e->key()) {
@@ -2738,7 +2827,7 @@ void SimRendererWidget::keyPressEvent(QKeyEvent *e) {
       commitTool(true);
     break;
   default:
-    QOpenGLWidget::keyPressEvent(e);
+    QOpenGLWindow::keyPressEvent(e);
     return;
   }
 }
@@ -2822,7 +2911,6 @@ void SimRendererWidget::beginTool(Tool t) {
                        ? QVector3D::dotProduct(startWorld_ - o, fwd) / denom
                        : 0.0f;
   planeHit0_ = o + d * tt;
-  setMouseTracking(true);
   update();
 }
 
@@ -2870,7 +2958,6 @@ void SimRendererWidget::commitTool(bool confirm) {
     return;
   tool_ = Tool::None;
   axisLock_ = -1;
-  setMouseTracking(false);
   if (confirm && selected_ >= 0) {
     emit motorEdited(selected_, motorPos_[selected_], motorAxis_[selected_]);
   } else if (selected_ >= 0) { // cancelled: restore the working copy
@@ -2975,7 +3062,6 @@ void SimRendererWidget::beginObsTool(Tool t) {
                        ? QVector3D::dotProduct(obsStartPos_ - o, fwd) / denom
                        : 0.0f;
   obsPlaneHit0_ = o + d * tt;
-  setMouseTracking(true);
   update();
 }
 
@@ -3027,7 +3113,6 @@ void SimRendererWidget::commitObsTool(bool confirm) {
     return;
   obsTool_ = Tool::None;
   obsAxis_ = -1;
-  setMouseTracking(false);
   if (selObs_ >= 0 && selObs_ < obstacles_.size()) {
     if (confirm) {
       const vsim::Obstacle &o = obstacles_[selObs_];
