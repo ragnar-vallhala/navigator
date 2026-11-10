@@ -351,6 +351,10 @@ private:
   int ul_lightvp_ = -1;
   int ul_shadowtex_ = -1;
   int ul_shadowon_ = -1;
+  int ul_drone_ = -1;
+  int ul_droner_ = -1;
+  QVector3D droneShadowPos_;  // drone position for the analytic shadow
+  float droneShadowR_ = 0.0f; // shadow radius [m]; 0 = off
   int ul_sunint_ = -1;
   int ul_ambstr_ = -1;
   int ul_terrain_ = -1;
