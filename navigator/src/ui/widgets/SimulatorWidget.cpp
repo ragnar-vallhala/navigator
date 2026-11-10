@@ -2938,18 +2938,10 @@ void SimulatorWidget::liftDroneToSurface() {
 }
 
 namespace {
-// Where the engine mmaps the collision blob. Per-instance suffix keeps two
-// Navigators isolated (matches SimWorker's fifoSuffixed()).
+// Where the engine mmaps the collision blob (see vsim::worldBlobPath).
 QString worldBlobPath() {
-  const QByteArray suffix = qgetenv("VSIM_FIFO_SUFFIX");
-#ifdef _WIN32
-  // No /tmp; the engine only needs a path it can read, so the user's temp dir.
-  return QDir::tempPath() + QStringLiteral("/vsim_world") +
-         QString::fromLocal8Bit(suffix) + QStringLiteral(".bin");
-#else
-  return QStringLiteral("/tmp/vsim_world") + QString::fromLocal8Bit(suffix) +
-         QStringLiteral(".bin");
-#endif
+  return vsim::worldBlobPath(
+      QString::fromLocal8Bit(qgetenv("VSIM_FIFO_SUFFIX")));
 }
 } // namespace
 

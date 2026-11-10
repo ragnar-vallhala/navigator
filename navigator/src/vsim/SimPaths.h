@@ -27,4 +27,19 @@ namespace vsim {
 // whichever navigator checkout or git worktree happened to be built.
 QString defaultLogDir();
 
+// Directory the world blob and its export temp files live in: /tmp on POSIX
+// (the engine side expects it), the user temp dir on Windows.
+QString worldTmpDir();
+
+// The engine's collision blob. Per-instance suffix keeps two Navigators
+// isolated (matches SimWorker's fifoSuffixed()).
+QString worldBlobPath(const QString &suffix);
+
+// Removes leftover world-export temp files in `dir`: only regular files named
+// exactly vsim_world<suffix>.bin.<N>.tmp (N = export generation, digits only)
+// whose last modification is at least `minAgeSecs` old. The number is a
+// generation counter, not a pid, so age is the only liveness signal. Returns
+// how many files were removed. Anything else in `dir` is left alone.
+int sweepStaleWorldTmp(const QString &dir, qint64 minAgeSecs);
+
 } // namespace vsim

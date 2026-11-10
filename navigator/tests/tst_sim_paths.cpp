@@ -18,7 +18,9 @@
 
 #include "SimPaths.h"
 
+#include <QDateTime>
 #include <QDir>
+#include <QFileInfo>
 #include <QFile>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -44,6 +46,52 @@ private slots:
     qputenv("VAYU_REPO", "/some/vayu");
     QCOMPARE(vsim::defaultLogDir(), QStringLiteral("/some/vayu/logs"));
     qunsetenv("VAYU_REPO");
+  }
+
+  // ---- stale world tmp sweep (temp dir only, never the real /tmp) ----------
+  static void touch(const QString &path, int ageSecs) {
+    QFile f(path);
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.write("x");
+    f.close();
+    QVERIFY(f.open(QIODevice::ReadWrite));
+    QVERIFY(f.setFileTime(QDateTime::currentDateTime().addSecs(-ageSecs),
+                          QFileDevice::FileModificationTime));
+  }
+
+  void sweepRemovesOnlyOldMatchingFiles() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString d = dir.path();
+    const int old = 7200, fresh = 5;
+    touch(d + "/vsim_world.bin.3.tmp", old);        // stale, no suffix
+    touch(d + "/vsim_world_a1b2.bin.12.tmp", old);  // stale, with suffix
+    touch(d + "/vsim_world.bin.4.tmp", fresh);      // young: a live export
+    touch(d + "/vsim_world.bin", old);              // the real blob
+    touch(d + "/vsim_world.bin.x.tmp", old);        // N not a number
+    touch(d + "/vsim_world.bin.5.tmp.keep", old);   // wrong tail
+    touch(d + "/other.bin.3.tmp", old);             // other owner
+    touch(d + "/xvsim_world.bin.3.tmp", old);       // wrong prefix
+    QVERIFY(QDir(d).mkdir("vsim_world.bin.9.tmp")); // a dir, not a file
+
+    QCOMPARE(vsim::sweepStaleWorldTmp(d, 3600), 2);
+
+    QVERIFY(!QFile::exists(d + "/vsim_world.bin.3.tmp"));
+    QVERIFY(!QFile::exists(d + "/vsim_world_a1b2.bin.12.tmp"));
+    for (const char *keep :
+         {"vsim_world.bin.4.tmp", "vsim_world.bin", "vsim_world.bin.x.tmp",
+          "vsim_world.bin.5.tmp.keep", "other.bin.3.tmp",
+          "xvsim_world.bin.3.tmp", "vsim_world.bin.9.tmp"})
+      QVERIFY2(QFileInfo::exists(d + "/" + keep), keep);
+  }
+
+  void sweepOnMissingDirIsHarmless() {
+    QCOMPARE(vsim::sweepStaleWorldTmp("/nonexistent-dir-for-test", 3600), 0);
+  }
+
+  void worldBlobPathUsesWorldTmpDir() {
+    QCOMPARE(vsim::worldBlobPath("_s"),
+             vsim::worldTmpDir() + QStringLiteral("/vsim_world_s.bin"));
   }
 };
 

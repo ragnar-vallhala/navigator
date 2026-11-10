@@ -16,7 +16,11 @@
  */
 #include "SimPaths.h"
 
+#include <QDateTime>
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QRegularExpression>
 #include <QStandardPaths>
 
 namespace vsim {
@@ -29,6 +33,40 @@ QString defaultLogDir() {
       QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
   return base.isEmpty() ? QDir::tempPath() + QStringLiteral("/vayu-gcs/logs")
                         : base + QStringLiteral("/logs");
+}
+
+QString worldTmpDir() {
+#ifdef _WIN32
+  // No /tmp; the engine only needs a path it can read, so the user's temp dir.
+  return QDir::tempPath();
+#else
+  return QStringLiteral("/tmp");
+#endif
+}
+
+QString worldBlobPath(const QString &suffix) {
+  return worldTmpDir() + QStringLiteral("/vsim_world") + suffix +
+         QStringLiteral(".bin");
+}
+
+int sweepStaleWorldTmp(const QString &dir, qint64 minAgeSecs) {
+  // The suffix is user-controlled text (VSIM_FIFO_SUFFIX), so match on the
+  // fixed prefix and the fixed tail only, and require digits for N.
+  static const QRegularExpression re(
+      QStringLiteral("^vsim_world.*\\.bin\\.[0-9]+\\.tmp$"));
+  int removed = 0;
+  const QDateTime now = QDateTime::currentDateTime();
+  const QFileInfoList list = QDir(dir).entryInfoList(
+      {QStringLiteral("vsim_world*.tmp")}, QDir::Files | QDir::NoSymLinks);
+  for (const QFileInfo &fi : list) {
+    if (!re.match(fi.fileName()).hasMatch())
+      continue;
+    if (fi.lastModified().secsTo(now) < minAgeSecs)
+      continue;
+    if (QFile::remove(fi.absoluteFilePath()))
+      ++removed;
+  }
+  return removed;
 }
 
 } // namespace vsim
