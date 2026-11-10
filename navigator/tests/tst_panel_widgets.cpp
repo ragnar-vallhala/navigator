@@ -3,6 +3,7 @@
 
 #include "ui/widgets/PanelWidgets.h"
 
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -67,6 +68,41 @@ private slots:
     QVERIFY(page->width() >= page->minimumSizeHint().width());
     QVERIFY(btn->geometry().right() <= page->width());
     QCOMPARE(elided->toolTip(), longPath);
+  }
+
+  void wrappedRowIsNarrowerAndSwitchesLive() {
+    QWidget page;
+    auto *grid = new QGridLayout(&page);
+    QList<QWidget *> row;
+    for (const char *t : {"RC transmitter", "USB joystick", "/dev/ttyUSB0",
+                          "115200", "Connect", "Acro (ch6)"})
+      row << new QPushButton(QString::fromLatin1(t), &page);
+    ui::layoutWrappedRow(grid, row, false, row[2]);
+    const int normal = page.minimumSizeHint().width();
+    ui::layoutWrappedRow(grid, row, true, row[2]);
+    const int compact = page.minimumSizeHint().width();
+    QVERIFY2(compact < normal, qPrintable(QStringLiteral("%1 !< %2")
+                                              .arg(compact).arg(normal)));
+    QCOMPARE(grid->count(), row.size());
+    QCOMPARE(grid->rowCount(), 2);
+    ui::layoutWrappedRow(grid, row, false, row[2]);
+    QCOMPARE(page.minimumSizeHint().width(), normal);
+  }
+
+  void threeLineRowWithSpacer() {
+    QWidget page;
+    auto *grid = new QGridLayout(&page);
+    QList<QWidget *> row;
+    for (const char *t : {"Start", "Stop", "Reset", "Attach Ext", "FPV cam",
+                          "Down Cam", "Horizon", "Contours", "Prop audio"})
+      row << new QPushButton(QString::fromLatin1(t), &page);
+    ui::layoutWrappedRow(grid, row, false, nullptr, 3, 3);
+    const int normal = page.minimumSizeHint().width();
+    QCOMPARE(grid->rowCount(), 1);
+    ui::layoutWrappedRow(grid, row, true, nullptr, 3, 3);
+    QCOMPARE(grid->rowCount(), 3);
+    QCOMPARE(grid->count(), row.size());
+    QVERIFY(page.minimumSizeHint().width() < normal * 2 / 3);
   }
 };
 
