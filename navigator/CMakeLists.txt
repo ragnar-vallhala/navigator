@@ -238,6 +238,8 @@ set(GCS_SITL_HEADERS
     src/autotune/SysId.h
     src/autotune/AutotuneWorker.h
     src/ui/widgets/SimulatorWidget.h
+    src/ui/widgets/PendingCommand.h
+    src/ui/widgets/CommandRetrier.h
     src/ui/widgets/PanelWidgets.h
     src/ui/widgets/GeometryEditorWidget.h
     src/ui/widgets/WorldEditorWidget.h

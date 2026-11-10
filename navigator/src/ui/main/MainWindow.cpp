@@ -116,7 +116,15 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   // the toolbar goes read-only; the serial controls are usable only in Idle/Fc.
   buildSourceHooks();
   connect(&m_source, &SourceController::stateChanged, this,
-          [this](SourceState now, SourceState) {
+          [this](SourceState now, SourceState was) {
+            // The in-app sim's firmware rejects every command until its clock
+            // is disciplined, and nothing else starts the handshake for it.
+            if (now == SourceState::Sim) {
+              m_tsEst.reset(); // a (re)started firmware: fresh clock
+              startTimeSync();
+            }
+            else if (was == SourceState::Sim)
+              stopTimeSync();
             if (m_toolbar) {
               m_toolbar->setReplayMode(now == SourceState::Replay);
               m_toolbar->setSerialControlsEnabled(now == SourceState::Idle ||
@@ -337,6 +345,10 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   // replay. The signature matches; SimSource just re-emits as an ITelemetrySource.
   connect(m_simulatorWidget, &SimulatorWidget::dataReceived, m_simSource,
           &SimSource::feed);
+  // The firmware's COMMAND_ACKs come back through the same parser; the widget
+  // uses them to retry its Start commands until they land.
+  connect(m_engine->protocol(), &DroneProtocol::commandAckReceived,
+          m_simulatorWidget, &SimulatorWidget::onCommandAck);
   // AT-1: the autotune tab proposes gains; applying to firmware is an explicit
   // operator action. Turn the proposal into CMD_SET_PID frames and send them
   // over the live link (sendToFc refuses in replay; we also require a link).
@@ -1450,15 +1462,13 @@ void MainWindow::setConnected(bool on) {
     m_lastPushedState.clear();
     m_lastFlightMode = -1;
     m_lastFlightSrc = -1;
-    // Start in fast acquisition mode; onTimeSyncResponse relaxes to the
-    // configured period once the clock locks.
-    m_syncLocked = false;
-    m_syncWide = false;
-    m_syncTimer->start(kSyncFastMs);
-    onTimeSyncRequested();
+    startTimeSync();
   } else {
     m_armed = false;
-    m_syncTimer->stop();
+    // The in-app sim has no transport, so a transport going down must not stop
+    // the handshake the running sim is using.
+    if (m_source.state() != SourceState::Sim)
+      stopTimeSync();
   }
 }
 
@@ -1731,6 +1741,30 @@ void MainWindow::onHeartbeatReceived(uint64_t timestamp, uint8_t deviceId) {
     MainStatusBar::flashLive(m_toolbar->liveLabel());
 }
 
+// Start the clock-discipline handshake in fast acquisition mode;
+// onTimeSyncResponse relaxes to the configured period once the clock locks.
+// Fc starts it from setConnected(true); the in-app Sim has no transport (so no
+// connectionStateChanged) and starts it on entering the Sim state.
+void MainWindow::startTimeSync() {
+  m_syncLocked = false;
+#ifdef NAVIGATOR_HAS_SITL
+  if (m_simulatorWidget)
+    m_simulatorWidget->setTimeSynced(false);
+#endif
+  m_syncWide = false;
+  m_syncTimer->start(kSyncFastMs);
+  onTimeSyncRequested();
+}
+
+void MainWindow::stopTimeSync() {
+  m_syncTimer->stop();
+  m_syncLocked = false;
+#ifdef NAVIGATOR_HAS_SITL
+  if (m_simulatorWidget)
+    m_simulatorWidget->setTimeSynced(false);
+#endif
+}
+
 void MainWindow::onTimeSyncRequested() {
   // Both commandable sources need this. The firmware's §10.5 gate rejects
   // EVERY command until the clock is disciplined, and that applies to the
@@ -1796,6 +1830,10 @@ void MainWindow::onTimeSyncResponse(quint8 seq, quint64 t1, quint64 t2,
   const bool relax = locked && m_tsEst.synced();
   if (m_syncLocked != relax) {
     m_syncLocked = relax;
+#ifdef NAVIGATOR_HAS_SITL
+    if (m_simulatorWidget)
+      m_simulatorWidget->setTimeSynced(relax);
+#endif
     if (m_syncTimer)
       m_syncTimer->setInterval(relax ? m_syncPeriodMs : kSyncFastMs);
   }
