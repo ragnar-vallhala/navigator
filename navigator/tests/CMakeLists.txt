@@ -105,6 +105,10 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
       ${SRC}/vsim ${VAYU_SITL_SDK})
 endif()
 
+# ---- Start button latch after a firmware settings reset (header only) -------
+navigator_test(tst_start_gate tst_start_gate.cpp)
+target_include_directories(tst_start_gate PRIVATE ${SRC}/ui/widgets)
+
 # ---- C++ autotune engine (Space + orchestration, synthetic rollout) -------
 navigator_test(tst_autotune_engine
     tst_autotune_engine.cpp

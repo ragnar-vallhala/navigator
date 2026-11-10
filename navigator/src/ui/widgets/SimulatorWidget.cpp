@@ -3360,8 +3360,27 @@ bool SimulatorWidget::eventFilter(QObject *obj, QEvent *ev) {
 // Sim lifecycle
 // ----------------------------------------------------------------------------
 
+static const char *kStartTip = QT_TRANSLATE_NOOP(
+    "SimulatorWidget", "Boot firmware (first time) + start the sim");
+
+void SimulatorWidget::blockStartUntilRestart(const QString &reason) {
+  m_startGate.block(reason);
+  applyStartBlock();
+}
+
+void SimulatorWidget::applyStartBlock() {
+  if (!m_startGate.blocked() || !m_simStartBtn)
+    return;
+  m_startGate.apply(m_simStartBtn, false, tr(kStartTip));
+  if (m_simStatusLabel && !m_sim) {
+    m_simStatusLabel->setText(tr("● Stopped: %1").arg(m_startGate.reason()));
+    m_simStatusLabel->setStyleSheet(
+        QString("color: %1;").arg(Theme::hex(Theme::kTextMuted)));
+  }
+}
+
 void SimulatorWidget::startInAppSim() {
-  if (m_sim)
+  if (m_sim || startBlocked())
     return;
 
   // Per-instance path isolation: publish a suffix for this Navigator process in
@@ -3609,7 +3628,7 @@ void SimulatorWidget::stopInAppSim() {
   if (m_retryTimer)
     m_retryTimer->stop();
   m_propAudio.setMotors({0.0f, 0.0f, 0.0f, 0.0f}); // silence once stopped
-  m_simStartBtn->setEnabled(true);
+  m_simStartBtn->setEnabled(!startBlocked());
   if (m_simAttachBtn)
     m_simAttachBtn->setEnabled(true);
   m_attached = false;
@@ -3626,6 +3645,7 @@ void SimulatorWidget::stopInAppSim() {
   m_simStatusLabel->setText(tr("● Stopped (firmware idle)"));
   m_simStatusLabel->setStyleSheet(
       QString("color: %1;").arg(Theme::hex(Theme::kTextMuted)));
+  applyStartBlock(); // status text + tooltip, if Start is blocked
   // Vehicle config is editable again; stay in World until the user
   // switches back (clicking the Vehicle tab re-enables motor gizmos).
   if (m_vehicleTab)
