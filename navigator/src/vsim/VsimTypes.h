@@ -139,6 +139,7 @@ struct WorldConfig {
 
   // Live-tunable generator params (exposed in the World tab's Procedural
   // section). seed is driven by proceduralSeed; the rest are user knobs.
+  QString worldPreset; // id of the preset that filled the fields ("" = custom)
   procgen::FieldParams field; // terrain shape + surface colour bands
   procgen::FloraParams flora; // grass density / slope / height
   procgen::GrassLook look;    // live grass/terrain shading knobs
