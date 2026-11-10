@@ -31,6 +31,7 @@
 #include "procgen/TerrainGen.h"
 
 #include <cmath>
+#include <vector>
 
 using namespace vsim::procgen;
 
@@ -43,6 +44,15 @@ TerrainParams smallParams(uint32_t seed = 1337u) {
   return p;
 }
 } // namespace
+
+// Sample coordinates lo..hi in steps of `step`, built from an integer index
+// (a float loop counter drifts and trips cert-flp30-c).
+static std::vector<float> axis(float lo, float hi, float step) {
+  std::vector<float> v;
+  const int n = int((hi - lo) / step);
+  for (int i = 0; i <= n; ++i) v.push_back(lo + float(i) * step);
+  return v;
+}
 
 class TstProcgen : public QObject {
   Q_OBJECT
@@ -597,8 +607,8 @@ void TstProcgen::groundCoverDeterministicAndBounded() {
   for (int pal = 0; pal <= 9; ++pal) {
     const GroundCover a(1337u, pal), b(1337u, pal), c(4242u, pal);
     bool seedDiffers = false;
-    for (float y = -200.0f; y <= 200.0f; y += 9.7f)
-      for (float x = -200.0f; x <= 200.0f; x += 9.7f) {
+    for (float y : axis(-200.0f, 200.0f, 9.7f))
+      for (float x : axis(-200.0f, 200.0f, 9.7f)) {
         const GroundCover::Sample sa = a.sample(x, y, kBase, 0.2f, 0.99f);
         const GroundCover::Sample sb = b.sample(x, y, kBase, 0.2f, 0.99f);
         const GroundCover::Sample sc = c.sample(x, y, kBase, 0.2f, 0.99f);
@@ -626,8 +636,8 @@ void TstProcgen::groundCoverGivesVarietyInEveryPalette() {
     float lo = 9.0f, hi = -9.0f;
     double sum = 0.0, sum2 = 0.0;
     int n = 0, nonGrass = 0;
-    for (float y = -200.0f; y <= 200.0f; y += 4.0f)
-      for (float x = -200.0f; x <= 200.0f; x += 4.0f) {
+    for (float y : axis(-200.0f, 200.0f, 4.0f))
+      for (float x : axis(-200.0f, 200.0f, 4.0f)) {
         const GroundCover::Sample s = g.sample(x, y, kBase, 0.05f, 1.0f);
         const float l = luma(s.color);
         lo = std::min(lo, l);
@@ -653,8 +663,8 @@ void TstProcgen::groundCoverPondsAndTracksExist() {
   for (int pal : {0, 2, 3, 5, 6, 7, 8, 9}) {
     const GroundCover g(1337u, pal);
     int water = 0;
-    for (float y = -400.0f; y <= 400.0f; y += 3.0f)
-      for (float x = -400.0f; x <= 400.0f; x += 3.0f) {
+    for (float y : axis(-400.0f, 400.0f, 3.0f))
+      for (float x : axis(-400.0f, 400.0f, 3.0f)) {
         const GroundCover::Sample s = g.sample(x, y, kBase, 0.02f, 1.0f);
         if (s.grass < 0.2f && s.color.z > s.color.x + 0.03f)
           ++water;
@@ -663,15 +673,15 @@ void TstProcgen::groundCoverPondsAndTracksExist() {
   }
   // The desert has no ponds.
   const GroundCover d(1337u, kPalDesert);
-  for (float y = -400.0f; y <= 400.0f; y += 5.0f)
-    for (float x = -400.0f; x <= 400.0f; x += 5.0f) {
+  for (float y : axis(-400.0f, 400.0f, 5.0f))
+    for (float x : axis(-400.0f, 400.0f, 5.0f)) {
       const GroundCover::Sample s = d.sample(x, y, kBase, 0.02f, 1.0f);
       QVERIFY(!(s.grass < 0.2f && s.color.z > s.color.x + 0.1f));
     }
   // Ponds never open on a slope (they would tilt): steep ground keeps grass.
   const GroundCover g(1337u, kPalFlat);
-  for (float y = -400.0f; y <= 400.0f; y += 6.0f)
-    for (float x = -400.0f; x <= 400.0f; x += 6.0f) {
+  for (float y : axis(-400.0f, 400.0f, 6.0f))
+    for (float x : axis(-400.0f, 400.0f, 6.0f)) {
       const GroundCover::Sample s = g.sample(x, y, kBase, 0.02f, 0.80f);
       QVERIFY(!(s.grass < 0.2f && s.color.z > s.color.x + 0.03f));
     }
