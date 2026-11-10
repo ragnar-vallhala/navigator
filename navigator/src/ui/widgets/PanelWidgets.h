@@ -2,7 +2,10 @@
 // Small helpers that keep a side panel from being dragged narrower than its
 // contents (which makes Qt crop widgets instead of refusing).
 
+#include <QAction>
+#include <QClipboard>
 #include <QFontMetrics>
+#include <QGuiApplication>
 #include <QLabel>
 #include <QPainter>
 #include <QScrollArea>
@@ -46,10 +49,25 @@ public:
   void setFullText(const QString &t) {
     m_full = t;
     setToolTip(t);
+    if (!m_copyAction) { // elided text can't be selected, so offer a copy menu
+      m_copyAction = new QAction(QObject::tr("Copy full text"), this);
+      QObject::connect(m_copyAction, &QAction::triggered, this, [this] {
+        QGuiApplication::clipboard()->setText(m_full);
+      });
+      addAction(m_copyAction);
+      setContextMenuPolicy(Qt::ActionsContextMenu);
+    }
+    updateGeometry();
     update();
   }
   QString fullText() const { return m_full; }
 
+  // Preferred size is the whole string; the minimum is just an ellipsis, so the
+  // label can shrink but still gets full width when there is room.
+  QSize sizeHint() const override {
+    return QSize(fontMetrics().horizontalAdvance(m_full) + 2,
+                 QLabel::sizeHint().height());
+  }
   QSize minimumSizeHint() const override {
     return QSize(fontMetrics().horizontalAdvance(QStringLiteral("…")) + 2,
                  QLabel::minimumSizeHint().height());
@@ -66,6 +84,7 @@ protected:
 
 private:
   QString m_full;
+  QAction *m_copyAction = nullptr;
 };
 
 } // namespace ui
