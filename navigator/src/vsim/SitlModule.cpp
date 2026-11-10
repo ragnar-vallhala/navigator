@@ -57,6 +57,24 @@ QStringList candidatePaths() {
 
 QStringList SitlModule::searchPaths() { return candidatePaths(); }
 
+QString SitlModule::loadFailureReason(const QString &candidate,
+                                      const QString &libraryError) {
+  const QFileInfo fi(candidate);
+  if (!fi.exists())
+    return QFileInfo(fi.path()).isDir()
+               ? QStringLiteral("%1 (not found)").arg(candidate)
+               : QStringLiteral("%1 (no such directory)").arg(candidate);
+  if (fi.isDir())
+    return QStringLiteral("%1: is a directory, not a shared library")
+        .arg(candidate);
+  // The file exists, so the loader's own text is the real cause. Fall back to
+  // a generic line only if it gave none.
+  return QStringLiteral("%1: %2")
+      .arg(candidate, libraryError.isEmpty()
+                          ? QStringLiteral("could not be loaded")
+                          : libraryError);
+}
+
 SitlModule::SitlModule() {
   // Before the first load: the firmware reads VAYU_VFS_DIR from the process
   // environment, and its default is shared by every process on the machine.
@@ -71,12 +89,7 @@ SitlModule::SitlModule() {
     // missing symbol.
     lib.setLoadHints(QLibrary::ResolveAllSymbolsHint);
     if (!lib.load()) {
-      // QLibrary tries several names around the base (libX.so, X.so, ...) and
-      // its errorString reports only the last, so quoting it verbatim prints a
-      // path nobody passed. The candidate is what the user can act on.
-      tried << (QFileInfo(QFileInfo(candidate).path()).isDir()
-                    ? QStringLiteral("%1 (not found)").arg(candidate)
-                    : QStringLiteral("%1 (no such directory)").arg(candidate));
+      tried << loadFailureReason(candidate, lib.errorString());
       continue;
     }
 
