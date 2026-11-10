@@ -25,6 +25,10 @@ function(navigator_test name)
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endfunction()
 
+# ---- Start-command retry / ACK state machine (header only) -----------------
+navigator_test(tst_command_retrier tst_command_retrier.cpp)
+target_include_directories(tst_command_retrier PRIVATE ${SRC}/ui/widgets)
+
 # ---- Time-sync estimator (NTP offset/delay, jitter filter, skew) ----------
 navigator_test(tst_time_sync_estimator
     tst_time_sync_estimator.cpp
@@ -181,6 +185,9 @@ navigator_test(tst_procgen
     ${SRC}/vsim/procgen/Flora.cpp
     ${SRC}/vsim/ChunkStreamer.cpp)
 target_include_directories(tst_procgen PRIVATE ${SRC}/vsim)
+
+# ---- Side-panel sizing helpers (no splitter may crop a panel) -------------
+navigator_test(tst_panel_widgets tst_panel_widgets.cpp)
 
 # ---- In-app simulator end to end (SITL builds only) -----------------------
 # Navigator's SitlModule + SimWorker + RcBridge against the real engine module:
