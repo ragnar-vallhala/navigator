@@ -116,7 +116,15 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   // the toolbar goes read-only; the serial controls are usable only in Idle/Fc.
   buildSourceHooks();
   connect(&m_source, &SourceController::stateChanged, this,
-          [this](SourceState now, SourceState) {
+          [this](SourceState now, SourceState was) {
+            // The in-app sim's firmware rejects every command until its clock
+            // is disciplined, and nothing else starts the handshake for it.
+            if (now == SourceState::Sim) {
+              m_tsEst.reset(); // a (re)started firmware: fresh clock
+              startTimeSync();
+            }
+            else if (was == SourceState::Sim)
+              stopTimeSync();
             if (m_toolbar) {
               m_toolbar->setReplayMode(now == SourceState::Replay);
               m_toolbar->setSerialControlsEnabled(now == SourceState::Idle ||
@@ -1454,19 +1462,13 @@ void MainWindow::setConnected(bool on) {
     m_lastPushedState.clear();
     m_lastFlightMode = -1;
     m_lastFlightSrc = -1;
-    // Start in fast acquisition mode; onTimeSyncResponse relaxes to the
-    // configured period once the clock locks.
-    m_syncLocked = false;
-#ifdef NAVIGATOR_HAS_SITL
-    if (m_simulatorWidget)
-      m_simulatorWidget->setTimeSynced(false);
-#endif
-    m_syncWide = false;
-    m_syncTimer->start(kSyncFastMs);
-    onTimeSyncRequested();
+    startTimeSync();
   } else {
     m_armed = false;
-    m_syncTimer->stop();
+    // The in-app sim has no transport, so a transport going down must not stop
+    // the handshake the running sim is using.
+    if (m_source.state() != SourceState::Sim)
+      stopTimeSync();
   }
 }
 
@@ -1737,6 +1739,30 @@ void MainWindow::onHeartbeatReceived(uint64_t timestamp, uint8_t deviceId) {
   // Flash the LIVE label bright; the UI tick will fade it back.
   if (m_toolbar)
     MainStatusBar::flashLive(m_toolbar->liveLabel());
+}
+
+// Start the clock-discipline handshake in fast acquisition mode;
+// onTimeSyncResponse relaxes to the configured period once the clock locks.
+// Fc starts it from setConnected(true); the in-app Sim has no transport (so no
+// connectionStateChanged) and starts it on entering the Sim state.
+void MainWindow::startTimeSync() {
+  m_syncLocked = false;
+#ifdef NAVIGATOR_HAS_SITL
+  if (m_simulatorWidget)
+    m_simulatorWidget->setTimeSynced(false);
+#endif
+  m_syncWide = false;
+  m_syncTimer->start(kSyncFastMs);
+  onTimeSyncRequested();
+}
+
+void MainWindow::stopTimeSync() {
+  m_syncTimer->stop();
+  m_syncLocked = false;
+#ifdef NAVIGATOR_HAS_SITL
+  if (m_simulatorWidget)
+    m_simulatorWidget->setTimeSynced(false);
+#endif
 }
 
 void MainWindow::onTimeSyncRequested() {
