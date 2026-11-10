@@ -91,6 +91,24 @@ target_include_directories(tst_sysid_rtos PRIVATE ${SRC}/autotune)
 navigator_test(tst_vfs_dir tst_vfs_dir.cpp ${SRC}/vsim/VfsDir.cpp)
 target_include_directories(tst_vfs_dir PRIVATE ${SRC}/vsim ${CMAKE_CURRENT_SOURCE_DIR})
 
+# ---- Simulator default paths (log dir, stale world tmp sweep) --------------
+navigator_test(tst_sim_paths tst_sim_paths.cpp ${SRC}/vsim/SimPaths.cpp)
+target_include_directories(tst_sim_paths PRIVATE ${SRC}/vsim)
+
+# ---- SitlModule load-failure text (needs only the ABI header) ---------------
+if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
+  navigator_test(tst_sitl_module_error
+      tst_sitl_module_error.cpp
+      ${SRC}/vsim/SitlModule.cpp ${SRC}/vsim/SitlModule.h
+      ${SRC}/vsim/VfsDir.cpp ${SRC}/vsim/VfsDir.h)
+  target_include_directories(tst_sitl_module_error PRIVATE
+      ${SRC}/vsim ${VAYU_SITL_SDK})
+endif()
+
+# ---- Start button latch after a firmware settings reset (header only) -------
+navigator_test(tst_start_gate tst_start_gate.cpp)
+target_include_directories(tst_start_gate PRIVATE ${SRC}/ui/widgets)
+
 # ---- C++ autotune engine (Space + orchestration, synthetic rollout) -------
 navigator_test(tst_autotune_engine
     tst_autotune_engine.cpp

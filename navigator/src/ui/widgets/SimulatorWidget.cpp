@@ -20,6 +20,7 @@
 
 #include "../../vsim/AirframePresets.h"
 #include "../../vsim/MeshLoader.h"
+#include "../../vsim/SimPaths.h"
 #include "../../vsim/SitlModule.h"
 #include "protocol/CommandCodec.h"
 #include "navlink_msgs.h" // NAVLINK_MSGID_*: the ack's `command`
@@ -297,7 +298,6 @@ QString defaultRepoRoot() {
   return QDir::homePath() + "/Documents/Drone/stack/vayu";
 }
 
-QString defaultLogDir() { return defaultRepoRoot() + "/logs"; }
 
 // C trampoline handed to the module as its telemetry sink. Runs
 // on whichever firmware thread is producing the bytes (telemetry
@@ -323,7 +323,7 @@ SimulatorWidget::SimulatorWidget(QWidget *parent) : QWidget(parent) {
   QSettings settings;
   m_repoRoot =
       settings.value(kRepoRootSettingKey, defaultRepoRoot()).toString();
-  m_logDir = settings.value(kLogDirSettingKey, defaultLogDir()).toString();
+  m_logDir = settings.value(kLogDirSettingKey, vsim::defaultLogDir()).toString();
 
   // Route firmware UART2 bytes through our queued slot. Once the module boots
   // the telemetry chain, packets begin flowing into onUartBytes() on the GUI
@@ -1137,7 +1137,8 @@ void SimulatorWidget::buildUi() {
     repoRow->addWidget(new QLabel(tr("Repo root:"), simBody));
     m_repoRootEdit = new QLineEdit(m_repoRoot, simBody);
     m_repoRootEdit->setToolTip(
-        tr("Path to the vayu repo. Used for log paths."));
+        tr("Path to the vayu repo. Used to find the autotune backend "
+           "(build_sitl_rtos). Logs go to the Log dir below."));
     connect(m_repoRootEdit, &QLineEdit::editingFinished, this, [this] {
       m_repoRoot = m_repoRootEdit->text();
       QSettings().setValue(kRepoRootSettingKey, m_repoRoot);
@@ -2908,18 +2909,10 @@ void SimulatorWidget::liftDroneToSurface() {
 }
 
 namespace {
-// Where the engine mmaps the collision blob. Per-instance suffix keeps two
-// Navigators isolated (matches SimWorker's fifoSuffixed()).
+// Where the engine mmaps the collision blob (see vsim::worldBlobPath).
 QString worldBlobPath() {
-  const QByteArray suffix = qgetenv("VSIM_FIFO_SUFFIX");
-#ifdef _WIN32
-  // No /tmp; the engine only needs a path it can read, so the user's temp dir.
-  return QDir::tempPath() + QStringLiteral("/vsim_world") +
-         QString::fromLocal8Bit(suffix) + QStringLiteral(".bin");
-#else
-  return QStringLiteral("/tmp/vsim_world") + QString::fromLocal8Bit(suffix) +
-         QStringLiteral(".bin");
-#endif
+  return vsim::worldBlobPath(
+      QString::fromLocal8Bit(qgetenv("VSIM_FIFO_SUFFIX")));
 }
 } // namespace
 
@@ -3333,8 +3326,27 @@ QImage SimulatorWidget::grabSimView() {
 // Sim lifecycle
 // ----------------------------------------------------------------------------
 
+static const char *kStartTip = QT_TRANSLATE_NOOP(
+    "SimulatorWidget", "Boot firmware (first time) + start the sim");
+
+void SimulatorWidget::blockStartUntilRestart(const QString &reason) {
+  m_startGate.block(reason);
+  applyStartBlock();
+}
+
+void SimulatorWidget::applyStartBlock() {
+  if (!m_startGate.blocked() || !m_simStartBtn)
+    return;
+  m_startGate.apply(m_simStartBtn, false, tr(kStartTip));
+  if (m_simStatusLabel && !m_sim) {
+    m_simStatusLabel->setText(tr("● Stopped: %1").arg(m_startGate.reason()));
+    m_simStatusLabel->setStyleSheet(
+        QString("color: %1;").arg(Theme::hex(Theme::kTextMuted)));
+  }
+}
+
 void SimulatorWidget::startInAppSim() {
-  if (m_sim)
+  if (m_sim || startBlocked())
     return;
 
   // Per-instance path isolation: publish a suffix for this Navigator process in
@@ -3566,7 +3578,7 @@ void SimulatorWidget::stopInAppSim() {
   if (m_retryTimer)
     m_retryTimer->stop();
   m_propAudio.setMotors({0.0f, 0.0f, 0.0f, 0.0f}); // silence once stopped
-  m_simStartBtn->setEnabled(true);
+  m_simStartBtn->setEnabled(!startBlocked());
   if (m_simAttachBtn)
     m_simAttachBtn->setEnabled(true);
   m_attached = false;
@@ -3583,6 +3595,7 @@ void SimulatorWidget::stopInAppSim() {
   m_simStatusLabel->setText(tr("● Stopped (firmware idle)"));
   m_simStatusLabel->setStyleSheet(
       QString("color: %1;").arg(Theme::hex(Theme::kTextMuted)));
+  applyStartBlock(); // status text + tooltip, if Start is blocked
   // Vehicle config is editable again; stay in World until the user
   // switches back (clicking the Vehicle tab re-enables motor gizmos).
   if (m_vehicleTab)

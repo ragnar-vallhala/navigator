@@ -860,6 +860,10 @@ void MainWindow::buildMenuBar() {
         if (vsim::resetPrivateVfs(priv, appData, false, &why)) {
           m_logPanel->appendLog("[GCS] firmware settings erased: " + priv +
                                 " (restart Navigator to apply)");
+          if (m_simulatorWidget)
+            m_simulatorWidget->blockStartUntilRestart(
+                tr("Firmware settings were reset. Restart Navigator to start "
+                   "the simulator again."));
           // The firmware module caches 0:pid.bin in RAM and is never
           // unloaded, so until a restart the next Start or gain save would
           // write the old settings back.

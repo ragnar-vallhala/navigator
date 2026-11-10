@@ -16,6 +16,8 @@
  */
 #pragma once
 
+#include "StartGate.h"
+
 #include "CommandRetrier.h"
 #include "vsim/SimWorker.h"
 #include <QElapsedTimer>
@@ -183,7 +185,17 @@ public:
   void stopInAppSim();
   void stopAutotune();
 
+  // Keep Start disabled until the app is restarted, showing `reason` as its
+  // tooltip and in the status line. For after "Reset Firmware Settings": the
+  // engine module caches the old settings in RAM and is never unloaded, so a
+  // Start before a restart would write them back. Call stopInAppSim() first.
+  void blockStartUntilRestart(const QString &reason);
+  bool startBlocked() const { return m_startGate.blocked(); }
+
 private:
+  StartGate m_startGate; // blocked: Start stays disabled this process
+  void applyStartBlock();
+
   void buildUi();
   void appendLog(const QString &tag, const QString &text);
 
