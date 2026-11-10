@@ -221,8 +221,10 @@ jobs:
           for t in $(ctest --test-dir build-win --rerun-failed -N | sed -n 's/.*Test *#[0-9]*: //p'); do
             exe=$(find build-win -name "$t.exe" | head -1)
             echo "=== $t ($exe)"
-            "$exe" -v2 2>&1 | tail -60
-            echo "exit=${PIPESTATUS[0]}"
+            rc=0
+            "$exe" -v2 -o "$t.out.txt,txt" > "$t.stdout.txt" 2>&1 || rc=$?
+            echo "exit=$rc"
+            cat "$t.out.txt" "$t.stdout.txt" 2>&1 | tail -80
           done
 
   # The one check branch protection requires: a job that skipped (docs-only
