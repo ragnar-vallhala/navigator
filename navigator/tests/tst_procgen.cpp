@@ -61,6 +61,9 @@ private slots:
   void streamerLoadsNeighborhood();
   void streamerStableWithinCell();
   void streamerPagesOnCrossing();
+  void collisionRecentreHysteresis();
+  void collisionRecentreLeadsFastVehicle();
+  void collisionWindowKeepsUpWithShipLatency();
   void floraSitsOnSurfaceAndDeterministic();
   void floraTilesWithoutDuplicates();
   void renderAndCollisionSurfacesAgree();
@@ -320,6 +323,86 @@ void TstProcgen::streamerPagesOnCrossing() {
   QCOMPARE(d.builds, static_cast<std::size_t>(2 * r + 1));
   QCOMPARE(d.removes, static_cast<std::size_t>(2 * r + 1));
   QVERIFY(d.collision); // centre changed cell -> collision reshipped
+}
+
+// ---- collision window recentre (pure decision) -----------------------------
+using CR = vsim::ChunkStreamer;
+
+void TstProcgen::collisionRecentreHysteresis() {
+  const float C = 100.0f;
+  // Hovering just over the border of the centre chunk (cell 0): no flapping.
+  QVERIFY(!CR::collisionRecentre(101.0f, 50.0f, 0, 0, 0, 0, C).recentre);
+  QVERIFY(!CR::collisionRecentre(120.0f, 50.0f, 0, 0, 0, 0, C).recentre);
+  QVERIFY(!CR::collisionRecentre(-20.0f, 50.0f, 0, 0, 0, 0, C).recentre);
+  // Clearly committed to the neighbour (> 0.75 chunk from the centre middle).
+  const auto r = CR::collisionRecentre(130.0f, 50.0f, 0, 0, 0, 0, C);
+  QVERIFY(r.recentre);
+  QCOMPARE(r.cx, 1);
+  QCOMPARE(r.cy, 0);
+  // Same spot, but the window is already centred on cell 1: stay put (the
+  // decision is stable, it does not flip back).
+  QVERIFY(!CR::collisionRecentre(130.0f, 50.0f, 0, 0, 1, 0, C).recentre);
+  // Unset centre always recentres, on the vehicle's chunk.
+  const auto f = CR::collisionRecentre(-30.0f, 250.0f, 0, 0, INT_MIN, INT_MIN, C);
+  QVERIFY(f.recentre);
+  QCOMPARE(f.cx, -1);
+  QCOMPARE(f.cy, 2);
+}
+
+void TstProcgen::collisionRecentreLeadsFastVehicle() {
+  const float C = 192.0f;
+  // Mid-chunk, doing 150 m/s east: after 1 s it is 150 m on, i.e. in cell 1.
+  // The window must already be moving, long before the chunk boundary.
+  const auto r = CR::collisionRecentre(96.0f, 96.0f, 150.0f, 0, 0, 0, C);
+  QVERIFY(r.recentre);
+  QCOMPARE(r.cx, 1);
+  QCOMPARE(r.cy, 0);
+  // A slow vehicle at the same spot does not trigger it.
+  QVERIFY(!CR::collisionRecentre(96.0f, 96.0f, 5.0f, 0, 0, 0, C).recentre);
+  // Absurd speed: the look-ahead is capped, so the target is at most one chunk
+  // from the vehicle and its own chunk stays inside a radius-1 window.
+  const auto fast = CR::collisionRecentre(96.0f, 96.0f, 5000.0f, 0, 0, 0, C);
+  QVERIFY(fast.recentre);
+  QVERIFY(std::abs(fast.cx - 0) <= 1);
+}
+
+// Fly straight lines at several speeds, polling at 10 Hz like the widget does,
+// with the new window only taking effect `shipS` after a recentre (BVH build +
+// queue). The vehicle's chunk must always be inside the SHIPPED radius-1 window.
+void TstProcgen::collisionWindowKeepsUpWithShipLatency() {
+  const float C = 192.0f, dt = 0.1f, shipS = 0.30f; // measured ~0.1-0.2 s + margin
+  for (float speed : {10.0f, 40.0f, 80.0f, 120.0f}) {
+    for (float ang : {0.0f, 0.6f, 1.5708f, 2.4f}) {
+      const float vx = speed * std::cos(ang), vy = speed * std::sin(ang);
+      int polledCx = INT_MIN, polledCy = INT_MIN; // what the streamer decided
+      int shipCx = INT_MIN, shipCy = INT_MIN;     // what the engine has
+      int pendCx = 0, pendCy = 0;
+      float pendAt = -1.0f;
+      for (int step = 0; step < 600; ++step) {
+        const float t = static_cast<float>(step) * dt;
+        const float x = 7.0f + vx * t, y = 11.0f + vy * t;
+        if (pendAt >= 0.0f && t >= pendAt) {
+          shipCx = pendCx;
+          shipCy = pendCy;
+          pendAt = -1.0f;
+        }
+        const auto r =
+            CR::collisionRecentre(x, y, vx, vy, polledCx, polledCy, C);
+        if (r.recentre && (r.cx != polledCx || r.cy != polledCy)) {
+          polledCx = pendCx = r.cx;
+          polledCy = pendCy = r.cy;
+          pendAt = t + shipS;
+        }
+        if (t < 1.0f)
+          continue; // initial load
+        const int dx = static_cast<int>(std::floor(x / C)) - shipCx;
+        const int dy = static_cast<int>(std::floor(y / C)) - shipCy;
+        QVERIFY2(std::abs(dx) <= 1 && std::abs(dy) <= 1,
+                 qPrintable(QString("outran window at %1 m/s ang %2 t=%3")
+                                .arg(speed).arg(ang).arg(t)));
+      }
+    }
+  }
 }
 
 void TstProcgen::floraSitsOnSurfaceAndDeterministic() {
