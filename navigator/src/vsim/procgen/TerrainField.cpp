@@ -42,14 +42,45 @@ TerrainField::TerrainField(const FieldParams &p)
     : p_(p), hills_(p.seed), mtn_(p.seed ^ 0x9e3779b9u),
       macro_(p.seed ^ 0x68bc21ebu), warp_(p.seed ^ 0xb5297a4du),
       baseFreq_(p.featureM > 0.0f ? 1.0f / p.featureM : 1.0f / 150.0f),
-      macroFreq_(p.macroM > 0.0f ? 1.0f / p.macroM : 1.0f / 1400.0f) {}
+      macroFreq_(p.macroM > 0.0f ? 1.0f / p.macroM : 1.0f / 1400.0f) {
+  duneDir_ = static_cast<float>(p.seed % 628u) * 0.01f;
+  padHeight_ = rawHeight(0.0f, 0.0f);
+}
 
 float TerrainField::height(float wx, float wy) const {
+  const float h = rawHeight(wx, wy);
+  const float R = p_.flatRadiusM;
+  if (R <= 0.0f)
+    return h;
+  const float r = std::sqrt(wx * wx + wy * wy);
+  const float t = smoothstep(R, 2.5f * R, r); // 0 on the pad, 1 outside
+  return padHeight_ + (h - padHeight_) * t;
+}
+
+float TerrainField::duneHeight(float wx, float wy) const {
+  const float nx = wx * baseFreq_;
+  const float ny = wy * baseFreq_;
+  // Crest lines meander (domain warp) and dunes vary in size (amp).
+  const float u = (wx * std::cos(duneDir_) + wy * std::sin(duneDir_)) *
+                      baseFreq_ +
+                  0.45f * warp_.fbm(nx * 0.7f, ny * 0.7f, 3, 2.0f, 0.5f);
+  const float amp =
+      0.55f + 0.45f * (hills_.fbm(nx * 0.35f, ny * 0.35f, 2, 2.0f, 0.5f) * 0.5f +
+                       0.5f);
+  const float prof = std::pow(0.5f + 0.5f * std::sin(6.2831853f * u), 1.5f);
+  const float ripple = 0.5f + 0.5f * hills_.fbm(nx * 6.0f, ny * 6.0f, 2, 2.0f, 0.5f);
+  return clamp01(0.88f * amp * prof + 0.05f * ripple) * p_.heightM;
+}
+
+float TerrainField::rawHeight(float wx, float wy) const {
+  if (p_.shape == 1)
+    return duneHeight(wx, wy);
   // Macro field: where mountains live (high) vs. open meadow basins (low). Slow,
   // so ranges and valleys span hundreds of metres and never repeat near you.
   const float mx = wx * macroFreq_;
   const float my = wy * macroFreq_;
-  const float macro = macro_.fbm(mx, my, 3, 2.0f, 0.5f) * 0.5f + 0.5f; // [0,1]
+  const float macro = clamp01(macro_.fbm(mx, my, 3, 2.0f, 0.5f) * 0.5f + 0.5f +
+                              p_.mountainBias); // [0,1]
   const float mountainAmount = smoothstep(0.40f, 0.68f, macro);
 
   // Detail bands. Domain-warp so nothing looks grid-aligned.
@@ -106,10 +137,35 @@ PgVec3 TerrainField::color(float h, float flatness) const {
   // Grassy ground matches the CANOPY-FLOOR colour at the base of the GPU blades
   // (GpuGrass root ~vec3(0.05,0.14,0.09)) so the ground showing between blades
   // reads as the same shaded floor, not a lighter gap.
-  const PgVec3 green{0.06f, 0.15f, 0.09f};
-  const PgVec3 brown{0.29f, 0.23f, 0.15f};
-  const PgVec3 rock{0.33f, 0.33f, 0.32f};
-  const PgVec3 snow{0.80f, 0.83f, 0.88f};
+  PgVec3 green{0.06f, 0.15f, 0.09f};
+  PgVec3 brown{0.29f, 0.23f, 0.15f};
+  PgVec3 rock{0.33f, 0.33f, 0.32f};
+  PgVec3 snow{0.80f, 0.83f, 0.88f};
+  switch (p_.palette) {
+  case 1: // desert sand: shaded troughs -> sunlit crests
+    green = {0.66f, 0.51f, 0.31f};
+    brown = {0.84f, 0.72f, 0.48f};
+    rock = {0.56f, 0.40f, 0.27f};
+    snow = {0.88f, 0.78f, 0.55f};
+    break;
+  case 2: // forest floor: moss + loam
+    green = {0.12f, 0.20f, 0.08f};
+    brown = {0.24f, 0.18f, 0.11f};
+    rock = {0.30f, 0.28f, 0.25f};
+    break;
+  case 3: // pasture: brighter grass, for terrain drawn without blade grass
+    green = {0.25f, 0.42f, 0.15f};
+    brown = {0.46f, 0.41f, 0.22f};
+    rock = {0.44f, 0.41f, 0.37f};
+    break;
+  case 4: // concrete / gravel yard
+    green = {0.42f, 0.42f, 0.40f};
+    brown = {0.36f, 0.35f, 0.33f};
+    rock = {0.30f, 0.30f, 0.30f};
+    break;
+  default:
+    break;
+  }
 
   // Altitude band: green valley -> brown mid -> bare rock high. The green holds
   // up to near the grass line so thinning grass blends into green ground (not a

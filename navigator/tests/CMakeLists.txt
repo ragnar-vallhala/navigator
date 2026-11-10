@@ -175,9 +175,34 @@ navigator_test(tst_procgen
     ${SRC}/vsim/procgen/Noise.cpp
     ${SRC}/vsim/procgen/TerrainGen.cpp
     ${SRC}/vsim/procgen/TerrainField.cpp
+    ${SRC}/vsim/procgen/WorldPresets.cpp
     ${SRC}/vsim/procgen/Flora.cpp
     ${SRC}/vsim/ChunkStreamer.cpp)
 target_include_directories(tst_procgen PRIVATE ${SRC}/vsim)
+
+# ---- Procedural world presets (Qt-free core, headless) ----------------------
+navigator_test(tst_worldpresets
+    tst_worldpresets.cpp
+    ${SRC}/vsim/procgen/Noise.cpp
+    ${SRC}/vsim/procgen/TerrainField.cpp
+    ${SRC}/vsim/procgen/WorldPresets.cpp)
+target_include_directories(tst_worldpresets PRIVATE ${SRC}/vsim)
+
+# ---- World tab preset wiring (headless widget test) ------------------------
+if(NAVIGATOR_SITL)
+  navigator_test(tst_worldeditor
+      tst_worldeditor.cpp
+      ${SRC}/ui/widgets/WorldEditorWidget.cpp
+      ${SRC}/ui/widgets/CollapsibleSection.cpp
+      ${SRC}/core/Theme.cpp
+      ${SRC}/core/ui/Buttons.h # Q_OBJECT header: moc must see it
+      ${SRC}/vsim/ProceduralWorld.cpp
+      ${SRC}/vsim/procgen/Noise.cpp
+      ${SRC}/vsim/procgen/TerrainGen.cpp
+      ${SRC}/vsim/procgen/TerrainField.cpp
+      ${SRC}/vsim/procgen/WorldPresets.cpp)
+  target_include_directories(tst_worldeditor PRIVATE ${SRC}/vsim ${SRC}/ui/widgets)
+endif()
 
 # ---- Side-panel sizing helpers (no splitter may crop a panel) -------------
 navigator_test(tst_panel_widgets tst_panel_widgets.cpp)

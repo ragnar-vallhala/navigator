@@ -2224,6 +2224,18 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
                                               c.collisionResolution)
                : 0.0f;
     };
+  } else if (vsim::isFieldArenaBiome(w.proceduralBiome)) {
+    // Preset arenas (hills/alpine/desert/forest/racing/yard/...): sample the
+    // same meshed surface the arena mesh + collision are built from.
+    auto fld = std::make_shared<vsim::procgen::TerrainField>(
+        vsim::arenaField(w));
+    const float sz = w.proceduralSizeM;
+    const int res = std::clamp(w.proceduralResolution, 4, 1024);
+    rawHeightAt = [fld](float n, float e) { return fld->height(n, e); };
+    heightAt = [fld, sz, res](float n, float e) {
+      return vsim::procgen::arenaSurfaceHeight(*fld, sz, res, n, e);
+    };
+    minimapRange = w.proceduralSizeM * 0.5f;
   } else if (vsim::isKnownBiome(w.proceduralBiome)) {
     auto hf = std::make_shared<vsim::procgen::Heightfield>(
         vsim::proceduralMeadowHeightfield(w));
@@ -2241,7 +2253,10 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
     m_minimap->setSampler(rawHeightAt); // ~12k samples: must stay cheap
     if (heightAt) {
       m_minimap->setRangeM(minimapRange);
-      m_minimap->setReferenceHeight(endless ? w.field.heightM : 80.0f);
+      m_minimap->setReferenceHeight(
+          (endless || vsim::isFieldArenaBiome(w.proceduralBiome))
+              ? w.field.heightM
+              : 80.0f);
     }
   }
 
@@ -3553,6 +3568,11 @@ void SimulatorWidget::persistWorld(const vsim::WorldConfig &w) {
   s.setValue("worldMeshOffX", w.worldMeshOffset.x());
   s.setValue("worldMeshOffY", w.worldMeshOffset.y());
   s.setValue("worldMeshOffZ", w.worldMeshOffset.z());
+  // World preset (procedural arena): the id + seed regenerate it exactly.
+  s.setValue("worldPreset", w.worldPreset);
+  s.setValue("worldPresetSeed", w.proceduralSeed);
+  // Full procedural params (field, flora, look...): knob tweaks survive restart.
+  s.setValue("proceduralJson", WorldEditorWidget::serializeProcedural(w));
   s.beginWriteArray("obstacles", w.obstacles.size());
   for (int i = 0; i < w.obstacles.size(); ++i) {
     const vsim::Obstacle &o = w.obstacles[i];
@@ -3618,7 +3638,23 @@ vsim::WorldConfig SimulatorWidget::restoreWorld() {
     w.obstacles.push_back(o);
   }
   s.endArray();
+  const QString preset = s.value("worldPreset").toString();
+  const quint32 pseed = s.value("worldPresetSeed", w.proceduralSeed).toUInt();
+  const QString procJson = s.value("proceduralJson").toString();
   s.endGroup();
+  // Full params saved: restore them verbatim (the preset is NOT re-applied over
+  // hand-tuned knobs). Older settings have only preset id + seed: regenerate
+  // biome/field from those and keep the saved obstacle list (user edits).
+  if (!procJson.isEmpty() &&
+      WorldEditorWidget::deserializeProcedural(w, procJson)) {
+    // restored verbatim
+  } else if (!preset.isEmpty()) {
+    const QVector<vsim::Obstacle> saved = w.obstacles;
+    if (vsim::applyWorldPreset(w, preset, pseed)) {
+      w.worldPreset = preset;
+      w.obstacles = saved;
+    }
+  }
   return w;
 }
 
