@@ -16,7 +16,9 @@
  */
 #pragma once
 
+#include "CommandRetrier.h"
 #include "vsim/SimWorker.h"
+#include <QElapsedTimer>
 #include "vsim/SimRendererWidget.h"
 #include "vsim/ChunkStreamer.h"
 #include "vsim/procgen/Flora.h"
@@ -144,6 +146,13 @@ public slots:
   // meta-object system.
   void onUartBytes();
 
+  // The firmware's COMMAND_ACK stream (MainWindow wires DroneProtocol's
+  // commandAckReceived here). Acks end the Start-command retries.
+  void onCommandAck(quint32 command, quint8 reqSeq, quint8 result);
+  // Time-sync state from MainWindow (true once the clock is locked + synced).
+  // Pending Start commands are sent the moment it becomes true.
+  void setTimeSynced(bool synced);
+
   // Append firmware UART2 bytes to the coalescing buffer (called from the C
   // trampoline on the sim worker thread) and queue at most one onUartBytes()
   // drain. Public so the trampoline can reach it.
@@ -227,6 +236,17 @@ private:
   void applyGeometryToRenderer();
   void persistGeometry(const vsim::GeometryConfig &g);
   vsim::GeometryConfig restoreGeometry();
+  // Register a firmware push that the pre-sync command gate can drop: it is
+  // sent once synced and re-sent every second until the firmware ACKs it (see
+  // CommandRetrier). Other pushes (e.g. an airframe gain set) register here.
+  void armStartCommand(const QString &key, quint32 msgid, int expected,
+                       const QString &label, const QString &consequence,
+                       CommandRetrier::Send send);
+  void armMixPush(const vsim::GeometryConfig &g);
+  void retryTick();
+  CommandRetrier m_retrier;
+  class QTimer *m_retryTimer = nullptr;
+  QElapsedTimer m_retryClock;
   void persistWorld(const vsim::WorldConfig &w);
   vsim::WorldConfig restoreWorld();
   void persistWind(const vsim::WindConfig &w);

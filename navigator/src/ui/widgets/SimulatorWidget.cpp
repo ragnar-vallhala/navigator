@@ -21,6 +21,7 @@
 #include "../../vsim/MeshLoader.h"
 #include "../../vsim/SitlModule.h"
 #include "protocol/CommandCodec.h"
+#include "navlink_msgs.h" // NAVLINK_MSGID_*: the ack's `command`
 #include "../../vsim/ProceduralWorld.h"
 #include "../../vsim/WorldMeshBuilder.h"
 #include "CollapsibleSection.h"
@@ -590,9 +591,12 @@ void SimulatorWidget::buildUi() {
             &GeometryEditorWidget::setMotorFromGizmo);
     connect(m_geomEditor, &GeometryEditorWidget::geometryApplied, this, [this] {
       applyGeometryToRenderer();
-      pushFirmwareMotorGeometry(m_geomEditor->physicsConfig());
-      if (m_sim)
+      if (m_sim) {
+        armMixPush(m_geomEditor->physicsConfig());
         m_sim->sendGeometry(m_geomEditor->physicsConfig());
+      } else {
+        pushFirmwareMotorGeometry(m_geomEditor->physicsConfig());
+      }
       persistGeometry(m_geomEditor->config());
       appendLog(
           "geom",
@@ -3157,8 +3161,15 @@ void SimulatorWidget::startInAppSim() {
       return;
     const auto cfg = m_geomEditor->physicsConfig();
     pushRatesToSim(); // apply configured loop rates before geometry/world
-    pushFirmwareMotorGeometry(
-        cfg); // firmware roll/pitch/yaw mix signs (physics frame)
+    // Firmware roll/pitch/yaw mix signs (physics frame) and the flight-mode
+    // release. Both are commands, so the firmware drops them until the time
+    // sync completes: armed, sent once synced, re-sent until ACKed.
+    armMixPush(cfg);
+    armStartCommand(
+        QStringLiteral("flightmode"), NAVLINK_MSGID_CMD_SET_FLIGHT_MODE, 1,
+        tr("flight-mode release"),
+        tr("the RC switch may not control the mode"),
+        [] { SitlModule::instance().send(CommandCodec::encodeSetFlightMode(2)); });
     m_sim->sendGeometry(cfg); // in-process physics motor layout
     m_sim->sendWorld(m_worldEditor->config());
     m_sim->sendObstacles(m_worldEditor->config().obstacles);
@@ -3176,15 +3187,16 @@ void SimulatorWidget::startInAppSim() {
               tr("firmware roll-mix %1 (default -+ ; mismatch = inverted "
                  "roll). pushed to firmware + physics.")
                   .arg(rollMixString(cfg)));
-    // Belt-and-suspenders: re-assert BOTH the firmware mix AND the physics layout
+    // Belt-and-suspenders: re-assert the physics layout
     // shortly after start. If a restart race left one side on its default while
     // the other had the real (possibly Y-mirrored) geometry, roll inverts and
     // the craft topples at lift-off; this guarantees they agree before arming.
     QTimer::singleShot(800, this, [this] {
       if (!m_sim)
         return;
+      // (The firmware mix is no longer re-asserted blindly here: it is retried
+      // until the firmware ACKs it, see armMixPush.)
       const auto c = m_geomEditor->physicsConfig();
-      pushFirmwareMotorGeometry(c);
       m_sim->sendGeometry(c);
       pushRatesToSim(); // re-assert loop rates too: the daemon boots at its
                         // compiled default, so a dropped/raced SET_RATES would
@@ -3298,6 +3310,9 @@ void SimulatorWidget::stopInAppSim() {
   }
   m_sim->deleteLater();
   m_sim = nullptr;
+  m_retrier.cancelAll(); // nothing left to ACK
+  if (m_retryTimer)
+    m_retryTimer->stop();
   m_propAudio.setMotors({0.0f, 0.0f, 0.0f, 0.0f}); // silence once stopped
   m_simStartBtn->setEnabled(true);
   if (m_simAttachBtn)
@@ -3377,6 +3392,55 @@ void SimulatorWidget::applyGeometryToRenderer() {
                                    m_geomEditor->meshNormals());
     m_downRenderer->setMotorLayout(pos, axis, spin);
   }
+}
+
+void SimulatorWidget::armStartCommand(const QString &key, quint32 msgid,
+                                      int expected, const QString &label,
+                                      const QString &consequence,
+                                      CommandRetrier::Send send) {
+  if (!m_retryClock.isValid())
+    m_retryClock.start();
+  if (!m_retryTimer) {
+    m_retrier.setLog([this](const QString &s) { appendLog("geom", s); });
+    m_retryTimer = new QTimer(this);
+    m_retryTimer->setInterval(int(PendingCommand::kRetryMs));
+    connect(m_retryTimer, &QTimer::timeout, this, [this] { retryTick(); });
+  }
+  if (m_retrier.arm(key, msgid, expected, label, consequence, std::move(send),
+                    m_retryClock.elapsed()))
+    m_retryTimer->start();
+}
+
+void SimulatorWidget::armMixPush(const vsim::GeometryConfig &g) {
+  armStartCommand(QStringLiteral("mix"), NAVLINK_MSGID_CMD_SET_MOTOR_GEOMETRY, 1,
+                  tr("firmware motor mix (roll-mix %1)").arg(rollMixString(g)),
+                  tr("the simulator may fly the default mix and invert roll"),
+                  [g] { pushFirmwareMotorGeometry(g); });
+}
+
+void SimulatorWidget::retryTick() {
+  if (!m_sim) { // sim stopped under us
+    m_retrier.cancelAll();
+    m_retryTimer->stop();
+    return;
+  }
+  m_retrier.tick(m_retryClock.elapsed());
+  if (!m_retrier.anyPending())
+    m_retryTimer->stop();
+}
+
+void SimulatorWidget::setTimeSynced(bool synced) {
+  if (!m_retryClock.isValid())
+    m_retryClock.start();
+  m_retrier.setSynced(synced, m_retryClock.elapsed());
+}
+
+void SimulatorWidget::onCommandAck(quint32 command, quint8 reqSeq,
+                                   quint8 result) {
+  Q_UNUSED(reqSeq); // acks are counted per round, not matched per frame
+  m_retrier.onAck(command, result);
+  if (m_retryTimer && !m_retrier.anyPending())
+    m_retryTimer->stop();
 }
 
 void SimulatorWidget::persistGeometry(const vsim::GeometryConfig &g) {
