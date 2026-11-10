@@ -20,6 +20,7 @@
 
 #include "../../vsim/AirframePresets.h"
 #include "../../vsim/MeshLoader.h"
+#include "../../vsim/SimPaths.h"
 #include "../../vsim/SitlModule.h"
 #include "protocol/CommandCodec.h"
 #include "navlink_msgs.h" // NAVLINK_MSGID_*: the ack's `command`
@@ -340,7 +341,6 @@ QString defaultRepoRoot() {
   return QDir::homePath() + "/Documents/Drone/stack/vayu";
 }
 
-QString defaultLogDir() { return defaultRepoRoot() + "/logs"; }
 
 // C trampoline handed to the module as its telemetry sink. Runs
 // on whichever firmware thread is producing the bytes (telemetry
@@ -366,7 +366,7 @@ SimulatorWidget::SimulatorWidget(QWidget *parent) : QWidget(parent) {
   QSettings settings;
   m_repoRoot =
       settings.value(kRepoRootSettingKey, defaultRepoRoot()).toString();
-  m_logDir = settings.value(kLogDirSettingKey, defaultLogDir()).toString();
+  m_logDir = settings.value(kLogDirSettingKey, vsim::defaultLogDir()).toString();
 
   // Route firmware UART2 bytes through our queued slot. Once the module boots
   // the telemetry chain, packets begin flowing into onUartBytes() on the GUI
@@ -1166,7 +1166,8 @@ void SimulatorWidget::buildUi() {
     repoRow->addWidget(new QLabel(tr("Repo root:"), simBody));
     m_repoRootEdit = new QLineEdit(m_repoRoot, simBody);
     m_repoRootEdit->setToolTip(
-        tr("Path to the vayu repo. Used for log paths."));
+        tr("Path to the vayu repo. Used to find the autotune backend "
+           "(build_sitl_rtos). Logs go to the Log dir below."));
     connect(m_repoRootEdit, &QLineEdit::editingFinished, this, [this] {
       m_repoRoot = m_repoRootEdit->text();
       QSettings().setValue(kRepoRootSettingKey, m_repoRoot);

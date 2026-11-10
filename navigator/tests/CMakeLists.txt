@@ -91,6 +91,10 @@ target_include_directories(tst_sysid_rtos PRIVATE ${SRC}/autotune)
 navigator_test(tst_vfs_dir tst_vfs_dir.cpp ${SRC}/vsim/VfsDir.cpp)
 target_include_directories(tst_vfs_dir PRIVATE ${SRC}/vsim ${CMAKE_CURRENT_SOURCE_DIR})
 
+# ---- Simulator default paths (log dir, stale world tmp sweep) --------------
+navigator_test(tst_sim_paths tst_sim_paths.cpp ${SRC}/vsim/SimPaths.cpp)
+target_include_directories(tst_sim_paths PRIVATE ${SRC}/vsim)
+
 # ---- C++ autotune engine (Space + orchestration, synthetic rollout) -------
 navigator_test(tst_autotune_engine
     tst_autotune_engine.cpp
