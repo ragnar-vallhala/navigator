@@ -105,6 +105,8 @@ private slots:
   // New data slots
   void onHeartbeatReceived(uint64_t timestamp, uint8_t deviceId);
   void onTimeSyncRequested();
+  void startTimeSync();
+  void stopTimeSync();
   void onTimeSyncResponse(quint8 seq, quint64 t1, quint64 t2, quint64 t3,
                           quint64 t4);
 
