@@ -27,5 +27,5 @@ target_include_directories(navigator_workspace PUBLIC ${WS_DIR})
 target_link_libraries(navigator_workspace PUBLIC Qt6::Widgets
     ads::qtadvanceddocking-qt6)
 
-qt_add_executable(workspace_mock main.cpp MockPanels.h)
-target_link_libraries(workspace_mock PRIVATE navigator_workspace)
+qt_add_executable(workspace_mock main.cpp MockPanels.h GlPanel.h)
+target_link_libraries(workspace_mock PRIVATE navigator_workspace Qt6::OpenGLWidgets)

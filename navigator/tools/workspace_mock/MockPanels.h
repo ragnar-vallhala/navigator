@@ -19,6 +19,8 @@
 #include "PanelRegistry.h"
 #include "WorkspaceManager.h"
 
+#include "GlPanel.h"
+
 #include <QLabel>
 
 // The panels Navigator will have (mapping to today's pages is in the commit
@@ -35,7 +37,8 @@ inline ws::PanelRegistry mockPanels() {
       return l;
     });
   };
-  add("sim.view", "Simulator view");
+  // The simulator view is a real QOpenGLWidget, like SimRendererWidget.
+  r.add("sim.view", "Simulator view", [] { return new GlPanel; });
   add("sim.world", "World");
   add("sim.vehicle", "Vehicle");
   add("sim.tuning", "Tuning");
