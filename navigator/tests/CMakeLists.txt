@@ -171,9 +171,18 @@ navigator_test(tst_procgen
     ${SRC}/vsim/procgen/Noise.cpp
     ${SRC}/vsim/procgen/TerrainGen.cpp
     ${SRC}/vsim/procgen/TerrainField.cpp
+    ${SRC}/vsim/procgen/WorldPresets.cpp
     ${SRC}/vsim/procgen/Flora.cpp
     ${SRC}/vsim/ChunkStreamer.cpp)
 target_include_directories(tst_procgen PRIVATE ${SRC}/vsim)
+
+# ---- Procedural world presets (Qt-free core, headless) ----------------------
+navigator_test(tst_worldpresets
+    tst_worldpresets.cpp
+    ${SRC}/vsim/procgen/Noise.cpp
+    ${SRC}/vsim/procgen/TerrainField.cpp
+    ${SRC}/vsim/procgen/WorldPresets.cpp)
+target_include_directories(tst_worldpresets PRIVATE ${SRC}/vsim)
 
 # ---- In-app simulator end to end (SITL builds only) -----------------------
 # Navigator's SitlModule + SimWorker + RcBridge against the real engine module:

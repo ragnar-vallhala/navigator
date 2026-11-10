@@ -20,6 +20,7 @@
 #include "CollapsibleSection.h"
 
 #include "../../core/Theme.h"
+#include "../../vsim/ProceduralWorld.h"
 
 #include <QAbstractSpinBox>
 #include <QCheckBox>
@@ -101,6 +102,11 @@ QJsonObject worldToJson(const vsim::WorldConfig &w) {
                     {"feature_m", w.field.featureM},
                     {"mountain_mix", w.field.mountainMix},
                     {"max_slope", w.field.maxSlope},
+                    {"preset", w.worldPreset},
+                    {"shape", w.field.shape},
+                    {"palette", w.field.palette},
+                    {"mountain_bias", w.field.mountainBias},
+                    {"flat_radius_m", w.field.flatRadiusM},
                     {"col_brown", w.field.colBrownT},
                     {"col_rock", w.field.colRockT},
                     {"col_snow", w.field.colSnowT},
@@ -166,6 +172,12 @@ vsim::WorldConfig worldFromJson(const QJsonObject &root) {
   w.field.featureM = pg.value("feature_m").toDouble(w.field.featureM);
   w.field.mountainMix = pg.value("mountain_mix").toDouble(w.field.mountainMix);
   w.field.maxSlope = pg.value("max_slope").toDouble(w.field.maxSlope);
+  w.worldPreset = pg.value("preset").toString(w.worldPreset);
+  w.field.shape = pg.value("shape").toInt(w.field.shape);
+  w.field.palette = pg.value("palette").toInt(w.field.palette);
+  w.field.mountainBias =
+      pg.value("mountain_bias").toDouble(w.field.mountainBias);
+  w.field.flatRadiusM = pg.value("flat_radius_m").toDouble(w.field.flatRadiusM);
   w.field.colBrownT = pg.value("col_brown").toDouble(w.field.colBrownT);
   w.field.colRockT = pg.value("col_rock").toDouble(w.field.colRockT);
   w.field.colSnowT = pg.value("col_snow").toDouble(w.field.colSnowT);
@@ -313,6 +325,20 @@ void WorldEditorWidget::buildProceduralSection(QVBoxLayout *root) {
   procBiome_->addItem(tr("Meadow (finite arena)"), QStringLiteral("meadow"));
   procBiome_->addItem(tr("Endless meadow (streaming)"),
                       QStringLiteral("endless"));
+  for (const auto &p : vsim::worldPresetList())
+    if (p.first != QLatin1String("meadow"))
+      procBiome_->addItem(p.second, p.first);
+
+  procPreset_ = new QComboBox(body);
+  procPreset_->addItem(tr("Custom"), QString());
+  for (const auto &p : vsim::worldPresetList())
+    procPreset_->addItem(p.second, p.first);
+  procPreset_->setToolTip(
+      tr("One-click procedural worlds, all generated from the Seed below "
+         "(same seed -> same world). Replaces the terrain settings and the "
+         "obstacle list; racing/yard/forest add gates, boxes or trees that "
+         "the simulator collides with. Generate re-rolls with the current "
+         "seed."));
 
   procSeed_ = new QSpinBox(body);
   procSeed_->setRange(0, 2147483647);
@@ -329,6 +355,7 @@ void WorldEditorWidget::buildProceduralSection(QVBoxLayout *root) {
   procResolution_->setToolTip(
       tr("Grid samples per side (higher = finer terrain, more triangles)."));
 
+  form->addRow(tr("World preset:"), procPreset_);
   form->addRow(tr("Biome:"), procBiome_);
   form->addRow(tr("Seed:"), procSeed_);
   form->addRow(tr("Size:"), procSizeM_);
@@ -350,7 +377,32 @@ void WorldEditorWidget::buildProceduralSection(QVBoxLayout *root) {
   // dragging a spinner doesn't rebuild the mesh + BVH on every step.
   connect(procBiome_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
           [this, pull] {
+            if (procSyncing_)
+              return;
             pull();
+            cfg_.worldPreset.clear(); // a manual biome pick is a custom world
+            if (procPreset_) {
+              procSyncing_ = true;
+              procPreset_->setCurrentIndex(0);
+              procSyncing_ = false;
+            }
+            emit worldMeshChanged();
+          });
+  connect(procPreset_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+          [this, pull](int) {
+            if (procSyncing_)
+              return;
+            const QString id = procPreset_->currentData().toString();
+            if (id.isEmpty()) {
+              cfg_.worldPreset.clear();
+              return;
+            }
+            pull(); // pick up the seed field
+            if (!vsim::applyWorldPreset(cfg_, id, cfg_.proceduralSeed))
+              return;
+            cfg_.worldPreset = id;
+            syncConfigToUi();
+            emit obstaclesChanged();
             emit worldMeshChanged();
           });
   connect(procSeed_, QOverload<int>::of(&QSpinBox::valueChanged), this,
@@ -367,6 +419,11 @@ void WorldEditorWidget::buildProceduralSection(QVBoxLayout *root) {
         tr("(Re)generate the world from the current biome params."));
     connect(gen, &QPushButton::clicked, this, [this, pull] {
       pull();
+      if (!cfg_.worldPreset.isEmpty() &&
+          vsim::applyWorldPreset(cfg_, cfg_.worldPreset, cfg_.proceduralSeed)) {
+        syncConfigToUi();
+        emit obstaclesChanged();
+      }
       if (cfg_.proceduralBiome.isEmpty())
         return;
       emit worldMeshChanged();
@@ -399,6 +456,32 @@ void WorldEditorWidget::buildWindSection(QVBoxLayout *root) {
   turbSigma_->setToolTip(
       tr("Dryden turbulence RMS intensity; 0 = smooth wind."));
 
+  windPreset_ = new QComboBox(body);
+  windPreset_->addItem(tr("Custom"), QString());
+  for (const auto &p : vsim::windPresetList())
+    windPreset_->addItem(p.second, p.first);
+  windPreset_->setToolTip(
+      tr("Fill the fields below from a preset (calm ~1 m/s, breezy ~4 m/s "
+         "with light gusts, gusty ~6 m/s with strong gusts); the heading comes "
+         "from the world seed. Press Apply to Sim to push it."));
+  connect(windPreset_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+          this, [this](int) {
+            if (windSyncing_)
+              return;
+            const QString id = windPreset_->currentData().toString();
+            if (id.isEmpty())
+              return;
+            bool ok = false;
+            const vsim::WindConfig w =
+                vsim::windPresetConfig(id, cfg_.proceduralSeed, &ok);
+            if (!ok)
+              return;
+            wind_ = w;
+            syncWindToUi();
+            if (windApplyBtn_)
+              windApplyBtn_->setEnabled(true); // staged: user presses Apply
+          });
+  form->addRow(tr("Preset:"), windPreset_);
   form->addRow(windEnable_);
   form->addRow(tr("Steady N:"), windN_);
   form->addRow(tr("Steady E:"), windE_);
@@ -978,6 +1061,10 @@ void WorldEditorWidget::setConfig(const vsim::WorldConfig &c) {
   if (procBiome_) {
     const int idx = procBiome_->findData(cfg_.proceduralBiome);
     procBiome_->setCurrentIndex(idx >= 0 ? idx : 0);
+  }
+  if (procPreset_) {
+    const int pi = procPreset_->findData(cfg_.worldPreset);
+    procPreset_->setCurrentIndex(pi >= 0 ? pi : 0);
   }
   if (procSeed_)
     procSeed_->setValue(static_cast<int>(cfg_.proceduralSeed));

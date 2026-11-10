@@ -131,6 +131,8 @@ private:
   // Procedural world controls (Phase 0). Biome "None" = off (use imported
   // mesh); selecting a biome generates and takes precedence.
   QComboBox *procBiome_ = nullptr;
+  QComboBox *procPreset_ = nullptr; // world preset (biome + terrain + obstacles)
+  QComboBox *windPreset_ = nullptr; // wind preset (calm / breezy / gusty)
   QSpinBox *procSeed_ = nullptr;
   QDoubleSpinBox *procSizeM_ = nullptr;
   QSpinBox *procResolution_ = nullptr;
