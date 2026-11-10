@@ -67,12 +67,18 @@ QString SitlModule::loadFailureReason(const QString &candidate,
   if (fi.isDir())
     return QStringLiteral("%1: is a directory, not a shared library")
         .arg(candidate);
-  // The file exists, so the loader's own text is the real cause. Fall back to
-  // a generic line only if it gave none.
+  // The file exists. QLibrary tries several names around the base and its
+  // errorString() reports only the LAST attempt, so it can say "No such file"
+  // about a name nobody passed. Quote it only when it is about this very path
+  // and is not that misleading text; otherwise say what is known.
+  const bool usable = !libraryError.isEmpty() &&
+                      libraryError.contains(candidate) &&
+                      !libraryError.contains(QStringLiteral("No such file"));
   return QStringLiteral("%1: %2")
-      .arg(candidate, libraryError.isEmpty()
-                          ? QStringLiteral("could not be loaded")
-                          : libraryError);
+      .arg(candidate,
+           usable ? libraryError
+                  : QStringLiteral("exists but could not be loaded (wrong "
+                                   "ABI/architecture or missing dependency)"));
 }
 
 SitlModule::SitlModule() {

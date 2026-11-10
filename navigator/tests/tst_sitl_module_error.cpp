@@ -57,8 +57,29 @@ private slots:
     QVERIFY(!lib.errorString().isEmpty());
     const QString r = SitlModule::loadFailureReason(p, lib.errorString());
     QVERIFY2(!r.contains("not found"), qPrintable(r));
-    QVERIFY2(r.contains(lib.errorString()), qPrintable(r));
+    // The real cause of a non-ELF file, never the misleading "No such file".
+    QVERIFY2(!r.contains("No such file"), qPrintable(r));
+    QVERIFY2(r.contains("too short") || r.contains("ELF") ||
+                 r.contains("invalid") || r.contains("exists but could not"),
+             qPrintable(r));
     QVERIFY(r.startsWith(p));
+  }
+
+  void misleadingLoaderTextIsNotQuoted() {
+    QTemporaryDir dir;
+    const QString p = dir.filePath("x.so");
+    QFile f(p);
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.write("junk");
+    f.close();
+    // A loader error about another name, or "No such file", must not be shown.
+    const QString a = SitlModule::loadFailureReason(
+        p, "Cannot load library /elsewhere/libx.so: (No such file or directory)");
+    QVERIFY2(!a.contains("No such file"), qPrintable(a));
+    QVERIFY2(a.contains("exists but could not be loaded"), qPrintable(a));
+    const QString b = SitlModule::loadFailureReason(
+        p, "Cannot load library /elsewhere/libx.so: (file too short)");
+    QVERIFY2(b.contains("exists but could not be loaded"), qPrintable(b));
   }
 
   void existingFileWithEmptyLoaderErrorIsStillNotNotFound() {
