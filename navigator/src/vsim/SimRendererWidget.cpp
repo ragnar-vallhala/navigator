@@ -454,7 +454,7 @@ SimRendererWidget::~SimRendererWidget() {
   for (Mesh *m :
        {&ground_, &axes_, &body_, &rotor_, &thrustLine_, &comMarker_,
         &gizmoArrow_, &gizmoRing_, &digitMesh_[0], &digitMesh_[1],
-        &digitMesh_[2], &digitMesh_[3], &northArrow_, &glyphN_, &droneMesh_}) {
+        &digitMesh_[2], &digitMesh_[3], &northArrow_, &glyphN_, &locator_, &droneMesh_}) {
     m->vbo.destroy();
     m->vao.destroy();
   }
@@ -515,29 +515,64 @@ void SimRendererWidget::rebuildDroneModel() {
 // frame) so it never strobes or appears to run backwards; the motion-blur
 // disc alpha carries "how fast" instead.
 void SimRendererWidget::updateRotors(float dt) {
-  const int nb = std::max(1, model_.bladeCount);
-  const float dtc = std::clamp(dt, 1.0f / 240.0f, 0.05f);
-  const float limitRps = 0.4f / (float(nb) * dtc); // revolutions / s
   for (int i = 0; i < 4; ++i) {
     const float rps = std::fabs(snap_.motor_omega[i]) / (2.0f * float(M_PI));
-    const float vis = limitRps * std::tanh(rps / limitRps);
-    const float dir = motorSpin_[i] >= 0 ? 1.0f : -1.0f;
-    rotorAngle_[i] = std::fmod(
-        rotorAngle_[i] + dir * vis * 2.0f * float(M_PI) * dt, 2.0f * float(M_PI));
+    rotorAngle_[i] = vsim::advanceRotorAngle(
+        rotorAngle_[i], motorSpin_[i], snap_.motor_omega[i], model_.bladeCount,
+        dt);
     const float t = std::clamp((rps - 25.0f) / 55.0f, 0.0f, 1.0f);
     rotorBlur_[i] = t * t * (3.0f - 2.0f * t);
   }
 }
 
+// When the model covers fewer than ~12 px, draw a fixed-size heading chevron
+// at its screen position so the drone can always be found. Pixel size is
+// estimated from the model span and the camera distance.
+void SimRendererWidget::drawDroneLocator(const QMatrix4x4 &view,
+                                         const QMatrix4x4 &model) {
+  float span = model_.visualPropRadius * 2.0f;
+  for (int i = 0; i < 4; ++i)
+    span = std::max(span, 2.0f * (std::hypot(model_.hub[i][0], model_.hub[i][1]) +
+                                  model_.visualPropRadius));
+  const float d = (camEye_ - snap_.pos_w).length();
+  const float pxSize = span * 1.5f / std::max(0.01f, d * 2.0f * std::tan(
+                                       qDegreesToRadians(30.0f))) * float(fbH_);
+  if (pxSize >= 12.0f || !std::isfinite(pxSize))
+    return;
+  const QMatrix4x4 vp = proj_ * view;
+  const QVector4D c = vp * (model * QVector4D(0, 0, 0, 1));
+  const QVector4D f = vp * (model * QVector4D(1, 0, 0, 1));
+  if (c.w() <= 0.0f || f.w() <= 0.0f)
+    return;
+  const QVector2D pc(c.x() / c.w() * 0.5f * fbW_, c.y() / c.w() * 0.5f * fbH_);
+  const QVector2D pf(f.x() / f.w() * 0.5f * fbW_, f.y() / f.w() * 0.5f * fbH_);
+  QVector2D dir = pf - pc;
+  if (dir.lengthSquared() < 1e-6f)
+    dir = QVector2D(0, 1);
+  const float ang = qRadiansToDegrees(std::atan2(dir.y(), dir.x())) - 90.0f;
+  const float r = 9.0f; // chevron half-size [px]
+  QMatrix4x4 m;
+  m.translate(c.x() / c.w(), c.y() / c.w(), 0.0f);
+  m.scale(r / (0.5f * fbW_), r / (0.5f * fbH_), 1.0f);
+  m.rotate(ang, 0.0f, 0.0f, 1.0f);
+  const QMatrix4x4 savedProj = proj_;
+  proj_.setToIdentity();
+  glDisable(GL_DEPTH_TEST);
+  drawMesh(locator_, m, QVector3D(1.0f, 0.9f, 0.1f));
+  glEnable(GL_DEPTH_TEST);
+  proj_ = savedProj;
+}
+
 void SimRendererWidget::drawDroneModel(const QMatrix4x4 &view,
                                        const QMatrix4x4 &modelIn) {
-  // Far-visibility boost: a 5-inch quad is ~3 px wide at 60 m, so past ~12 m the
-  // model grows gently about its origin (x1.4 at 20 m, x3.4 from ~60 m). Not in
+  // Far-visibility boost: past ~12 m the model grows gently about its origin
+  // (x1.2 at 20 m, x1.5 from ~32 m), capped so size cues stay honest; the
+  // screen-space locator covers the distance where it is still tiny. Not in
   // the editor, where the geometry must read true to scale.
   QMatrix4x4 model = modelIn;
   if (!editable_) {
     const float d = (camEye_ - snap_.pos_w).length();
-    const float s = std::clamp(1.0f + (d - 12.0f) / 20.0f, 1.0f, 3.4f);
+    const float s = std::clamp(1.0f + (d - 12.0f) / 40.0f, 1.0f, 1.5f);
     model.scale(s);
   }
   drawLit(modelBody_, view, model, QVector3D(1, 1, 1));
@@ -935,6 +970,8 @@ void SimRendererWidget::paintGL() {
         rotorClock_.start();
       updateRotors(dt);
       drawDroneModel(view, model);
+      if (!editable_)
+        drawDroneLocator(view, model);
     }
   }
   if (!hideBody) {
@@ -1986,6 +2023,26 @@ void SimRendererWidget::drawMotorLabels(const QMatrix4x4 &view) {
 }
 
 void SimRendererWidget::buildNorth() {
+  // Screen-space locator: chevron pointing +Y (rotated to the heading).
+  {
+    float v[] = {
+        0.0f, 1.0f, 0.0f, -0.7f, -0.7f, 0.0f, //
+        0.0f, 1.0f, 0.0f, 0.7f,  -0.7f, 0.0f, //
+        -0.7f, -0.7f, 0.0f, 0.0f, -0.25f, 0.0f, //
+        0.7f, -0.7f, 0.0f, 0.0f, -0.25f, 0.0f,
+    };
+    locator_.vao.create();
+    locator_.vao.bind();
+    locator_.vbo.create();
+    locator_.vbo.bind();
+    locator_.vbo.allocate(v, sizeof(v));
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+    locator_.vbo.release();
+    locator_.vao.release();
+    locator_.vertex_count = 8;
+    locator_.primitive = GL_LINES;
+  }
   // Arrow along body +X (north), in the body XY plane: shaft + two head
   // segments. Drawn through the model matrix so it rotates with the body.
   {

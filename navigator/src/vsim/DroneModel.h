@@ -77,4 +77,11 @@ DroneModel buildDroneModel(const DroneModelInput &in);
 // Colours shared with the renderer (blur disc tint).
 std::array<float, 3> propTipColor(int spinSign);
 
+// New prop angle [rad, wrapped to (-2pi, 2pi)] after dt seconds at |omega|
+// rad/s. spinSign +1 = counter-clockwise seen from above, which is a positive
+// angle about body -Z (up). The drawn rate is soft-capped below the
+// blade-passing alias limit so blades never strobe or look reversed.
+float advanceRotorAngle(float angle, int spinSign, float omega, int blades,
+                        float dt);
+
 } // namespace vsim

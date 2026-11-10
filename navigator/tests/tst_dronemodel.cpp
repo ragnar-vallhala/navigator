@@ -196,6 +196,18 @@ private slots:
     QVERIFY(propTipColor(+1) != propTipColor(-1));
   }
 
+  void spinDirectionMatchesSign() {
+    // +1 (CCW from above) must advance the angle positively (rotation about
+    // body -Z), -1 negatively; zero omega must not move; the visual rate never
+    // exceeds the strobe limit however fast the motor runs.
+    const float dt = 1.0f / 60.0f;
+    QVERIFY(advanceRotorAngle(0.0f, +1, 300.0f, 3, dt) > 0.0f);
+    QVERIFY(advanceRotorAngle(0.0f, -1, 300.0f, 3, dt) < 0.0f);
+    QCOMPARE(advanceRotorAngle(0.5f, +1, 0.0f, 3, dt), 0.5f);
+    const float step = std::fabs(advanceRotorAngle(0.0f, +1, 1e6f, 3, dt));
+    QVERIFY(step < 0.41f * 2.0f * float(M_PI) / 3.0f); // < ~0.4 blade spacing
+  }
+
   void perClassVariation() {
     size_t counts[5];
     float widths[5];

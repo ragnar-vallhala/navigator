@@ -482,4 +482,16 @@ DroneModel buildDroneModel(const DroneModelInput &in) {
   return M;
 }
 
+float advanceRotorAngle(float angle, int spinSign, float omega, int blades,
+                        float dt) {
+  const int nb = std::max(1, blades);
+  const float dtc = std::clamp(dt, 1.0f / 240.0f, 0.05f);
+  const float limitRps = 0.4f / (float(nb) * dtc); // revolutions / s
+  const float rps = std::fabs(omega) / (2.0f * float(M_PI));
+  const float vis = limitRps * std::tanh(rps / limitRps);
+  const float dir = spinSign >= 0 ? 1.0f : -1.0f;
+  return std::fmod(angle + dir * vis * 2.0f * float(M_PI) * dt,
+                   2.0f * float(M_PI));
+}
+
 } // namespace vsim

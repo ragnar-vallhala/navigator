@@ -426,6 +426,7 @@ private:
   void rebuildDroneModel();
   void updateRotors(float dt);
   void drawDroneModel(const QMatrix4x4 &view, const QMatrix4x4 &model);
+  void drawDroneLocator(const QMatrix4x4 &view, const QMatrix4x4 &model);
   Mesh modelBody_;
   std::array<Mesh, 4> modelProp_;
   vsim::DroneModel model_;
@@ -441,6 +442,7 @@ private:
   Mesh gizmoArrow_;   // unit segment along +X (rotated per axis)
   Mesh gizmoRing_;    // unit circle in XY plane (rotated per axis)
   Mesh digitMesh_[4]; // glyphs for "1".."4", billboarded over each motor
+  Mesh locator_;      // screen-space heading chevron (small-model locator)
   Mesh northArrow_;   // body +X arrow (shaft + head), rotates with the body
   Mesh glyphN_;       // "N" glyph billboarded at the arrow tip
   Mesh ring_;         // unit torus for training halo gates (lit, pos+normal)
