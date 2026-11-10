@@ -185,11 +185,18 @@ void main() {
     float f3 = 1.0 - smoothstep(120.0, 800.0, dist);
     float v = (gn(p / 0.4) - 0.5) * 0.20 * f1 + (gn(p / 2.0) - 0.5) * 0.24 * f2 +
               (gn(p / 9.0) - 0.5) * 0.28 * f3 + (gn(p / 47.0) - 0.5) * 0.22;
-    base *= 1.0 + v;
+    // Macro tint: hundreds-of-metres warm/cool drift, no distance fade, so the
+    // far ground and the horizon plane vary too instead of reading as one colour.
+    float m1 = gn(p / 310.0 + 3.7) - 0.5, m2 = gn(p / 95.0 + 9.1) - 0.5;
+    vec3 macroTint = vec3(1.0 + 0.30 * m1 + 0.10 * m2, 1.0 + 0.10 * m1, 1.0 - 0.26 * m1 - 0.08 * m2);
+    base *= (1.0 + v) * macroTint;
+    // Survey grid: a calm hint, not a net. The fine lines fade out within ~30 m,
+    // the 10 m lines by ~250 m, and only the 100 m lines reach the horizon.
     float up = smoothstep(0.55, 0.85, -n.z);       // grid only on level ground
-    float g = 0.07 * gridLine(p, 1.0, 0.015) + 0.16 * gridLine(p, 10.0, 0.004) +
-              0.26 * gridLine(p, 100.0, 0.0015);
-    base = mix(base, vec3(0.93, 0.94, 0.90), clamp(g * up, 0.0, 0.5));
+    float g = 0.030 * gridLine(p, 1.0, 0.012) * (1.0 - smoothstep(6.0, 30.0, dist)) +
+              0.060 * gridLine(p, 10.0, 0.004) * (1.0 - smoothstep(60.0, 260.0, dist)) +
+              0.100 * gridLine(p, 100.0, 0.0015) * (1.0 - smoothstep(300.0, 900.0, dist));
+    base = mix(base, base * 0.55 + vec3(0.40, 0.41, 0.38), clamp(g * up, 0.0, 0.2));
   }
   if (u_bands > 0.5) {                              // survey pole: 1 m bands
     float k = floor((v_local.z + 0.5) * u_bands);
