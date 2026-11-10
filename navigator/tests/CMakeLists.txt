@@ -244,6 +244,7 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
   navigator_test(tst_sim_restart
       tst_sim_restart.cpp
       ${SRC}/vsim/SitlModule.cpp ${SRC}/vsim/SitlModule.h
+      ${SRC}/vsim/VfsDir.cpp ${SRC}/vsim/VfsDir.h
       ${SRC}/vsim/SimWorker.cpp ${SRC}/vsim/SimWorker.h
       ${SRC}/protocol/CommandCodec.cpp ${SRC}/protocol/CommandCodec.h
       ${SRC}/core/crc.cpp)
