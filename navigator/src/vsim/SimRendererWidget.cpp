@@ -88,10 +88,10 @@ vec3 skyColor(vec3 dir) {
   // Overcast, desaturated grey-teal — the moody storm palette.
   vec3 zenith  = vec3(0.28, 0.35, 0.38);
   vec3 horizon = vec3(0.52, 0.57, 0.58);
-  vec3 ground  = vec3(0.10, 0.12, 0.13);
+  vec3 ground  = vec3(0.34, 0.38, 0.38); // below-horizon haze seen from height, not black
   vec3 col = (up >= 0.0)
       ? mix(horizon, zenith, pow(clamp(up, 0.0, 1.0), 0.55))
-      : mix(horizon, ground, clamp(-up * 2.5, 0.0, 1.0));
+      : mix(horizon, ground, clamp(-up * 1.5, 0.0, 1.0));
   float s = max(dot(normalize(dir), normalize(u_sundir)), 0.0);
   float aboveHorizon = step(0.0, up);
   // Sun is diffused behind cloud: a soft bright bloom, no hard disc.
@@ -199,9 +199,16 @@ void main() {
   // Aerial perspective: fade toward the sky behind the surface with distance,
   // so the streamed-terrain edge dissolves into haze.
   vec3 vdir = dist > 1e-4 ? toFrag / dist : vec3(0.0, 0.0, 1.0);
-  float fd = max(dist - u_fogstart, 0.0) * u_fogdensity;
+  // Haze is a layer near the ground: measure the path mostly horizontally, so
+  // looking down from altitude shows the ground instead of fog, while the
+  // horizon still hazes out. Fog colour is the horizon's, never the dark
+  // below-horizon sky (that read as a black void from height).
+  float fdist = length(vec3(toFrag.xy, toFrag.z * 0.12));
+  float fd = max(fdist - u_fogstart, 0.0) * u_fogdensity;
   float fog = 1.0 - exp(-fd * fd);
-  o_color = vec4(mix(lit, skyColor(vdir), clamp(fog, 0.0, 1.0)), 1.0);
+  float hl = length(vdir.xy);
+  vec3 fdir = hl > 1e-4 ? vec3(vdir.xy / hl, 0.0) : vec3(1.0, 0.0, 0.0);
+  o_color = vec4(mix(lit, skyColor(fdir), clamp(fog, 0.0, 1.0)), 1.0);
 }
 )GLSL";
 
@@ -392,9 +399,12 @@ void main() {
   // through them), strongest near the thin tip — the soft GoT meadow look.
   float trans = pow(max(dot(vdir, normalize(u_sundir)), 0.0), 4.0);
   col += albedo * trans * (0.25 + 0.75 * v_hf) * 0.8;
-  float fd = max(dist - u_fogstart, 0.0) * u_fogdensity;
+  float fdist = length(vec3(toFrag.xy, toFrag.z * 0.12)); // see the lit shader
+  float fd = max(fdist - u_fogstart, 0.0) * u_fogdensity;
   float fog = 1.0 - exp(-fd * fd);
-  o_color = vec4(mix(col, skyColor(vdir), clamp(fog, 0.0, 1.0)), 1.0);
+  float hl = length(vdir.xy);
+  vec3 fdir = hl > 1e-4 ? vec3(vdir.xy / hl, 0.0) : vec3(1.0, 0.0, 0.0);
+  o_color = vec4(mix(col, skyColor(fdir), clamp(fog, 0.0, 1.0)), 1.0);
 }
 )GLSL";
 #endif // VAYU_SIM_GRASS
@@ -574,8 +584,17 @@ void SimRendererWidget::resizeGL(int w, int h) {
   fbW_ = w;
   fbH_ = h;
   glViewport(0, 0, w, h);
+  nearCur_ = 0.0f; // force a rebuild with the new aspect
+  updateProjection();
+}
+
+void SimRendererWidget::updateProjection() {
+  const float nearM = (fpv_ || downCam_) ? kNearLensM : kNearChaseM;
+  if (nearM == nearCur_ || fbH_ <= 0)
+    return;
+  nearCur_ = nearM;
   proj_.setToIdentity();
-  proj_.perspective(60.0f, float(w) / std::max(1, h), 0.05f, kFarPlaneM);
+  proj_.perspective(60.0f, float(fbW_) / std::max(1, fbH_), nearM, kFarPlaneM);
 }
 
 QVector3D SimRendererWidget::freeForward() const {
@@ -670,6 +689,7 @@ QMatrix4x4 SimRendererWidget::cameraView() const {
 }
 
 void SimRendererWidget::paintGL() {
+  updateProjection();
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   if (meshDirty_)
     uploadDroneMesh();
@@ -1068,7 +1088,7 @@ void SimRendererWidget::uploadWorldMesh() {
   }
   // Horizon ground for a finite procedural arena: just under its lowest point,
   // in the arena's average surface colour so the join reads as continuous land.
-  horizonZ_ = lowestZ + 0.05f;
+  horizonZ_ = lowestZ + 0.5f; // well clear of depth resolution at distance
   horizonCol_ = colSum / float(pendingWorldPos_.size());
   uploadColoredMesh(worldMesh_, data);
   pendingWorldPos_.clear();
