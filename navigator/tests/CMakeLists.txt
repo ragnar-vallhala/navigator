@@ -253,6 +253,7 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
   navigator_test(tst_airframe_flight
       tst_airframe_flight.cpp
       ${SRC}/vsim/SitlModule.cpp ${SRC}/vsim/SitlModule.h
+      ${SRC}/vsim/VfsDir.cpp ${SRC}/vsim/VfsDir.h
       ${SRC}/vsim/SimWorker.cpp ${SRC}/vsim/SimWorker.h
       ${SRC}/vsim/AirframePresets.cpp
       ${SRC}/protocol/CommandCodec.cpp
