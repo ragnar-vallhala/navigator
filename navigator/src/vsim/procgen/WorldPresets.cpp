@@ -152,6 +152,7 @@ void layoutRacing(const Ground &g, uint32_t seed, PresetData &d) {
     bar.sy = width + 2 * postR + 0.1f;
     bar.sz = 0.2f;
     bar.zc = -(top + 0.1f);
+    bar.style = kPropGate;
     bar.yawDeg = yaw * 180.0f / kPi;
     d.obstacles.push_back(bar);
     RaceGate rg;
@@ -174,6 +175,7 @@ void layoutRacing(const Ground &g, uint32_t seed, PresetData &d) {
     pyl.x = mx + mx / len * 8.0f;
     pyl.y = my + my / len * 8.0f;
     pyl.sx = 0.35f;
+    pyl.style = kPropGate;
     seatUpright(g, pyl, 0.35f, 4.0f);
     d.obstacles.push_back(pyl);
   }
@@ -214,6 +216,7 @@ void layoutYard(const Ground &g, uint32_t seed, PresetData &d) {
     o.sx = rng.range(10.0f, 16.0f);
     o.sy = rng.range(6.0f, 9.0f);
     o.yawDeg = 90.0f * static_cast<float>(rng.next() % 2u);
+    o.style = kPropBuilding;
     tryPlace(o, 0.5f * std::hypot(o.sx, o.sy), rng.range(4.5f, 6.5f), 6.0f);
   }
   const int crates = 45 + static_cast<int>(rng.next() % 12u);
@@ -222,12 +225,14 @@ void layoutYard(const Ground &g, uint32_t seed, PresetData &d) {
     if (rng.uni() < 0.35f) { // tank / silo
       o.type = 2;
       o.sx = rng.range(0.8f, 2.2f);
+      o.style = kPropSilo;
       tryPlace(o, o.sx, rng.range(3.0f, 7.0f), 3.0f);
     } else { // shipping-container-ish box
       o.type = 0;
       o.sx = rng.range(2.0f, 6.0f);
       o.sy = rng.range(2.0f, 3.2f);
       o.yawDeg = 15.0f * static_cast<float>(rng.next() % 12u);
+      o.style = kPropContainer;
       tryPlace(o, 0.5f * std::hypot(o.sx, o.sy), rng.range(1.6f, 3.2f), 3.0f);
     }
   }
@@ -259,6 +264,7 @@ void layoutForest(const Ground &g, uint32_t seed, PresetData &d) {
     trunk.x = x;
     trunk.y = y;
     trunk.sx = trunkR;
+    trunk.style = kPropTrunk;
     seatUpright(g, trunk, trunkR, trunkH);
     d.obstacles.push_back(trunk);
     // Crown: a sphere resting on the trunk top.
@@ -267,6 +273,7 @@ void layoutForest(const Ground &g, uint32_t seed, PresetData &d) {
     top.x = x;
     top.y = y;
     top.sx = crown;
+    top.style = kPropCanopy;
     top.zc = trunk.zc - trunk.sz * 0.5f - crown * 0.55f;
     d.obstacles.push_back(top);
     placed.push_back({x, y, crown});

@@ -30,6 +30,7 @@
 
 #include "Flora.h"
 #include "ProcgenTypes.h"
+#include "PropStyle.h"
 #include "TerrainField.h"
 
 #include <cstdint>
@@ -46,6 +47,7 @@ struct PgObstacle {
   float x = 0.0f, y = 0.0f, zc = 0.0f;
   float sx = 1.0f, sy = 1.0f, sz = 1.0f;
   float yawDeg = 0.0f; // rotation about the vertical
+  int style = 0;       // PropStyle (look only)
 };
 
 // One racing gate (two posts + a top bar). Opening is widthM wide and at least
