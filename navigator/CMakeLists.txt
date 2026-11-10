@@ -215,6 +215,7 @@ set(GCS_SITL_SOURCES
     src/ui/widgets/SimHudWidget.cpp
     src/vsim/SimWorker.cpp
     src/vsim/SitlModule.cpp
+    src/vsim/VfsDir.cpp
     src/vsim/SimRendererWidget.cpp
     src/vsim/MeshLoader.cpp
     src/vsim/WorldMeshBuilder.cpp

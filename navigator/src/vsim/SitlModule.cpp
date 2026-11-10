@@ -20,6 +20,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QLibrary>
+#include "VfsDir.h"
 #include <QProcessEnvironment>
 
 // QLibrary rather than dlopen/LoadLibrary behind an #ifdef: Qt is already a
@@ -57,6 +58,10 @@ QStringList candidatePaths() {
 QStringList SitlModule::searchPaths() { return candidatePaths(); }
 
 SitlModule::SitlModule() {
+  // Before the first load: the firmware reads VAYU_VFS_DIR from the process
+  // environment, and its default is shared by every process on the machine.
+  vsim::applyVfsEnvironment();
+
   QStringList tried;
 
   for (const QString &candidate : candidatePaths()) {

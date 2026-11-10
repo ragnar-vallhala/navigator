@@ -30,6 +30,7 @@
 
 #include "RcBridge.h"
 #include "SimWorker.h"
+#include "VfsTestEnv.h"
 #include "SitlModule.h"
 
 #include "navlink_msgs.h"
@@ -70,6 +71,8 @@ private slots:
 };
 
 void TstSitlEngine::engineRunsWithRcFromTheBridge() {
+  // Before SitlModule::instance(): the module reads the VFS dir when it loads.
+  testenv::isolateVfs();
   if (!SitlModule::instance().available())
     QSKIP(qPrintable("no SITL engine module: " + SitlModule::instance().error()));
 
