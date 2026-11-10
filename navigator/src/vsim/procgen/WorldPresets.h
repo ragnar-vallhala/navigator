@@ -79,6 +79,11 @@ constexpr float kMaxPropDiameterM = 0.5f;
 // Radius around the spawn kept free of obstacles [m] (plus each shape's own
 // footprint).
 constexpr float kSpawnClearM = 12.0f;
+// Survey marker poles planted on the open presets (hills/alpine/flat/desert):
+// radius and nominal height [m]. The renderer bands any cylinder at or below
+// kMarkerPoleR (also the racing gate posts) in 1 m red/white stripes.
+constexpr float kMarkerPoleR = 0.12f;
+constexpr float kMarkerPoleH = 6.0f;
 
 const std::vector<PresetInfo> &worldPresets();
 bool isFieldBiome(const std::string &biome); // hills/alpine/flat/desert/...
