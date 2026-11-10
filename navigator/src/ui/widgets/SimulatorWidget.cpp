@@ -18,6 +18,7 @@
 
 #include "core/Units.h"
 
+#include "../../vsim/AirframePresets.h"
 #include "../../vsim/MeshLoader.h"
 #include "../../vsim/SitlModule.h"
 #include "protocol/CommandCodec.h"
@@ -251,6 +252,18 @@ void pushFirmwareMotorGeometry(const vsim::GeometryConfig &g) {
     spin[i] = static_cast<float>(g.motors[i].spin);
   }
   SitlModule::instance().send(CommandCodec::encodeSetMotorGeometry(x, y, spin));
+}
+
+// Send an airframe preset's gain set to the firmware as CMD_SET_PID, the frames
+// the autotuner's Apply sends. Same command gate as the geometry above, so it is
+// re-sent with it. The firmware persists applied gains (0:pid.bin).
+void pushPresetGains(const QString &presetId) {
+  const vsim::AirframePreset *p = vsim::findAirframePreset(presetId);
+  if (!p)
+    return; // a custom vehicle keeps whatever gains the firmware has
+  for (const PidSetCmd &c : p->gains)
+    SitlModule::instance().send(CommandCodec::encodeSetPid(
+        c.controller, c.axis, c.kp, c.ki, c.kd, c.kff));
 }
 
 // The roll-mix signs this geometry produces (for logging): -sign(y) per motor.
@@ -585,6 +598,11 @@ void SimulatorWidget::buildUi() {
     // Gizmo edits in the 3D view flow back into the editor (CoM frame).
     connect(m_renderer, &vsim::SimRendererWidget::motorEdited, m_geomEditor,
             &GeometryEditorWidget::setMotorFromGizmo);
+    connect(m_geomEditor, &GeometryEditorWidget::presetChosen, this,
+            [this](const QString &id) {
+              m_presetId = id;
+              QSettings().setValue("simulator/presetId", id);
+            });
     connect(m_geomEditor, &GeometryEditorWidget::geometryApplied, this, [this] {
       applyGeometryToRenderer();
       pushFirmwareMotorGeometry(m_geomEditor->physicsConfig());
@@ -1145,7 +1163,19 @@ void SimulatorWidget::buildUi() {
 
   // Restore persisted configs (geometry setConfig also loads the mesh +
   // recomputes, firing previewUpdated -> applyGeometryToRenderer).
+  // (Read before setConfig: its previewUpdated persists the geometry.)
+  const bool hadSavedGeometry =
+      QSettings().contains(QString("%1/mass").arg(kGeomGroup));
   m_geomEditor->setConfig(restoreGeometry());
+  {
+    // Which preset's gains Start sends: the saved choice, else the 5-inch for a
+    // fresh install (that is the default geometry); "" = a custom vehicle.
+    m_presetId = QSettings()
+                     .value("simulator/presetId",
+                            hadSavedGeometry ? QString() : QStringLiteral("5in"))
+                     .toString();
+    m_geomEditor->setPresetId(m_presetId);
+  }
   m_worldEditor->setConfig(restoreWorld());
   m_worldEditor->setWindConfig(restoreWind());
   if (m_renderer)
@@ -3156,6 +3186,7 @@ void SimulatorWidget::startInAppSim() {
     pushRatesToSim(); // apply configured loop rates before geometry/world
     pushFirmwareMotorGeometry(
         cfg); // firmware roll/pitch/yaw mix signs (physics frame)
+    pushPresetGains(m_presetId); // the airframe's tuned gains (if a preset)
     m_sim->sendGeometry(cfg); // in-process physics motor layout
     m_sim->sendWorld(m_worldEditor->config());
     m_sim->sendObstacles(m_worldEditor->config().obstacles);
@@ -3182,6 +3213,7 @@ void SimulatorWidget::startInAppSim() {
         return;
       const auto c = m_geomEditor->physicsConfig();
       pushFirmwareMotorGeometry(c);
+      pushPresetGains(m_presetId);
       m_sim->sendGeometry(c);
       pushRatesToSim(); // re-assert loop rates too: the daemon boots at its
                         // compiled default, so a dropped/raced SET_RATES would
@@ -3382,6 +3414,7 @@ void SimulatorWidget::persistGeometry(const vsim::GeometryConfig &g) {
   s.setValue("meshPath", g.meshPath);
   s.setValue("scale", g.scale);
   s.setValue("mass", g.mass);
+  s.setValue("propRadius", g.propRadius);
   s.setValue("tx", g.translate.x());
   s.setValue("ty", g.translate.y());
   s.setValue("tz", g.translate.z());
@@ -3406,6 +3439,7 @@ void SimulatorWidget::persistGeometry(const vsim::GeometryConfig &g) {
     s.setValue(p + "kt", m.k_thrust);
     s.setValue(p + "km", m.k_moment);
     s.setValue(p + "wmax", m.max_omega);
+    s.setValue(p + "tau", m.tau);
   }
   s.endGroup();
 }
@@ -3421,6 +3455,7 @@ vsim::GeometryConfig SimulatorWidget::restoreGeometry() {
   g.meshPath = s.value("meshPath").toString();
   g.scale = s.value("scale", g.scale).toFloat();
   g.mass = s.value("mass", g.mass).toFloat();
+  g.propRadius = s.value("propRadius", g.propRadius).toFloat();
   g.translate = QVector3D(s.value("tx").toFloat(), s.value("ty").toFloat(),
                           s.value("tz").toFloat());
   g.rotate = QVector3D(s.value("rx").toFloat(), s.value("ry").toFloat(),
@@ -3442,6 +3477,7 @@ vsim::GeometryConfig SimulatorWidget::restoreGeometry() {
     m.k_thrust = s.value(p + "kt", m.k_thrust).toFloat();
     m.k_moment = s.value(p + "km", m.k_moment).toFloat();
     m.max_omega = s.value(p + "wmax", m.max_omega).toFloat();
+    m.tau = s.value(p + "tau", m.tau).toFloat();
   }
   s.endGroup();
   return g;

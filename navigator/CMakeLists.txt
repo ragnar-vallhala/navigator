@@ -214,6 +214,8 @@ set(GCS_SITL_SOURCES
     src/ui/widgets/CollapsibleSection.cpp
     src/ui/widgets/SimHudWidget.cpp
     src/vsim/SimWorker.cpp
+    src/vsim/VehicleJson.cpp
+    src/vsim/AirframePresets.cpp
     src/vsim/SitlModule.cpp
     src/vsim/SimRendererWidget.cpp
     src/vsim/MeshLoader.cpp
@@ -244,6 +246,8 @@ set(GCS_SITL_HEADERS
     src/ui/widgets/CollapsibleSection.h
     src/ui/widgets/SimHudWidget.h
     src/vsim/VsimTypes.h
+    src/vsim/VehicleJson.h
+    src/vsim/AirframePresets.h
     src/vsim/SimWorker.h
     src/vsim/SimRendererWidget.h
     src/vsim/MeshLoader.h

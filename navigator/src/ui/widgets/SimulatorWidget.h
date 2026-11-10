@@ -226,6 +226,7 @@ private:
   void applyGeometryToRenderer();
   void persistGeometry(const vsim::GeometryConfig &g);
   vsim::GeometryConfig restoreGeometry();
+  QString m_presetId; // airframe preset whose gains Start sends ("" = custom)
   void persistWorld(const vsim::WorldConfig &w);
   vsim::WorldConfig restoreWorld();
   void persistWind(const vsim::WindConfig &w);

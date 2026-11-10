@@ -64,32 +64,44 @@ struct MotorConfig {
   QVector3D pos{0, 0, 0};     // body-frame [m]
   QVector3D axis{0, 0, -1};   // unit thrust axis (default -Z = up in NED)
   int spin = +1;              // +1 CCW / -1 CW (seen from above)
-  float k_thrust = 1.522e-5f; // thrust_N = k_thrust * omega^2
-  float k_moment = 2.44e-7f;  // reaction torque magnitude
-  float max_omega = 1200.0f;  // duty=1 omega [rad/s]
+  float k_thrust = 1.234e-6f; // thrust_N = k_thrust * omega^2
+  float k_moment = 1.59e-8f;  // reaction torque magnitude
+  float max_omega = 3365.0f;  // duty=1 omega [rad/s]
   float tau = 0.0125f;        // first-order spin-up time constant [s]
 };
 
 // The full airframe geometry the editor produces: a mesh (GCS-side only,
 // for rendering + inertia computation) plus the mass properties and motor
 // layout pushed to the engine. meshPath/scale/com never cross the wire.
+//
+// The defaults are the "5-inch freestyle" airframe preset (AirframePresets.h:
+// iFlight Nazgul5-class build, T-Motor V2207 1950KV on 6S); a test pins the two
+// together.
 struct GeometryConfig {
   QString meshPath;
   float scale = 1.0f;           // meters per mesh unit
   QVector3D translate{0, 0, 0}; // body-frame offset applied to the mesh [m]
   QVector3D rotate{0, 0, 0};    // body-frame orientation, XYZ Euler [deg]
-  float mass = 1.0f;            // kg
+  float mass = 0.682f;          // kg
   // Rotor radius [m] (half the prop diameter): sizes ground effect and the
-  // contact footprint in the sim. Default is a 5-inch prop.
-  float propRadius = 0.0635f;
+  // contact footprint in the sim.
+  float propRadius = 0.0622f;
   // Inertia tensor about the CoM, body frame [kg*m^2], row-major.
-  std::array<float, 9> inertia = {0.012f, 0, 0, 0, 0.012f, 0, 0, 0, 0.022f};
+  std::array<float, 9> inertia = {1.54e-3f, 0,       0, 0, 1.80e-3f,
+                                  0,        0,       0, 3.06e-3f};
   QVector3D com{0, 0, 0}; // CoM offset from model origin [m]
+  // Motor order and spin are fixed by the firmware mixer: [0] front-right
+  // (+x,+y) CCW, [1] rear-right (-x,+y) CW, [2] rear-left (-x,-y) CCW,
+  // [3] front-left (+x,-y) CW; body NED, x forward, y right.
   std::array<MotorConfig, 4> motors = {{
-      {{0.13f, +0.22f, 0}, {0, 0, -1}, +1, 1.522e-5f, 2.44e-7f, 1200.0f},
-      {{-0.13f, +0.20f, 0}, {0, 0, -1}, -1, 1.522e-5f, 2.44e-7f, 1200.0f},
-      {{-0.13f, -0.20f, 0}, {0, 0, -1}, +1, 1.522e-5f, 2.44e-7f, 1200.0f},
-      {{0.13f, -0.22f, 0}, {0, 0, -1}, -1, 1.522e-5f, 2.44e-7f, 1200.0f},
+      {{+0.0866f, +0.0866f, 0}, {0, 0, -1}, +1, 1.234e-6f, 1.59e-8f, 3365.0f,
+       0.0125f},
+      {{-0.0866f, +0.0866f, 0}, {0, 0, -1}, -1, 1.234e-6f, 1.59e-8f, 3365.0f,
+       0.0125f},
+      {{-0.0866f, -0.0866f, 0}, {0, 0, -1}, +1, 1.234e-6f, 1.59e-8f, 3365.0f,
+       0.0125f},
+      {{+0.0866f, -0.0866f, 0}, {0, 0, -1}, -1, 1.234e-6f, 1.59e-8f, 3365.0f,
+       0.0125f},
   }};
 };
 
