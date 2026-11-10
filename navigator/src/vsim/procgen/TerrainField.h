@@ -56,6 +56,16 @@ struct FieldParams {
   float colRockT = 0.82f;  // brown -> bare rock by this elevation
   float colSnowT = 0.68f;  // snow begins capping above this elevation
   float colSlopeT = 0.65f; // slope steepness (0..1) that exposes rock
+
+  // World-preset extensions (all default to the original behaviour).
+  int shape = 0;   // 0 = hills/mountains (macro field), 1 = wind-blown dunes
+  int palette = 0; // colour table for color(): see TerrainField.cpp (0 = meadow)
+  // Added to the macro [0,1] field before the mountain threshold: >0 forces
+  // hills/mountains everywhere (so a small arena doesn't land in an empty basin).
+  float mountainBias = 0.0f;
+  // Radius [m] of a level pad blended in around the origin (the spawn) at the
+  // elevation the raw field has there; 0 disables. Blends out over 1.5x radius.
+  float flatRadiusM = 0.0f;
 };
 
 class TerrainField {
@@ -82,6 +92,10 @@ private:
   Noise mtn_;
   Noise macro_;
   Noise warp_;
+  float rawHeight(float wx, float wy) const; // before the spawn pad
+  float duneHeight(float wx, float wy) const;
+  float padHeight_ = 0.0f; // raw elevation at the origin (spawn pad level)
+  float duneDir_ = 0.0f;   // dune crest-normal heading [rad], from the seed
   float baseFreq_;  // 1 / featureM
   float macroFreq_; // 1 / macroM
 };

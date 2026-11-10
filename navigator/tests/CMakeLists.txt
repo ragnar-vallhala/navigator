@@ -17,6 +17,9 @@ function(navigator_test name)
       ${SRC} ${SRC}/core ${SRC}/core/ui ${SRC}/comm ${SRC}/protocol)
   target_link_libraries(${name} PRIVATE
       Qt6::Test Qt6::Widgets Qt6::Core Qt6::Network Qt6::SerialPort)
+  # qt_add_executable makes a GUI-subsystem exe on Windows, whose stdout is
+  # lost: a failing QtTest then prints nothing under --output-on-failure.
+  set_target_properties(${name} PROPERTIES WIN32_EXECUTABLE FALSE)
   add_test(NAME ${name} COMMAND ${name})
   set_tests_properties(${name} PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
@@ -83,6 +86,10 @@ navigator_test(tst_sysid_rtos
     ${SRC}/autotune/RtosEval.cpp
     ${SRC}/autotune/Cost.cpp)
 target_include_directories(tst_sysid_rtos PRIVATE ${SRC}/autotune)
+
+# ---- Private firmware VFS dir: resolver + reset safety rule ----------------
+navigator_test(tst_vfs_dir tst_vfs_dir.cpp ${SRC}/vsim/VfsDir.cpp)
+target_include_directories(tst_vfs_dir PRIVATE ${SRC}/vsim ${CMAKE_CURRENT_SOURCE_DIR})
 
 # ---- C++ autotune engine (Space + orchestration, synthetic rollout) -------
 navigator_test(tst_autotune_engine
@@ -175,9 +182,34 @@ navigator_test(tst_procgen
     ${SRC}/vsim/procgen/Noise.cpp
     ${SRC}/vsim/procgen/TerrainGen.cpp
     ${SRC}/vsim/procgen/TerrainField.cpp
+    ${SRC}/vsim/procgen/WorldPresets.cpp
     ${SRC}/vsim/procgen/Flora.cpp
     ${SRC}/vsim/ChunkStreamer.cpp)
 target_include_directories(tst_procgen PRIVATE ${SRC}/vsim)
+
+# ---- Procedural world presets (Qt-free core, headless) ----------------------
+navigator_test(tst_worldpresets
+    tst_worldpresets.cpp
+    ${SRC}/vsim/procgen/Noise.cpp
+    ${SRC}/vsim/procgen/TerrainField.cpp
+    ${SRC}/vsim/procgen/WorldPresets.cpp)
+target_include_directories(tst_worldpresets PRIVATE ${SRC}/vsim)
+
+# ---- World tab preset wiring (headless widget test) ------------------------
+if(NAVIGATOR_SITL)
+  navigator_test(tst_worldeditor
+      tst_worldeditor.cpp
+      ${SRC}/ui/widgets/WorldEditorWidget.cpp
+      ${SRC}/ui/widgets/CollapsibleSection.cpp
+      ${SRC}/core/Theme.cpp
+      ${SRC}/core/ui/Buttons.h # Q_OBJECT header: moc must see it
+      ${SRC}/vsim/ProceduralWorld.cpp
+      ${SRC}/vsim/procgen/Noise.cpp
+      ${SRC}/vsim/procgen/TerrainGen.cpp
+      ${SRC}/vsim/procgen/TerrainField.cpp
+      ${SRC}/vsim/procgen/WorldPresets.cpp)
+  target_include_directories(tst_worldeditor PRIVATE ${SRC}/vsim ${SRC}/ui/widgets)
+endif()
 
 # ---- Side-panel sizing helpers (no splitter may crop a panel) -------------
 navigator_test(tst_panel_widgets tst_panel_widgets.cpp)
@@ -192,9 +224,10 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
   navigator_test(tst_sitl_engine
       tst_sitl_engine.cpp
       ${SRC}/vsim/SitlModule.cpp ${SRC}/vsim/SitlModule.h
+      ${SRC}/vsim/VfsDir.cpp ${SRC}/vsim/VfsDir.h
       ${SRC}/vsim/SimWorker.cpp ${SRC}/vsim/SimWorker.h
       ${SRC}/vsim/RcBridge.cpp ${SRC}/vsim/RcBridge.h)
-  target_include_directories(tst_sitl_engine PRIVATE ${SRC}/vsim ${VAYU_SITL_SDK})
+  target_include_directories(tst_sitl_engine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${SRC}/vsim ${VAYU_SITL_SDK})
   target_link_libraries(tst_sitl_engine PRIVATE navlink_codec)
   if(WIN32)
     target_link_libraries(tst_sitl_engine PRIVATE winmm)

@@ -304,6 +304,7 @@ constexpr const char *kRcUartPathDefault = "COM3";
 constexpr const char *kRcPathDefault = "/dev/input/js0";
 constexpr const char *kRcUartPathDefault = "/dev/ttyUSB0";
 #endif
+constexpr const char *kRcCompactKey = "simulator/compactRcRow";
 constexpr const char *kRcBaudKey = "simulator/rcBaud";
 constexpr const char *kRcMapAxisKey = "simulator/rcMapAxis"; // + func
 constexpr const char *kRcMapInvKey = "simulator/rcMapInv";   // + func
@@ -746,7 +747,9 @@ void SimulatorWidget::buildUi() {
         QString("color: %1;").arg(Theme::hex(Theme::kTextMuted)));
     sv->addWidget(m_simStatusLabel);
 
-    auto *runRow = new QHBoxLayout();
+    auto *runRow = new QGridLayout();
+    runRow->setContentsMargins(0, 0, 0, 0);
+    QList<QWidget *> runWidgets;
     m_simStartBtn = new ui::SuccessButton(tr("Start"), simBody);
     m_simStartBtn->setToolTip(tr("Boot firmware (first time) + start the sim"));
     connect(m_simStartBtn, &QPushButton::clicked, this,
@@ -787,11 +790,10 @@ void SimulatorWidget::buildUi() {
         tr("Attaching to an external sim needs a POSIX host (its pose stream "
            "is a FIFO). Use Start to run the simulator in-app."));
 #endif
-    runRow->addWidget(m_simStartBtn);
-    runRow->addWidget(m_simStopBtn);
-    runRow->addWidget(m_simResetBtn);
-    runRow->addWidget(m_simAttachBtn);
-    runRow->addStretch();
+    runWidgets << m_simStartBtn;
+    runWidgets << m_simStopBtn;
+    runWidgets << m_simResetBtn;
+    runWidgets << m_simAttachBtn;
     m_fpvCheck = new QCheckBox(tr("FPV cam"), simBody);
     m_fpvCheck->setToolTip(
         tr("Onboard first-person camera that rides the drone "
@@ -802,7 +804,7 @@ void SimulatorWidget::buildUi() {
       if (m_renderer)
         m_renderer->setFpv(on);
     });
-    runRow->addWidget(m_fpvCheck);
+    runWidgets << m_fpvCheck;
 
     // PiP visibility toggles (mockup Down Cam / Horizon chips).
     auto *downChk = new QCheckBox(tr("Down Cam"), simBody);
@@ -812,7 +814,7 @@ void SimulatorWidget::buildUi() {
       if (m_downPip)
         m_downPip->setVisible(on);
     });
-    runRow->addWidget(downChk);
+    runWidgets << downChk;
 
     auto *horizonChk = new QCheckBox(tr("Horizon"), simBody);
     horizonChk->setChecked(true);
@@ -821,7 +823,7 @@ void SimulatorWidget::buildUi() {
       if (m_horizonPip)
         m_horizonPip->setVisible(on);
     });
-    runRow->addWidget(horizonChk);
+    runWidgets << horizonChk;
 
     auto *contourChk = new QCheckBox(tr("Contours"), simBody);
     contourChk->setChecked(true);
@@ -831,7 +833,7 @@ void SimulatorWidget::buildUi() {
       if (m_minimapPip)
         m_minimapPip->setVisible(on);
     });
-    runRow->addWidget(contourChk);
+    runWidgets << contourChk;
 
 #ifdef VAYU_SIM_GRASS
     auto *grassChk = new QCheckBox(tr("Grass"), simBody);
@@ -852,7 +854,7 @@ void SimulatorWidget::buildUi() {
           m_downRenderer->setGpuGrassActive(on);
       }
     });
-    runRow->addWidget(grassChk);
+    runWidgets << grassChk;
     // Apply the unchecked default to the renderers now (an unchecked box emits
     // no toggled signal at startup).
     if (m_renderer)
@@ -873,7 +875,7 @@ void SimulatorWidget::buildUi() {
       QSettings().setValue(kAudioKey, on);
       m_propAudio.setEnabled(on);
     });
-    runRow->addWidget(m_propAudioChk);
+    runWidgets << m_propAudioChk;
     sv->addLayout(runRow);
 
     // -- Loop rates (IMU/firmware, physics substeps, render) --
@@ -931,7 +933,8 @@ void SimulatorWidget::buildUi() {
     // first Start (firmware reads the RC path once at boot).
     {
       QSettings st;
-      auto *rcRow = new QHBoxLayout();
+      auto *rcRow = new QGridLayout();
+      rcRow->setContentsMargins(0, 0, 0, 0);
       m_rcEnable = new QCheckBox(tr("RC transmitter"), simBody);
       m_rcEnable->setChecked(st.value(kRcEnableKey, true).toBool());
       m_rcEnable->setToolTip(tr("Feed a USB RC transmitter (joystick) into "
@@ -941,7 +944,6 @@ void SimulatorWidget::buildUi() {
         if (m_rc)
           m_rc->setEnabled(on); // live, no restart
       });
-      rcRow->addWidget(m_rcEnable);
 
       // RC input source: a USB joystick (axes → channels) or a UART that
       // streams CSV microsecond frames straight off a serial port.
@@ -957,7 +959,6 @@ void SimulatorWidget::buildUi() {
              "channels; UART reads CSV µs frames directly."));
       connect(m_rcSource, QOverload<int>::of(&QComboBox::currentIndexChanged),
               this, [this] { applyRcSource(); });
-      rcRow->addWidget(m_rcSource);
 
       // Editable combo: type a device path, or drop down to pick an enumerated
       // serial port. Items + current text filled by applyRcSource().
@@ -978,7 +979,6 @@ void SimulatorWidget::buildUi() {
               });
       connect(m_rcPath->lineEdit(), &QLineEdit::editingFinished, this,
               [this] { commitRcPath(); });
-      rcRow->addWidget(m_rcPath, 1);
 
       m_rcBaud = new QComboBox(simBody);
       for (int b : {9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600})
@@ -996,7 +996,6 @@ void SimulatorWidget::buildUi() {
                 if (m_rc)
                   m_rc->setUartBaud(b);
               });
-      rcRow->addWidget(m_rcBaud);
 
       // Explicit Connect for the UART source. The sim does NOT open the serial
       // device until this is pressed, so it can't fight the board telemetry for
@@ -1009,7 +1008,6 @@ void SimulatorWidget::buildUi() {
              "only grabs the serial port while connected."));
       connect(m_rcConnect, &QPushButton::clicked, this,
               [this] { setRcUartConnected(!m_rcUartConnected); });
-      rcRow->addWidget(m_rcConnect);
 
       // Acro (rate) flight-mode toggle. This IS the simulated RC ch6 switch: it
       // drives RcBridge ch6, the firmware reads ch6 and resolves the mode (no GCS
@@ -1033,8 +1031,31 @@ void SimulatorWidget::buildUi() {
         if (m_rc)
           m_rc->setAcro(on); // toggles ch6 -> firmware switches mode
       });
-      rcRow->addWidget(m_acroChk);
+      // Optional wrapped layout so the panel can be narrower; layout only.
+      auto *compactChk = new QCheckBox(tr("Compact controls"), simBody);
+      compactChk->setToolTip(tr("Wrap the run and RC control rows over several "
+                                "lines so the side panel can be narrower."));
+      sv->addWidget(compactChk);
       sv->addLayout(rcRow);
+      const QList<QWidget *> rcWidgets{m_rcEnable, m_rcSource, m_rcPath,
+                                       m_rcBaud,   m_rcConnect, m_acroChk};
+      connect(compactChk, &QCheckBox::toggled, this,
+              [this, compactChk, rcRow, rcWidgets, runRow, runWidgets](bool on) {
+                QSettings().setValue(kRcCompactKey, on);
+                ui::layoutWrappedRow(rcRow, rcWidgets, on, m_rcPath);
+                ui::layoutWrappedRow(runRow, runWidgets, on, nullptr, 3, 3);
+                // Invalidate every enclosing layout so the panel minimum
+                // (MinWidthScrollArea) follows live.
+                for (QWidget *w = compactChk; w; w = w->parentWidget()) {
+                  if (w->layout())
+                    w->layout()->invalidate();
+                  w->updateGeometry();
+                }
+              });
+      const bool compactOn = st.value(kRcCompactKey, false).toBool();
+      ui::layoutWrappedRow(rcRow, rcWidgets, compactOn, m_rcPath);
+      ui::layoutWrappedRow(runRow, runWidgets, compactOn, nullptr, 3, 3);
+      compactChk->setChecked(compactOn);
 
       m_flightModeLabel = new QLabel(tr("mode: —"), simBody);
       m_flightModeLabel->setStyleSheet(
@@ -2237,6 +2258,18 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
                                               c.collisionResolution)
                : 0.0f;
     };
+  } else if (vsim::isFieldArenaBiome(w.proceduralBiome)) {
+    // Preset arenas (hills/alpine/desert/forest/racing/yard/...): sample the
+    // same meshed surface the arena mesh + collision are built from.
+    auto fld = std::make_shared<vsim::procgen::TerrainField>(
+        vsim::arenaField(w));
+    const float sz = w.proceduralSizeM;
+    const int res = std::clamp(w.proceduralResolution, 4, 1024);
+    rawHeightAt = [fld](float n, float e) { return fld->height(n, e); };
+    heightAt = [fld, sz, res](float n, float e) {
+      return vsim::procgen::arenaSurfaceHeight(*fld, sz, res, n, e);
+    };
+    minimapRange = w.proceduralSizeM * 0.5f;
   } else if (vsim::isKnownBiome(w.proceduralBiome)) {
     auto hf = std::make_shared<vsim::procgen::Heightfield>(
         vsim::proceduralMeadowHeightfield(w));
@@ -2254,7 +2287,10 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
     m_minimap->setSampler(rawHeightAt); // ~12k samples: must stay cheap
     if (heightAt) {
       m_minimap->setRangeM(minimapRange);
-      m_minimap->setReferenceHeight(endless ? w.field.heightM : 80.0f);
+      m_minimap->setReferenceHeight(
+          (endless || vsim::isFieldArenaBiome(w.proceduralBiome))
+              ? w.field.heightM
+              : 80.0f);
     }
   }
 
@@ -3599,6 +3635,11 @@ void SimulatorWidget::persistWorld(const vsim::WorldConfig &w) {
   s.setValue("worldMeshOffX", w.worldMeshOffset.x());
   s.setValue("worldMeshOffY", w.worldMeshOffset.y());
   s.setValue("worldMeshOffZ", w.worldMeshOffset.z());
+  // World preset (procedural arena): the id + seed regenerate it exactly.
+  s.setValue("worldPreset", w.worldPreset);
+  s.setValue("worldPresetSeed", w.proceduralSeed);
+  // Full procedural params (field, flora, look...): knob tweaks survive restart.
+  s.setValue("proceduralJson", WorldEditorWidget::serializeProcedural(w));
   s.beginWriteArray("obstacles", w.obstacles.size());
   for (int i = 0; i < w.obstacles.size(); ++i) {
     const vsim::Obstacle &o = w.obstacles[i];
@@ -3664,7 +3705,23 @@ vsim::WorldConfig SimulatorWidget::restoreWorld() {
     w.obstacles.push_back(o);
   }
   s.endArray();
+  const QString preset = s.value("worldPreset").toString();
+  const quint32 pseed = s.value("worldPresetSeed", w.proceduralSeed).toUInt();
+  const QString procJson = s.value("proceduralJson").toString();
   s.endGroup();
+  // Full params saved: restore them verbatim (the preset is NOT re-applied over
+  // hand-tuned knobs). Older settings have only preset id + seed: regenerate
+  // biome/field from those and keep the saved obstacle list (user edits).
+  if (!procJson.isEmpty() &&
+      WorldEditorWidget::deserializeProcedural(w, procJson)) {
+    // restored verbatim
+  } else if (!preset.isEmpty()) {
+    const QVector<vsim::Obstacle> saved = w.obstacles;
+    if (vsim::applyWorldPreset(w, preset, pseed)) {
+      w.worldPreset = preset;
+      w.obstacles = saved;
+    }
+  }
   return w;
 }
 
