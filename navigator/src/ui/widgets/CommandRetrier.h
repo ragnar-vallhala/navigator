@@ -60,6 +60,9 @@ public:
   }
 
   // An ack for command `msgid` arrived.
+  // ACKs are matched by command id only (the codec does not expose req_seq), so
+  // a late ACK OK from an earlier round can count toward a re-armed round (e.g.
+  // Apply pressed twice quickly). Harmless for idempotent pushes like these.
   void onAck(quint32 msgid, int result) {
     for (Entry &e : m_entries) {
       if (e.msgid != msgid || !e.st.pending())
