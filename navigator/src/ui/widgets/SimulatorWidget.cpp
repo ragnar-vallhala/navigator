@@ -22,7 +22,7 @@
 #include "../../vsim/MeshLoader.h"
 #include "../../vsim/SitlModule.h"
 #include "protocol/CommandCodec.h"
-#include "navlink_msgs.h" // NAVLINK_MSGID_CMD_SET_PID: the ack's `command`
+#include "navlink_msgs.h" // NAVLINK_MSGID_*: the ack's `command`
 #include "../../vsim/ProceduralWorld.h"
 #include "../../vsim/WorldMeshBuilder.h"
 #include "CollapsibleSection.h"
@@ -607,17 +607,17 @@ void SimulatorWidget::buildUi() {
               m_presetId = id;
               // Preset changed (or went Custom): the old round is moot. The
               // new set is armed when Apply pushes it.
-              m_gainPush.cancel();
-              if (m_gainTimer)
-                m_gainTimer->stop();
+              m_retrier.cancel(QStringLiteral("gains"));
               QSettings().setValue("simulator/presetId", id);
             });
     connect(m_geomEditor, &GeometryEditorWidget::geometryApplied, this, [this] {
       applyGeometryToRenderer();
-      pushFirmwareMotorGeometry(m_geomEditor->physicsConfig());
       if (m_sim) {
+        armMixPush(m_geomEditor->physicsConfig());
         m_sim->sendGeometry(m_geomEditor->physicsConfig());
         pushAirframeGains(true); // the gains follow the airframe, live
+      } else {
+        pushFirmwareMotorGeometry(m_geomEditor->physicsConfig());
       }
       persistGeometry(m_geomEditor->config());
       appendLog(
@@ -3195,8 +3195,15 @@ void SimulatorWidget::startInAppSim() {
       return;
     const auto cfg = m_geomEditor->physicsConfig();
     pushRatesToSim(); // apply configured loop rates before geometry/world
-    pushFirmwareMotorGeometry(
-        cfg); // firmware roll/pitch/yaw mix signs (physics frame)
+    // Firmware roll/pitch/yaw mix signs (physics frame) and the flight-mode
+    // release. Both are commands, so the firmware drops them until the time
+    // sync completes: armed, sent once synced, re-sent until ACKed.
+    armMixPush(cfg);
+    armStartCommand(
+        QStringLiteral("flightmode"), NAVLINK_MSGID_CMD_SET_FLIGHT_MODE, 1,
+        tr("flight-mode release"),
+        tr("the RC switch may not control the mode"),
+        [] { SitlModule::instance().send(CommandCodec::encodeSetFlightMode(2)); });
     pushAirframeGains(true); // the airframe's tuned gains (if a preset)
     m_sim->sendGeometry(cfg); // in-process physics motor layout
     m_sim->sendWorld(m_worldEditor->config());
@@ -3215,19 +3222,16 @@ void SimulatorWidget::startInAppSim() {
               tr("firmware roll-mix %1 (default -+ ; mismatch = inverted "
                  "roll). pushed to firmware + physics.")
                   .arg(rollMixString(cfg)));
-    // Belt-and-suspenders: re-assert BOTH the firmware mix AND the physics layout
+    // Belt-and-suspenders: re-assert the physics layout
     // shortly after start. If a restart race left one side on its default while
     // the other had the real (possibly Y-mirrored) geometry, roll inverts and
     // the craft topples at lift-off; this guarantees they agree before arming.
     QTimer::singleShot(800, this, [this] {
       if (!m_sim)
         return;
+      // (The firmware mix is no longer re-asserted blindly here: it is retried
+      // until the firmware ACKs it, see armMixPush.)
       const auto c = m_geomEditor->physicsConfig();
-      pushFirmwareMotorGeometry(c);
-      if (m_gainPush.pending()) { // already ACKed: nothing to re-assert
-        pushAirframeGains(false); // same gains again, not logged twice
-        m_gainPush.noteSent(m_gainClock.elapsed());
-      }
       m_sim->sendGeometry(c);
       pushRatesToSim(); // re-assert loop rates too: the daemon boots at its
                         // compiled default, so a dropped/raced SET_RATES would
@@ -3341,9 +3345,9 @@ void SimulatorWidget::stopInAppSim() {
   }
   m_sim->deleteLater();
   m_sim = nullptr;
-  m_gainPush.cancel(); // nothing left to ACK
-  if (m_gainTimer)
-    m_gainTimer->stop();
+  m_retrier.cancelAll(); // nothing left to ACK
+  if (m_retryTimer)
+    m_retryTimer->stop();
   m_propAudio.setMotors({0.0f, 0.0f, 0.0f, 0.0f}); // silence once stopped
   m_simStartBtn->setEnabled(true);
   if (m_simAttachBtn)
@@ -3427,11 +3431,23 @@ void SimulatorWidget::applyGeometryToRenderer() {
 
 // Push the current airframe's gains and, when `announce`, say so in the log:
 // the firmware saves applied gains (0:pid.bin), so the user should be able to
-// see why their tune changed, or that it was deliberately left alone.
+// see why their tune changed, or that it was deliberately left alone. With the
+// sim running the push is a Start command (see armStartCommand): sent once the
+// clock is synced and re-sent until the firmware ACKs all of the preset's
+// CMD_SET_PID slots.
 void SimulatorWidget::pushAirframeGains(bool announce) {
-  pushPresetGains(m_presetId);
-  if (announce)
-    armGainRetry();
+  const vsim::AirframePreset *p = vsim::findAirframePreset(m_presetId);
+  if (!p) {
+    m_retrier.cancel(QStringLiteral("gains")); // custom: nothing to wait for
+  } else if (m_sim) {
+    const QString id = m_presetId;
+    armStartCommand(QStringLiteral("gains"), NAVLINK_MSGID_CMD_SET_PID,
+                    int(p->gains.size()), tr("%1 gains").arg(id),
+                    tr("the simulator may fly stock gains"),
+                    [id] { pushPresetGains(id); });
+  } else {
+    pushPresetGains(m_presetId);
+  }
   if (!announce)
     return;
   appendLog("geom",
@@ -3441,68 +3457,53 @@ void SimulatorWidget::pushAirframeGains(bool announce) {
                       .arg(m_presetId));
 }
 
-// The firmware drops every command until its clock is disciplined, so a single
-// push can be lost and the sim would then fly stock gains. Track the push as
-// pending and re-send once a second until the firmware ACKs it (see
-// GainPushTracker for the acknowledgement rule), giving up visibly after 30 s.
-void SimulatorWidget::armGainRetry() {
-  if (!m_gainClock.isValid())
-    m_gainClock.start();
-  const vsim::AirframePreset *p = vsim::findAirframePreset(m_presetId);
-  m_gainPush.begin(m_presetId, p ? int(p->gains.size()) : 0,
-                   m_gainClock.elapsed());
-  if (!m_gainTimer) {
-    m_gainTimer = new QTimer(this);
-    m_gainTimer->setInterval(int(GainPushTracker::kRetryMs));
-    connect(m_gainTimer, &QTimer::timeout, this, [this] { gainRetryTick(); });
+void SimulatorWidget::armStartCommand(const QString &key, quint32 msgid,
+                                      int expected, const QString &label,
+                                      const QString &consequence,
+                                      CommandRetrier::Send send) {
+  if (!m_retryClock.isValid())
+    m_retryClock.start();
+  if (!m_retryTimer) {
+    m_retrier.setLog([this](const QString &s) { appendLog("geom", s); });
+    m_retryTimer = new QTimer(this);
+    m_retryTimer->setInterval(int(PendingCommand::kRetryMs));
+    connect(m_retryTimer, &QTimer::timeout, this, [this] { retryTick(); });
   }
-  if (m_gainPush.pending())
-    m_gainTimer->start();
-  else
-    m_gainTimer->stop();
+  if (m_retrier.arm(key, msgid, expected, label, consequence, std::move(send),
+                    m_retryClock.elapsed()))
+    m_retryTimer->start();
 }
 
-void SimulatorWidget::gainRetryTick() {
+void SimulatorWidget::armMixPush(const vsim::GeometryConfig &g) {
+  armStartCommand(QStringLiteral("mix"), NAVLINK_MSGID_CMD_SET_MOTOR_GEOMETRY, 1,
+                  tr("firmware motor mix (roll-mix %1)").arg(rollMixString(g)),
+                  tr("the simulator may fly the default mix and invert roll"),
+                  [g] { pushFirmwareMotorGeometry(g); });
+}
+
+void SimulatorWidget::retryTick() {
   if (!m_sim) { // sim stopped under us
-    m_gainPush.cancel();
-    m_gainTimer->stop();
+    m_retrier.cancelAll();
+    m_retryTimer->stop();
     return;
   }
-  const QString id = m_gainPush.id();
-  switch (m_gainPush.tick(m_gainClock.elapsed())) {
-  case GainPushTracker::Action::Resend:
-    pushPresetGains(id); // quiet: one log line per round, not per retry
-    break;
-  case GainPushTracker::Action::GaveUp:
-    m_gainTimer->stop();
-    appendLog("geom", tr("firmware did not acknowledge %1 gains; the "
-                         "simulator may fly stock gains")
-                          .arg(id));
-    break;
-  case GainPushTracker::Action::None:
-    break;
-  }
-  if (!m_gainPush.pending())
-    m_gainTimer->stop();
+  m_retrier.tick(m_retryClock.elapsed());
+  if (!m_retrier.anyPending())
+    m_retryTimer->stop();
+}
+
+void SimulatorWidget::setTimeSynced(bool synced) {
+  if (!m_retryClock.isValid())
+    m_retryClock.start();
+  m_retrier.setSynced(synced, m_retryClock.elapsed());
 }
 
 void SimulatorWidget::onCommandAck(quint32 command, quint8 reqSeq,
                                    quint8 result) {
-  Q_UNUSED(reqSeq); // acks are counted per round, not matched per slot
-  if (command != NAVLINK_MSGID_CMD_SET_PID || !m_gainPush.pending())
-    return;
-  const int expected = m_gainPush.expected();
-  const QString id = m_gainPush.id();
-  const int retries = m_gainPush.retries();
-  if (!m_gainPush.onAck(result, m_gainClock.elapsed()))
-    return;
-  if (m_gainTimer)
-    m_gainTimer->stop();
-  appendLog("geom", tr("firmware accepted %1 gains (%2/%2 ACK OK%3)")
-                        .arg(id)
-                        .arg(expected)
-                        .arg(retries ? tr(", after %1 resend(s)").arg(retries)
-                                     : QString()));
+  Q_UNUSED(reqSeq); // acks are counted per round, not matched per frame
+  m_retrier.onAck(command, result);
+  if (m_retryTimer && !m_retrier.anyPending())
+    m_retryTimer->stop();
 }
 
 void SimulatorWidget::persistGeometry(const vsim::GeometryConfig &g) {

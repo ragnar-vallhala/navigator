@@ -338,7 +338,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   connect(m_simulatorWidget, &SimulatorWidget::dataReceived, m_simSource,
           &SimSource::feed);
   // The firmware's COMMAND_ACKs come back through the same parser; the widget
-  // uses the CMD_SET_PID ones to know its airframe gains landed.
+  // uses them to retry its Start commands until they land.
   connect(m_engine->protocol(), &DroneProtocol::commandAckReceived,
           m_simulatorWidget, &SimulatorWidget::onCommandAck);
   // AT-1: the autotune tab proposes gains; applying to firmware is an explicit
@@ -1457,6 +1457,10 @@ void MainWindow::setConnected(bool on) {
     // Start in fast acquisition mode; onTimeSyncResponse relaxes to the
     // configured period once the clock locks.
     m_syncLocked = false;
+#ifdef NAVIGATOR_HAS_SITL
+    if (m_simulatorWidget)
+      m_simulatorWidget->setTimeSynced(false);
+#endif
     m_syncWide = false;
     m_syncTimer->start(kSyncFastMs);
     onTimeSyncRequested();
@@ -1800,6 +1804,10 @@ void MainWindow::onTimeSyncResponse(quint8 seq, quint64 t1, quint64 t2,
   const bool relax = locked && m_tsEst.synced();
   if (m_syncLocked != relax) {
     m_syncLocked = relax;
+#ifdef NAVIGATOR_HAS_SITL
+    if (m_simulatorWidget)
+      m_simulatorWidget->setTimeSynced(relax);
+#endif
     if (m_syncTimer)
       m_syncTimer->setInterval(relax ? m_syncPeriodMs : kSyncFastMs);
   }
