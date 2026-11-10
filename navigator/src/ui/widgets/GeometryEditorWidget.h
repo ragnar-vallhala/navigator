@@ -86,6 +86,11 @@ public:
   // still resolves, loads + recomputes so the preview is ready.
   void setConfig(const vsim::GeometryConfig &c);
 
+  // Show which built-in preset is loaded in the Preset combo ("" = Custom)
+  // without emitting presetChosen().
+  void setPresetId(const QString &id);
+  QString presetId() const; // current preset id, "" = custom
+
   const std::vector<QVector3D> &meshPositions() const { return meshPos_; }
   const std::vector<QVector3D> &meshNormals() const { return meshNrm_; }
   bool hasMesh() const { return !meshPos_.empty(); }
@@ -98,6 +103,9 @@ public slots:
 signals:
   void previewUpdated();  // mesh / CoM / motors changed → refresh preview
   void geometryApplied(); // user committed → push to daemon + persist
+  // The user picked a built-in preset (its geometry is already in the form),
+  // or switched back to a custom vehicle (id empty).
+  void presetChosen(const QString &id);
 
 private slots:
   void onBrowse();
@@ -105,6 +113,8 @@ private slots:
   void onApply();
   void onSaveFile(); // export the vehicle to a portable .json
   void onLoadFile(); // import a vehicle .json
+  void onPresetActivated(int index);
+  void onFormEdited(); // a manual edit: the vehicle is now custom
 
 private:
   void buildUi();
@@ -118,6 +128,8 @@ private:
   std::vector<QVector3D> meshPos_;
   std::vector<QVector3D> meshNrm_;
 
+  bool syncing_ = false; // form being loaded from a config, not edited
+  QComboBox *presetCombo_ = nullptr;
   QLineEdit *meshEdit_ = nullptr;
   QDoubleSpinBox *scaleSpin_ = nullptr;
   QDoubleSpinBox *massSpin_ = nullptr;

@@ -17,10 +17,17 @@ function(navigator_test name)
       ${SRC} ${SRC}/core ${SRC}/core/ui ${SRC}/comm ${SRC}/protocol)
   target_link_libraries(${name} PRIVATE
       Qt6::Test Qt6::Widgets Qt6::Core Qt6::Network Qt6::SerialPort)
+  # qt_add_executable makes a GUI-subsystem exe on Windows, whose stdout is
+  # lost: a failing QtTest then prints nothing under --output-on-failure.
+  set_target_properties(${name} PROPERTIES WIN32_EXECUTABLE FALSE)
   add_test(NAME ${name} COMMAND ${name})
   set_tests_properties(${name} PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endfunction()
+
+# ---- Start-command retry / ACK state machine (header only) -----------------
+navigator_test(tst_command_retrier tst_command_retrier.cpp)
+target_include_directories(tst_command_retrier PRIVATE ${SRC}/ui/widgets)
 
 # ---- Time-sync estimator (NTP offset/delay, jitter filter, skew) ----------
 navigator_test(tst_time_sync_estimator
@@ -79,6 +86,10 @@ navigator_test(tst_sysid_rtos
     ${SRC}/autotune/RtosEval.cpp
     ${SRC}/autotune/Cost.cpp)
 target_include_directories(tst_sysid_rtos PRIVATE ${SRC}/autotune)
+
+# ---- Private firmware VFS dir: resolver + reset safety rule ----------------
+navigator_test(tst_vfs_dir tst_vfs_dir.cpp ${SRC}/vsim/VfsDir.cpp)
+target_include_directories(tst_vfs_dir PRIVATE ${SRC}/vsim ${CMAKE_CURRENT_SOURCE_DIR})
 
 # ---- C++ autotune engine (Space + orchestration, synthetic rollout) -------
 navigator_test(tst_autotune_engine
@@ -171,9 +182,37 @@ navigator_test(tst_procgen
     ${SRC}/vsim/procgen/Noise.cpp
     ${SRC}/vsim/procgen/TerrainGen.cpp
     ${SRC}/vsim/procgen/TerrainField.cpp
+    ${SRC}/vsim/procgen/WorldPresets.cpp
     ${SRC}/vsim/procgen/Flora.cpp
     ${SRC}/vsim/ChunkStreamer.cpp)
 target_include_directories(tst_procgen PRIVATE ${SRC}/vsim)
+
+# ---- Procedural world presets (Qt-free core, headless) ----------------------
+navigator_test(tst_worldpresets
+    tst_worldpresets.cpp
+    ${SRC}/vsim/procgen/Noise.cpp
+    ${SRC}/vsim/procgen/TerrainField.cpp
+    ${SRC}/vsim/procgen/WorldPresets.cpp)
+target_include_directories(tst_worldpresets PRIVATE ${SRC}/vsim)
+
+# ---- World tab preset wiring (headless widget test) ------------------------
+if(NAVIGATOR_SITL)
+  navigator_test(tst_worldeditor
+      tst_worldeditor.cpp
+      ${SRC}/ui/widgets/WorldEditorWidget.cpp
+      ${SRC}/ui/widgets/CollapsibleSection.cpp
+      ${SRC}/core/Theme.cpp
+      ${SRC}/core/ui/Buttons.h # Q_OBJECT header: moc must see it
+      ${SRC}/vsim/ProceduralWorld.cpp
+      ${SRC}/vsim/procgen/Noise.cpp
+      ${SRC}/vsim/procgen/TerrainGen.cpp
+      ${SRC}/vsim/procgen/TerrainField.cpp
+      ${SRC}/vsim/procgen/WorldPresets.cpp)
+  target_include_directories(tst_worldeditor PRIVATE ${SRC}/vsim ${SRC}/ui/widgets)
+endif()
+
+# ---- Side-panel sizing helpers (no splitter may crop a panel) -------------
+navigator_test(tst_panel_widgets tst_panel_widgets.cpp)
 
 # ---- In-app simulator end to end (SITL builds only) -----------------------
 # Navigator's SitlModule + SimWorker + RcBridge against the real engine module:
@@ -185,9 +224,10 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
   navigator_test(tst_sitl_engine
       tst_sitl_engine.cpp
       ${SRC}/vsim/SitlModule.cpp ${SRC}/vsim/SitlModule.h
+      ${SRC}/vsim/VfsDir.cpp ${SRC}/vsim/VfsDir.h
       ${SRC}/vsim/SimWorker.cpp ${SRC}/vsim/SimWorker.h
       ${SRC}/vsim/RcBridge.cpp ${SRC}/vsim/RcBridge.h)
-  target_include_directories(tst_sitl_engine PRIVATE ${SRC}/vsim ${VAYU_SITL_SDK})
+  target_include_directories(tst_sitl_engine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${SRC}/vsim ${VAYU_SITL_SDK})
   target_link_libraries(tst_sitl_engine PRIVATE navlink_codec)
   if(WIN32)
     target_link_libraries(tst_sitl_engine PRIVATE winmm)
@@ -195,4 +235,70 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
   set_tests_properties(tst_sitl_engine PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
       TIMEOUT 60)
+endif()
+
+# ---- Airframe presets: data checks (no engine needed) ---------------------
+navigator_test(tst_airframe_presets
+    tst_airframe_presets.cpp
+    ${SRC}/vsim/AirframePresets.cpp
+    ${SRC}/vsim/VehicleJson.cpp)
+target_include_directories(tst_airframe_presets PRIVATE ${SRC}/vsim ${SRC}/ui/widgets)
+target_compile_definitions(tst_airframe_presets PRIVATE
+    AIRFRAME_VEHICLE_DIR="${CMAKE_SOURCE_DIR}/docs/vehicles")
+
+# ---- Airframe presets flown in the real firmware (SITL builds only) -------
+# Hover + yaw-sign per preset. Needs the engine module like tst_sitl_engine and
+# skips, saying why, without one. About a minute of wall-clock-paced sim.
+if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
+  navigator_test(tst_airframe_flight
+      tst_airframe_flight.cpp
+      ${SRC}/vsim/SitlModule.cpp ${SRC}/vsim/SitlModule.h
+      ${SRC}/vsim/VfsDir.cpp ${SRC}/vsim/VfsDir.h
+      ${SRC}/vsim/SimWorker.cpp ${SRC}/vsim/SimWorker.h
+      ${SRC}/vsim/AirframePresets.cpp
+      ${SRC}/protocol/CommandCodec.cpp
+      ${SRC}/core/crc.cpp)
+  target_include_directories(tst_airframe_flight PRIVATE
+      ${SRC}/vsim ${SRC}/ui/widgets ${SRC}/protocol ${SRC}/core ${VAYU_SITL_SDK})
+  target_link_libraries(tst_airframe_flight PRIVATE navlink_codec)
+  set_tests_properties(tst_airframe_flight PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
+      TIMEOUT 300)
+
+  # The Vehicle page's Preset combo: picking a preset keeps it, any manual edit
+  # of the airframe form flips it back to Custom. Needs the editor widget, so
+  # it builds with the mesh loader (assimp) like the app does.
+  find_package(assimp REQUIRED)
+  navigator_test(tst_geometry_editor_preset
+      tst_geometry_editor_preset.cpp
+      ${SRC}/ui/widgets/GeometryEditorWidget.cpp ${SRC}/ui/widgets/GeometryEditorWidget.h
+      ${SRC}/ui/widgets/CollapsibleSection.cpp ${SRC}/ui/widgets/CollapsibleSection.h
+      ${SRC}/core/Theme.cpp ${SRC}/core/ui/Buttons.h
+      ${SRC}/vsim/MeshLoader.cpp ${SRC}/vsim/MassProperties.cpp
+      ${SRC}/vsim/AirframePresets.cpp ${SRC}/vsim/VehicleJson.cpp)
+  target_include_directories(tst_geometry_editor_preset PRIVATE
+      ${SRC}/vsim ${SRC}/ui/widgets)
+  target_link_libraries(tst_geometry_editor_preset PRIVATE assimp::assimp)
+endif()
+
+# ---- Simulator Stop -> Start twice against the real engine ------------------
+# Spawn pose, Start commands ACK OK, a single RC feeder, a steady arm state.
+# Needs the engine module like tst_sitl_engine; skips, saying why, without one.
+if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
+  navigator_test(tst_sim_restart
+      tst_sim_restart.cpp
+      ${SRC}/vsim/SitlModule.cpp ${SRC}/vsim/SitlModule.h
+      ${SRC}/vsim/VfsDir.cpp ${SRC}/vsim/VfsDir.h
+      ${SRC}/vsim/SimWorker.cpp ${SRC}/vsim/SimWorker.h
+      ${SRC}/protocol/CommandCodec.cpp ${SRC}/protocol/CommandCodec.h
+      ${SRC}/core/crc.cpp)
+  target_include_directories(tst_sim_restart PRIVATE
+      ${SRC}/vsim ${SRC}/ui/widgets ${VAYU_SITL_SDK})
+  target_link_libraries(tst_sim_restart PRIVATE navlink_codec)
+  if(WIN32)
+    target_link_libraries(tst_sim_restart PRIVATE winmm)
+  endif()
+  set_tests_properties(tst_sim_restart PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
+      TIMEOUT 120)
 endif()

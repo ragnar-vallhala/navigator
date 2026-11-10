@@ -53,6 +53,7 @@
 #include <QPushButton>
 #include <QStringList>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QVBoxLayout>
@@ -63,6 +64,7 @@
 
 #ifdef NAVIGATOR_HAS_SITL
 #include "../../vsim/SitlModule.h"
+#include "../../vsim/VfsDir.h"
 // Commands reach the in-app sim as NavLink frames through SitlModule::send(),
 // the same frames a real FC gets. The firmware then runs its own CMD_SET_PID
 // handler, which validates, applies to the live controllers AND persists to
@@ -116,7 +118,15 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   // the toolbar goes read-only; the serial controls are usable only in Idle/Fc.
   buildSourceHooks();
   connect(&m_source, &SourceController::stateChanged, this,
-          [this](SourceState now, SourceState) {
+          [this](SourceState now, SourceState was) {
+            // The in-app sim's firmware rejects every command until its clock
+            // is disciplined, and nothing else starts the handshake for it.
+            if (now == SourceState::Sim) {
+              m_tsEst.reset(); // a (re)started firmware: fresh clock
+              startTimeSync();
+            }
+            else if (was == SourceState::Sim)
+              stopTimeSync();
             if (m_toolbar) {
               m_toolbar->setReplayMode(now == SourceState::Replay);
               m_toolbar->setSerialControlsEnabled(now == SourceState::Idle ||
@@ -337,6 +347,10 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   // replay. The signature matches; SimSource just re-emits as an ITelemetrySource.
   connect(m_simulatorWidget, &SimulatorWidget::dataReceived, m_simSource,
           &SimSource::feed);
+  // The firmware's COMMAND_ACKs come back through the same parser; the widget
+  // uses them to retry its Start commands until they land.
+  connect(m_engine->protocol(), &DroneProtocol::commandAckReceived,
+          m_simulatorWidget, &SimulatorWidget::onCommandAck);
   // AT-1: the autotune tab proposes gains; applying to firmware is an explicit
   // operator action. Turn the proposal into CMD_SET_PID frames and send them
   // over the live link (sendToFc refuses in replay; we also require a link).
@@ -810,6 +824,54 @@ void MainWindow::buildMenuBar() {
          ui::Icon::Calib, [this] { showCalibration(); });
   addNav(toolsMenu, "nav.gyronotch", "&Gyro Notch", QKeySequence("Ctrl+9"),
          ui::Icon::Control, [this] { showGyroNotch(); });
+#ifdef NAVIGATOR_HAS_SITL
+  toolsMenu->addSeparator();
+  toolsMenu->addAction(m_cmds->add(
+      "tools.resetFirmwareSettings", "Reset &Firmware Settings…", "Tools",
+      QKeySequence(), CmdContext::Always, [this] {
+        // Only the app's private VFS dir is ever cleared; a user-set
+        // VAYU_VFS_DIR is refused (see vsim::resetPrivateVfs).
+        const QString priv = vsim::privateVfsDir();
+        const QString env = qEnvironmentVariable("VAYU_VFS_DIR");
+        const bool userSet = !env.isEmpty() && env != priv;
+        if (userSet) {
+          QMessageBox::information(
+              this, tr("Reset firmware settings"),
+              tr("Not reset: VAYU_VFS_DIR is set by you (%1). Clear that "
+                 "directory yourself.")
+                  .arg(env));
+          return;
+        }
+        if (QMessageBox::question(
+                this, tr("Reset firmware settings"),
+                tr("Stop the simulator and erase the simulator firmware's "
+                   "saved settings (tuned gains) in\n%1 ?\n\nThe running "
+                   "app keeps a copy in memory: restart Navigator before "
+                   "starting the simulator again.")
+                    .arg(priv),
+                QMessageBox::Yes | QMessageBox::Cancel,
+                QMessageBox::Cancel) != QMessageBox::Yes)
+          return;
+        if (m_simulatorWidget)
+          m_simulatorWidget->stopInAppSim();
+        QString why;
+        const QString appData =
+            QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        if (vsim::resetPrivateVfs(priv, appData, false, &why)) {
+          m_logPanel->appendLog("[GCS] firmware settings erased: " + priv +
+                                " (restart Navigator to apply)");
+          // The firmware module caches 0:pid.bin in RAM and is never
+          // unloaded, so until a restart the next Start or gain save would
+          // write the old settings back.
+          QMessageBox::information(
+              this, tr("Reset firmware settings"),
+              tr("Saved settings erased. Restart Navigator before starting "
+                 "the simulator again; until then the firmware still holds "
+                 "the old values in memory and would save them back."));
+        } else
+          QMessageBox::warning(this, tr("Reset firmware settings"), why);
+      }));
+#endif
 
   // ---- Settings (a bare menu-bar action — clicking it opens the page
   // directly, no submenu) ----
@@ -1450,15 +1512,13 @@ void MainWindow::setConnected(bool on) {
     m_lastPushedState.clear();
     m_lastFlightMode = -1;
     m_lastFlightSrc = -1;
-    // Start in fast acquisition mode; onTimeSyncResponse relaxes to the
-    // configured period once the clock locks.
-    m_syncLocked = false;
-    m_syncWide = false;
-    m_syncTimer->start(kSyncFastMs);
-    onTimeSyncRequested();
+    startTimeSync();
   } else {
     m_armed = false;
-    m_syncTimer->stop();
+    // The in-app sim has no transport, so a transport going down must not stop
+    // the handshake the running sim is using.
+    if (m_source.state() != SourceState::Sim)
+      stopTimeSync();
   }
 }
 
@@ -1731,6 +1791,30 @@ void MainWindow::onHeartbeatReceived(uint64_t timestamp, uint8_t deviceId) {
     MainStatusBar::flashLive(m_toolbar->liveLabel());
 }
 
+// Start the clock-discipline handshake in fast acquisition mode;
+// onTimeSyncResponse relaxes to the configured period once the clock locks.
+// Fc starts it from setConnected(true); the in-app Sim has no transport (so no
+// connectionStateChanged) and starts it on entering the Sim state.
+void MainWindow::startTimeSync() {
+  m_syncLocked = false;
+#ifdef NAVIGATOR_HAS_SITL
+  if (m_simulatorWidget)
+    m_simulatorWidget->setTimeSynced(false);
+#endif
+  m_syncWide = false;
+  m_syncTimer->start(kSyncFastMs);
+  onTimeSyncRequested();
+}
+
+void MainWindow::stopTimeSync() {
+  m_syncTimer->stop();
+  m_syncLocked = false;
+#ifdef NAVIGATOR_HAS_SITL
+  if (m_simulatorWidget)
+    m_simulatorWidget->setTimeSynced(false);
+#endif
+}
+
 void MainWindow::onTimeSyncRequested() {
   // Both commandable sources need this. The firmware's §10.5 gate rejects
   // EVERY command until the clock is disciplined, and that applies to the
@@ -1796,6 +1880,10 @@ void MainWindow::onTimeSyncResponse(quint8 seq, quint64 t1, quint64 t2,
   const bool relax = locked && m_tsEst.synced();
   if (m_syncLocked != relax) {
     m_syncLocked = relax;
+#ifdef NAVIGATOR_HAS_SITL
+    if (m_simulatorWidget)
+      m_simulatorWidget->setTimeSynced(relax);
+#endif
     if (m_syncTimer)
       m_syncTimer->setInterval(relax ? m_syncPeriodMs : kSyncFastMs);
   }

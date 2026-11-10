@@ -27,8 +27,31 @@
 #include "VsimTypes.h"           // vsim::WorldConfig
 #include "procgen/Heightfield.h" // procgen::Heightfield
 #include "procgen/TerrainGen.h"  // procgen::TerrainParams
+#include "procgen/WorldPresets.h"
+
+#include <QList>
+#include <QPair>
 
 namespace vsim {
+
+// True for the TerrainField-meshed arenas (hills/alpine/flat/desert/forest/
+// racing/yard): the finite arena is built from w.field via procgen::meshArena.
+bool isFieldArenaBiome(const QString &biome);
+
+// World presets (id, label) and wind presets (id, label), for the UI.
+QList<QPair<QString, QString>> worldPresetList();
+QList<QPair<QString, QString>> windPresetList();
+
+// Replace the procedural fields of `w` (biome, field, flora, size, resolution,
+// obstacles) with preset `id` generated from `seed`. Returns false (w untouched)
+// for an unknown id. Deterministic: same id + seed -> same config.
+bool applyWorldPreset(WorldConfig &w, const QString &id, quint32 seed);
+
+// Wind preset `id` for `seed`; *ok=false (and a disabled WindConfig) if unknown.
+WindConfig windPresetConfig(const QString &id, quint32 seed, bool *ok = nullptr);
+
+// The terrain field + lattice of a field-arena world, for spawn height/minimap.
+procgen::TerrainField arenaField(const WorldConfig &w);
 
 // True if `biome` names a generator this build knows how to produce.
 bool isKnownBiome(const QString &biome);

@@ -104,7 +104,7 @@ jobs:
           # notices until this line moves, and then the module refuses to load
           # and the SITL cases fail loudly -- which is the right place to find
           # out, but not the earliest one.
-          VAYU_FW_VERSION: v0.2.0
+          VAYU_FW_VERSION: v0.2.1
           # vayu is private: see the header. Read-only, vayu Contents only.
           GH_TOKEN: ${{ secrets.VAYU_RELEASE_TOKEN }}
         run: |
@@ -211,6 +211,21 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir build-win --output-on-failure
+      - name: Failing tests, run directly
+        if: failure()
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          # ctest swallowed the QtTest output of a failing test on Windows;
+          # run each failed test's exe on its own to see why.
+          for t in $(ctest --test-dir build-win --rerun-failed -N | sed -n 's/.*Test *#[0-9]*: //p'); do
+            exe=$(find build-win -name "$t.exe" | head -1)
+            echo "=== $t ($exe)"
+            rc=0
+            "$exe" -v2 -o "$t.out.txt,txt" > "$t.stdout.txt" 2>&1 || rc=$?
+            echo "exit=$rc"
+            cat "$t.out.txt" "$t.stdout.txt" 2>&1 | tail -80
+          done
 
   # The one check branch protection requires: a job that skipped (docs-only
   # change, or commit lint on a push) is ok, anything else that did not

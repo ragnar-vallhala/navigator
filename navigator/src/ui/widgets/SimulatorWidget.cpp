@@ -18,9 +18,11 @@
 
 #include "core/Units.h"
 
+#include "../../vsim/AirframePresets.h"
 #include "../../vsim/MeshLoader.h"
 #include "../../vsim/SitlModule.h"
 #include "protocol/CommandCodec.h"
+#include "navlink_msgs.h" // NAVLINK_MSGID_*: the ack's `command`
 #include "../../vsim/ProceduralWorld.h"
 #include "../../vsim/WorldMeshBuilder.h"
 #include "CollapsibleSection.h"
@@ -255,6 +257,19 @@ void pushFirmwareMotorGeometry(const vsim::GeometryConfig &g) {
   SitlModule::instance().send(CommandCodec::encodeSetMotorGeometry(x, y, spin));
 }
 
+// Send an airframe preset's gain set to the firmware as CMD_SET_PID, the frames
+// the autotuner's Apply sends. Same command gate as the geometry above, so it is
+// re-sent with it. Whether the engine persists them to 0:pid.bin is not
+// verified (the private store stayed empty in a test), so do not rely on it.
+void pushPresetGains(const QString &presetId) {
+  const vsim::AirframePreset *p = vsim::findAirframePreset(presetId);
+  if (!p)
+    return; // a custom vehicle keeps whatever gains the firmware has
+  for (const PidSetCmd &c : p->gains)
+    SitlModule::instance().send(CommandCodec::encodeSetPid(
+        c.controller, c.axis, c.kp, c.ki, c.kd, c.kff));
+}
+
 // The roll-mix signs this geometry produces (for logging): -sign(y) per motor.
 // The firmware DEFAULT is {-1,-1,+1,+1}; a Y-mirrored airframe (e.g. an S500
 // with M1/M2 on -y) needs {+1,+1,-1,-1} — the exact inverse — so flying the
@@ -295,6 +310,7 @@ constexpr const char *kRcUartPathDefault = "COM3";
 constexpr const char *kRcPathDefault = "/dev/input/js0";
 constexpr const char *kRcUartPathDefault = "/dev/ttyUSB0";
 #endif
+constexpr const char *kRcCompactKey = "simulator/compactRcRow";
 constexpr const char *kRcBaudKey = "simulator/rcBaud";
 constexpr const char *kRcMapAxisKey = "simulator/rcMapAxis"; // + func
 constexpr const char *kRcMapInvKey = "simulator/rcMapInv";   // + func
@@ -584,6 +600,9 @@ void SimulatorWidget::buildUi() {
 
   m_rightStack = new QStackedWidget(splitter);
   splitter->addWidget(m_rightStack);
+  // The panel's minimum width follows its pages (MinWidthScrollArea), so
+  // forbid dragging it to nothing instead of cropping its contents.
+  splitter->setChildrenCollapsible(false);
 
   // ===== Vehicle page: airframe geometry + motor editor =====
   {
@@ -598,11 +617,23 @@ void SimulatorWidget::buildUi() {
     // Gizmo edits in the 3D view flow back into the editor (CoM frame).
     connect(m_renderer, &vsim::SimRendererWidget::motorEdited, m_geomEditor,
             &GeometryEditorWidget::setMotorFromGizmo);
+    connect(m_geomEditor, &GeometryEditorWidget::presetChosen, this,
+            [this](const QString &id) {
+              m_presetId = id;
+              // Preset changed (or went Custom): the old round is moot. The
+              // new set is armed when Apply pushes it.
+              m_retrier.cancel(QStringLiteral("gains"));
+              QSettings().setValue("simulator/presetId", id);
+            });
     connect(m_geomEditor, &GeometryEditorWidget::geometryApplied, this, [this] {
       applyGeometryToRenderer();
-      pushFirmwareMotorGeometry(m_geomEditor->physicsConfig());
-      if (m_sim)
+      if (m_sim) {
+        armMixPush(m_geomEditor->physicsConfig());
         m_sim->sendGeometry(m_geomEditor->physicsConfig());
+        pushAirframeGains(true); // the gains follow the airframe, live
+      } else {
+        pushFirmwareMotorGeometry(m_geomEditor->physicsConfig());
+      }
       persistGeometry(m_geomEditor->config());
       appendLog(
           "geom",
@@ -619,7 +650,7 @@ void SimulatorWidget::buildUi() {
     vehV->addWidget(buildFaultPanel());
     vehV->addStretch();
 
-    auto *scroll = new QScrollArea();
+    auto *scroll = new ui::MinWidthScrollArea();
     scroll->setWidgetResizable(true);
     scroll->setWidget(vehWrap);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -730,7 +761,9 @@ void SimulatorWidget::buildUi() {
         QString("color: %1;").arg(Theme::hex(Theme::kTextMuted)));
     sv->addWidget(m_simStatusLabel);
 
-    auto *runRow = new QHBoxLayout();
+    auto *runRow = new QGridLayout();
+    runRow->setContentsMargins(0, 0, 0, 0);
+    QList<QWidget *> runWidgets;
     m_simStartBtn = new ui::SuccessButton(tr("Start"), simBody);
     m_simStartBtn->setToolTip(tr("Boot firmware (first time) + start the sim"));
     connect(m_simStartBtn, &QPushButton::clicked, this,
@@ -762,11 +795,10 @@ void SimulatorWidget::buildUi() {
         tr("Attaching to an external sim needs a POSIX host (its pose stream "
            "is a FIFO). Use Start to run the simulator in-app."));
 #endif
-    runRow->addWidget(m_simStartBtn);
-    runRow->addWidget(m_simStopBtn);
-    runRow->addWidget(m_simResetBtn);
-    runRow->addWidget(m_simAttachBtn);
-    runRow->addStretch();
+    runWidgets << m_simStartBtn;
+    runWidgets << m_simStopBtn;
+    runWidgets << m_simResetBtn;
+    runWidgets << m_simAttachBtn;
     m_fpvCheck = new QCheckBox(tr("FPV cam"), simBody);
     m_fpvCheck->setToolTip(
         tr("Onboard first-person camera that rides the drone "
@@ -777,7 +809,7 @@ void SimulatorWidget::buildUi() {
       if (m_renderer)
         m_renderer->setFpv(on);
     });
-    runRow->addWidget(m_fpvCheck);
+    runWidgets << m_fpvCheck;
 
     // PiP visibility toggles (mockup Down Cam / Horizon chips).
     auto *downChk = new QCheckBox(tr("Down Cam"), simBody);
@@ -787,7 +819,7 @@ void SimulatorWidget::buildUi() {
       if (m_downPip)
         m_downPip->setVisible(on);
     });
-    runRow->addWidget(downChk);
+    runWidgets << downChk;
 
     auto *horizonChk = new QCheckBox(tr("Horizon"), simBody);
     horizonChk->setChecked(true);
@@ -796,7 +828,7 @@ void SimulatorWidget::buildUi() {
       if (m_horizonPip)
         m_horizonPip->setVisible(on);
     });
-    runRow->addWidget(horizonChk);
+    runWidgets << horizonChk;
 
     auto *contourChk = new QCheckBox(tr("Contours"), simBody);
     contourChk->setChecked(true);
@@ -806,7 +838,7 @@ void SimulatorWidget::buildUi() {
       if (m_minimapPip)
         m_minimapPip->setVisible(on);
     });
-    runRow->addWidget(contourChk);
+    runWidgets << contourChk;
 
 #ifdef VAYU_SIM_GRASS
     auto *grassChk = new QCheckBox(tr("Grass"), simBody);
@@ -827,7 +859,7 @@ void SimulatorWidget::buildUi() {
           m_downRenderer->setGpuGrassActive(on);
       }
     });
-    runRow->addWidget(grassChk);
+    runWidgets << grassChk;
     // Apply the unchecked default to the renderers now (an unchecked box emits
     // no toggled signal at startup).
     if (m_renderer)
@@ -848,7 +880,7 @@ void SimulatorWidget::buildUi() {
       QSettings().setValue(kAudioKey, on);
       m_propAudio.setEnabled(on);
     });
-    runRow->addWidget(m_propAudioChk);
+    runWidgets << m_propAudioChk;
     sv->addLayout(runRow);
 
     // -- Noise seed: Start / Reset send it with the reset so the sensor-noise
@@ -937,7 +969,8 @@ void SimulatorWidget::buildUi() {
     // first Start (firmware reads the RC path once at boot).
     {
       QSettings st;
-      auto *rcRow = new QHBoxLayout();
+      auto *rcRow = new QGridLayout();
+      rcRow->setContentsMargins(0, 0, 0, 0);
       m_rcEnable = new QCheckBox(tr("RC transmitter"), simBody);
       m_rcEnable->setChecked(st.value(kRcEnableKey, true).toBool());
       m_rcEnable->setToolTip(tr("Feed a USB RC transmitter (joystick) into "
@@ -947,7 +980,6 @@ void SimulatorWidget::buildUi() {
         if (m_rc)
           m_rc->setEnabled(on); // live, no restart
       });
-      rcRow->addWidget(m_rcEnable);
 
       // RC input source: a USB joystick (axes → channels) or a UART that
       // streams CSV microsecond frames straight off a serial port.
@@ -963,7 +995,6 @@ void SimulatorWidget::buildUi() {
              "channels; UART reads CSV µs frames directly."));
       connect(m_rcSource, QOverload<int>::of(&QComboBox::currentIndexChanged),
               this, [this] { applyRcSource(); });
-      rcRow->addWidget(m_rcSource);
 
       // Editable combo: type a device path, or drop down to pick an enumerated
       // serial port. Items + current text filled by applyRcSource().
@@ -984,7 +1015,6 @@ void SimulatorWidget::buildUi() {
               });
       connect(m_rcPath->lineEdit(), &QLineEdit::editingFinished, this,
               [this] { commitRcPath(); });
-      rcRow->addWidget(m_rcPath, 1);
 
       m_rcBaud = new QComboBox(simBody);
       for (int b : {9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600})
@@ -1002,7 +1032,6 @@ void SimulatorWidget::buildUi() {
                 if (m_rc)
                   m_rc->setUartBaud(b);
               });
-      rcRow->addWidget(m_rcBaud);
 
       // Explicit Connect for the UART source. The sim does NOT open the serial
       // device until this is pressed, so it can't fight the board telemetry for
@@ -1015,7 +1044,6 @@ void SimulatorWidget::buildUi() {
              "only grabs the serial port while connected."));
       connect(m_rcConnect, &QPushButton::clicked, this,
               [this] { setRcUartConnected(!m_rcUartConnected); });
-      rcRow->addWidget(m_rcConnect);
 
       // Acro (rate) flight-mode toggle. This IS the simulated RC ch6 switch: it
       // drives RcBridge ch6, the firmware reads ch6 and resolves the mode (no GCS
@@ -1039,8 +1067,31 @@ void SimulatorWidget::buildUi() {
         if (m_rc)
           m_rc->setAcro(on); // toggles ch6 -> firmware switches mode
       });
-      rcRow->addWidget(m_acroChk);
+      // Optional wrapped layout so the panel can be narrower; layout only.
+      auto *compactChk = new QCheckBox(tr("Compact controls"), simBody);
+      compactChk->setToolTip(tr("Wrap the run and RC control rows over several "
+                                "lines so the side panel can be narrower."));
+      sv->addWidget(compactChk);
       sv->addLayout(rcRow);
+      const QList<QWidget *> rcWidgets{m_rcEnable, m_rcSource, m_rcPath,
+                                       m_rcBaud,   m_rcConnect, m_acroChk};
+      connect(compactChk, &QCheckBox::toggled, this,
+              [this, compactChk, rcRow, rcWidgets, runRow, runWidgets](bool on) {
+                QSettings().setValue(kRcCompactKey, on);
+                ui::layoutWrappedRow(rcRow, rcWidgets, on, m_rcPath);
+                ui::layoutWrappedRow(runRow, runWidgets, on, nullptr, 3, 3);
+                // Invalidate every enclosing layout so the panel minimum
+                // (MinWidthScrollArea) follows live.
+                for (QWidget *w = compactChk; w; w = w->parentWidget()) {
+                  if (w->layout())
+                    w->layout()->invalidate();
+                  w->updateGeometry();
+                }
+              });
+      const bool compactOn = st.value(kRcCompactKey, false).toBool();
+      ui::layoutWrappedRow(rcRow, rcWidgets, compactOn, m_rcPath);
+      ui::layoutWrappedRow(runRow, runWidgets, compactOn, nullptr, 3, 3);
+      compactChk->setChecked(compactOn);
 
       m_flightModeLabel = new QLabel(tr("mode: —"), simBody);
       m_flightModeLabel->setStyleSheet(
@@ -1140,11 +1191,11 @@ void SimulatorWidget::buildUi() {
     logRow->addWidget(openBtn);
     sv->addLayout(logRow);
 
-    m_logPathLabel = new QLabel(tr("Current log: (none)"), simBody);
+    m_logPathLabel = new ui::ElidedLabel(simBody);
+    m_logPathLabel->setFullText(tr("Current log: (none)"));
     m_logPathLabel->setStyleSheet(
         QString("color: %1; font-family: monospace; font-size: 11px;")
             .arg(Theme::hex(Theme::kTextMuted)));
-    m_logPathLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     sv->addWidget(m_logPathLabel);
 
     m_log = new QPlainTextEdit(simBody);
@@ -1157,7 +1208,7 @@ void SimulatorWidget::buildUi() {
     pv->addWidget(simSec);
     pv->addStretch();
 
-    auto *scroll = new QScrollArea();
+    auto *scroll = new ui::MinWidthScrollArea();
     scroll->setWidgetResizable(true);
     scroll->setWidget(page);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -1168,7 +1219,7 @@ void SimulatorWidget::buildUi() {
   {
     auto *page = new QWidget();
     buildAutotunePage(page);
-    auto *scroll = new QScrollArea();
+    auto *scroll = new ui::MinWidthScrollArea();
     scroll->setWidgetResizable(true);
     scroll->setWidget(page);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -1180,7 +1231,19 @@ void SimulatorWidget::buildUi() {
 
   // Restore persisted configs (geometry setConfig also loads the mesh +
   // recomputes, firing previewUpdated -> applyGeometryToRenderer).
+  // (Read before setConfig: its previewUpdated persists the geometry.)
+  const bool hadSavedGeometry =
+      QSettings().contains(QString("%1/mass").arg(kGeomGroup));
   m_geomEditor->setConfig(restoreGeometry());
+  {
+    // Which preset's gains Start sends: the saved choice, else the 5-inch for a
+    // fresh install (that is the default geometry); "" = a custom vehicle.
+    m_presetId = QSettings()
+                     .value("simulator/presetId",
+                            hadSavedGeometry ? QString() : QStringLiteral("5in"))
+                     .toString();
+    m_geomEditor->setPresetId(m_presetId);
+  }
   m_worldEditor->setConfig(restoreWorld());
   m_worldEditor->setWindConfig(restoreWind());
   if (m_renderer)
@@ -2233,6 +2296,18 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
                                               c.collisionResolution)
                : 0.0f;
     };
+  } else if (vsim::isFieldArenaBiome(w.proceduralBiome)) {
+    // Preset arenas (hills/alpine/desert/forest/racing/yard/...): sample the
+    // same meshed surface the arena mesh + collision are built from.
+    auto fld = std::make_shared<vsim::procgen::TerrainField>(
+        vsim::arenaField(w));
+    const float sz = w.proceduralSizeM;
+    const int res = std::clamp(w.proceduralResolution, 4, 1024);
+    rawHeightAt = [fld](float n, float e) { return fld->height(n, e); };
+    heightAt = [fld, sz, res](float n, float e) {
+      return vsim::procgen::arenaSurfaceHeight(*fld, sz, res, n, e);
+    };
+    minimapRange = w.proceduralSizeM * 0.5f;
   } else if (vsim::isKnownBiome(w.proceduralBiome)) {
     auto hf = std::make_shared<vsim::procgen::Heightfield>(
         vsim::proceduralMeadowHeightfield(w));
@@ -2250,7 +2325,10 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
     m_minimap->setSampler(rawHeightAt); // ~12k samples: must stay cheap
     if (heightAt) {
       m_minimap->setRangeM(minimapRange);
-      m_minimap->setReferenceHeight(endless ? w.field.heightM : 80.0f);
+      m_minimap->setReferenceHeight(
+          (endless || vsim::isFieldArenaBiome(w.proceduralBiome))
+              ? w.field.heightM
+              : 80.0f);
     }
   }
 
@@ -3364,8 +3442,16 @@ void SimulatorWidget::startInAppSim() {
       return;
     const auto cfg = m_geomEditor->physicsConfig();
     pushRatesToSim(); // apply configured loop rates before geometry/world
-    pushFirmwareMotorGeometry(
-        cfg); // firmware roll/pitch/yaw mix signs (physics frame)
+    // Firmware roll/pitch/yaw mix signs (physics frame) and the flight-mode
+    // release. Both are commands, so the firmware drops them until the time
+    // sync completes: armed, sent once synced, re-sent until ACKed.
+    armMixPush(cfg);
+    armStartCommand(
+        QStringLiteral("flightmode"), NAVLINK_MSGID_CMD_SET_FLIGHT_MODE, 1,
+        tr("flight-mode release"),
+        tr("the RC switch may not control the mode"),
+        [] { SitlModule::instance().send(CommandCodec::encodeSetFlightMode(2)); });
+    pushAirframeGains(true); // the airframe's tuned gains (if a preset)
     m_sim->sendGeometry(cfg); // in-process physics motor layout
     m_sim->sendWorld(m_worldEditor->config());
     m_sim->sendObstacles(m_worldEditor->config().obstacles);
@@ -3391,15 +3477,16 @@ void SimulatorWidget::startInAppSim() {
               tr("firmware roll-mix %1 (default -+ ; mismatch = inverted "
                  "roll). pushed to firmware + physics.")
                   .arg(rollMixString(cfg)));
-    // Belt-and-suspenders: re-assert BOTH the firmware mix AND the physics layout
+    // Belt-and-suspenders: re-assert the physics layout
     // shortly after start. If a restart race left one side on its default while
     // the other had the real (possibly Y-mirrored) geometry, roll inverts and
     // the craft topples at lift-off; this guarantees they agree before arming.
     QTimer::singleShot(800, this, [this] {
       if (!m_sim)
         return;
+      // (The firmware mix is no longer re-asserted blindly here: it is retried
+      // until the firmware ACKs it, see armMixPush.)
       const auto c = m_geomEditor->physicsConfig();
-      pushFirmwareMotorGeometry(c);
       m_sim->sendGeometry(c);
       pushRatesToSim(); // re-assert loop rates too: the daemon boots at its
                         // compiled default, so a dropped/raced SET_RATES would
@@ -3515,6 +3602,9 @@ void SimulatorWidget::stopInAppSim() {
   }
   m_sim->deleteLater();
   m_sim = nullptr;
+  m_retrier.cancelAll(); // nothing left to ACK
+  if (m_retryTimer)
+    m_retryTimer->stop();
   m_propAudio.setMotors({0.0f, 0.0f, 0.0f, 0.0f}); // silence once stopped
   m_simStartBtn->setEnabled(true);
   if (m_simAttachBtn)
@@ -3596,12 +3686,90 @@ void SimulatorWidget::applyGeometryToRenderer() {
   }
 }
 
+// Push the current airframe's gains and, when `announce`, say so in the log:
+// the push can overwrite a tune the firmware loaded at boot, so the user should
+// be able to see why their tune changed, or that it was deliberately left alone. With the
+// sim running the push is a Start command (see armStartCommand): sent once the
+// clock is synced and re-sent until the firmware ACKs all of the preset's
+// CMD_SET_PID slots.
+void SimulatorWidget::pushAirframeGains(bool announce) {
+  const vsim::AirframePreset *p = vsim::findAirframePreset(m_presetId);
+  if (!p) {
+    m_retrier.cancel(QStringLiteral("gains")); // custom: nothing to wait for
+  } else if (m_sim) {
+    const QString id = m_presetId;
+    armStartCommand(QStringLiteral("gains"), NAVLINK_MSGID_CMD_SET_PID,
+                    int(p->gains.size()), tr("%1 gains").arg(id),
+                    tr("the simulator may fly stock gains"),
+                    [id] { pushPresetGains(id); });
+  } else {
+    pushPresetGains(m_presetId);
+  }
+  if (!announce)
+    return;
+  appendLog("geom",
+            m_presetId.isEmpty()
+                ? tr("custom vehicle: firmware keeps its current gains")
+                : tr("sent %1 gains to firmware (waiting for ACK)")
+                      .arg(m_presetId));
+}
+
+void SimulatorWidget::armStartCommand(const QString &key, quint32 msgid,
+                                      int expected, const QString &label,
+                                      const QString &consequence,
+                                      CommandRetrier::Send send) {
+  if (!m_retryClock.isValid())
+    m_retryClock.start();
+  if (!m_retryTimer) {
+    m_retrier.setLog([this](const QString &s) { appendLog("geom", s); });
+    m_retryTimer = new QTimer(this);
+    m_retryTimer->setInterval(int(PendingCommand::kRetryMs));
+    connect(m_retryTimer, &QTimer::timeout, this, [this] { retryTick(); });
+  }
+  if (m_retrier.arm(key, msgid, expected, label, consequence, std::move(send),
+                    m_retryClock.elapsed()))
+    m_retryTimer->start();
+}
+
+void SimulatorWidget::armMixPush(const vsim::GeometryConfig &g) {
+  armStartCommand(QStringLiteral("mix"), NAVLINK_MSGID_CMD_SET_MOTOR_GEOMETRY, 1,
+                  tr("firmware motor mix (roll-mix %1)").arg(rollMixString(g)),
+                  tr("the simulator may fly the default mix and invert roll"),
+                  [g] { pushFirmwareMotorGeometry(g); });
+}
+
+void SimulatorWidget::retryTick() {
+  if (!m_sim) { // sim stopped under us
+    m_retrier.cancelAll();
+    m_retryTimer->stop();
+    return;
+  }
+  m_retrier.tick(m_retryClock.elapsed());
+  if (!m_retrier.anyPending())
+    m_retryTimer->stop();
+}
+
+void SimulatorWidget::setTimeSynced(bool synced) {
+  if (!m_retryClock.isValid())
+    m_retryClock.start();
+  m_retrier.setSynced(synced, m_retryClock.elapsed());
+}
+
+void SimulatorWidget::onCommandAck(quint32 command, quint8 reqSeq,
+                                   quint8 result) {
+  Q_UNUSED(reqSeq); // acks are counted per round, not matched per frame
+  m_retrier.onAck(command, result);
+  if (m_retryTimer && !m_retrier.anyPending())
+    m_retryTimer->stop();
+}
+
 void SimulatorWidget::persistGeometry(const vsim::GeometryConfig &g) {
   QSettings s;
   s.beginGroup(kGeomGroup);
   s.setValue("meshPath", g.meshPath);
   s.setValue("scale", g.scale);
   s.setValue("mass", g.mass);
+  s.setValue("propRadius", g.propRadius);
   s.setValue("tx", g.translate.x());
   s.setValue("ty", g.translate.y());
   s.setValue("tz", g.translate.z());
@@ -3626,6 +3794,7 @@ void SimulatorWidget::persistGeometry(const vsim::GeometryConfig &g) {
     s.setValue(p + "kt", m.k_thrust);
     s.setValue(p + "km", m.k_moment);
     s.setValue(p + "wmax", m.max_omega);
+    s.setValue(p + "tau", m.tau);
   }
   s.endGroup();
 }
@@ -3641,6 +3810,7 @@ vsim::GeometryConfig SimulatorWidget::restoreGeometry() {
   g.meshPath = s.value("meshPath").toString();
   g.scale = s.value("scale", g.scale).toFloat();
   g.mass = s.value("mass", g.mass).toFloat();
+  g.propRadius = s.value("propRadius", g.propRadius).toFloat();
   g.translate = QVector3D(s.value("tx").toFloat(), s.value("ty").toFloat(),
                           s.value("tz").toFloat());
   g.rotate = QVector3D(s.value("rx").toFloat(), s.value("ry").toFloat(),
@@ -3662,6 +3832,7 @@ vsim::GeometryConfig SimulatorWidget::restoreGeometry() {
     m.k_thrust = s.value(p + "kt", m.k_thrust).toFloat();
     m.k_moment = s.value(p + "km", m.k_moment).toFloat();
     m.max_omega = s.value(p + "wmax", m.max_omega).toFloat();
+    m.tau = s.value(p + "tau", m.tau).toFloat();
   }
   s.endGroup();
   return g;
@@ -3685,6 +3856,11 @@ void SimulatorWidget::persistWorld(const vsim::WorldConfig &w) {
   s.setValue("worldMeshOffX", w.worldMeshOffset.x());
   s.setValue("worldMeshOffY", w.worldMeshOffset.y());
   s.setValue("worldMeshOffZ", w.worldMeshOffset.z());
+  // World preset (procedural arena): the id + seed regenerate it exactly.
+  s.setValue("worldPreset", w.worldPreset);
+  s.setValue("worldPresetSeed", w.proceduralSeed);
+  // Full procedural params (field, flora, look...): knob tweaks survive restart.
+  s.setValue("proceduralJson", WorldEditorWidget::serializeProcedural(w));
   s.beginWriteArray("obstacles", w.obstacles.size());
   for (int i = 0; i < w.obstacles.size(); ++i) {
     const vsim::Obstacle &o = w.obstacles[i];
@@ -3750,7 +3926,23 @@ vsim::WorldConfig SimulatorWidget::restoreWorld() {
     w.obstacles.push_back(o);
   }
   s.endArray();
+  const QString preset = s.value("worldPreset").toString();
+  const quint32 pseed = s.value("worldPresetSeed", w.proceduralSeed).toUInt();
+  const QString procJson = s.value("proceduralJson").toString();
   s.endGroup();
+  // Full params saved: restore them verbatim (the preset is NOT re-applied over
+  // hand-tuned knobs). Older settings have only preset id + seed: regenerate
+  // biome/field from those and keep the saved obstacle list (user edits).
+  if (!procJson.isEmpty() &&
+      WorldEditorWidget::deserializeProcedural(w, procJson)) {
+    // restored verbatim
+  } else if (!preset.isEmpty()) {
+    const QVector<vsim::Obstacle> saved = w.obstacles;
+    if (vsim::applyWorldPreset(w, preset, pseed)) {
+      w.worldPreset = preset;
+      w.obstacles = saved;
+    }
+  }
   return w;
 }
 
@@ -3859,7 +4051,7 @@ void SimulatorWidget::openNewLogFile() {
   }
   m_runClock.start(); // monotonic per-record timestamp base
   if (m_logPathLabel) {
-    m_logPathLabel->setText(QString("Ground-truth log: %1").arg(path));
+    m_logPathLabel->setFullText(QString("Ground-truth log: %1").arg(path));
     m_logPathLabel->setStyleSheet(
         QString("color: %1; font-family: monospace; font-size: 11px;")
             .arg(Theme::hex(Theme::kOk)));

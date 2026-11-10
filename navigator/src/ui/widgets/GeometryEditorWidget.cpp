@@ -18,8 +18,10 @@
 
 #include "../../core/Theme.h"
 #include "../../core/ui/Buttons.h"
+#include "../../vsim/AirframePresets.h"
 #include "../../vsim/MassProperties.h"
 #include "../../vsim/MeshLoader.h"
+#include "../../vsim/VehicleJson.h"
 #include "CollapsibleSection.h"
 
 #include <QComboBox>
@@ -54,75 +56,6 @@ QDoubleSpinBox *spin(double lo, double hi, int decimals, double step,
   return s;
 }
 
-// ---- portable vehicle JSON (cross-project import/export) ----
-QJsonObject vec3ToJson(const QVector3D &v) {
-  return QJsonObject{{"x", v.x()}, {"y", v.y()}, {"z", v.z()}};
-}
-QVector3D vec3FromJson(const QJsonValue &v, const QVector3D &def = {}) {
-  if (!v.isObject())
-    return def;
-  const QJsonObject o = v.toObject();
-  return QVector3D(o.value("x").toDouble(def.x()),
-                   o.value("y").toDouble(def.y()),
-                   o.value("z").toDouble(def.z()));
-}
-
-QJsonObject configToJson(const vsim::GeometryConfig &c) {
-  QJsonObject root;
-  root["format"] = "vayu-vehicle";
-  root["version"] = 1;
-  root["meshPath"] = c.meshPath;
-  root["scale"] = c.scale;
-  root["mass"] = c.mass;
-  root["prop_radius"] = c.propRadius;
-  root["translate"] = vec3ToJson(c.translate);
-  root["rotate"] = vec3ToJson(c.rotate);
-  root["com"] = vec3ToJson(c.com);
-  QJsonArray inertia;
-  for (float v : c.inertia)
-    inertia.append(v);
-  root["inertia"] = inertia;
-  QJsonArray motors;
-  for (const auto &m : c.motors) {
-    motors.append(QJsonObject{{"pos", vec3ToJson(m.pos)},
-                              {"axis", vec3ToJson(m.axis)},
-                              {"spin", m.spin},
-                              {"k_thrust", m.k_thrust},
-                              {"k_moment", m.k_moment},
-                              {"max_omega", m.max_omega},
-                              {"tau", m.tau}});
-  }
-  root["motors"] = motors;
-  return root;
-}
-
-vsim::GeometryConfig configFromJson(const QJsonObject &root) {
-  vsim::GeometryConfig c; // defaults fill anything missing
-  c.meshPath = root.value("meshPath").toString(c.meshPath);
-  c.scale = root.value("scale").toDouble(c.scale);
-  c.mass = root.value("mass").toDouble(c.mass);
-  c.propRadius = root.value("prop_radius").toDouble(c.propRadius);
-  c.translate = vec3FromJson(root.value("translate"), c.translate);
-  c.rotate = vec3FromJson(root.value("rotate"), c.rotate);
-  c.com = vec3FromJson(root.value("com"), c.com);
-  const QJsonArray inertia = root.value("inertia").toArray();
-  for (int i = 0; i < 9 && i < inertia.size(); ++i)
-    c.inertia[i] = inertia[i].toDouble(c.inertia[i]);
-  const QJsonArray motors = root.value("motors").toArray();
-  for (int i = 0; i < 4 && i < motors.size(); ++i) {
-    const QJsonObject m = motors[i].toObject();
-    auto &mc = c.motors[i];
-    mc.pos = vec3FromJson(m.value("pos"), mc.pos);
-    mc.axis = vec3FromJson(m.value("axis"), mc.axis);
-    mc.spin = m.value("spin").toInt(mc.spin);
-    mc.k_thrust = m.value("k_thrust").toDouble(mc.k_thrust);
-    mc.k_moment = m.value("k_moment").toDouble(mc.k_moment);
-    mc.max_omega = m.value("max_omega").toDouble(mc.max_omega);
-    mc.tau = m.value("tau").toDouble(mc.tau);
-  }
-  return c;
-}
-
 } // namespace
 
 GeometryEditorWidget::GeometryEditorWidget(QWidget *parent) : QWidget(parent) {
@@ -146,12 +79,24 @@ void GeometryEditorWidget::buildUi() {
         tr("Import a vehicle .vveh file, e.g. from another project."));
     row->addWidget(save);
     row->addWidget(load);
+    row->addSpacing(12);
+    row->addWidget(new QLabel(tr("Preset:"), this));
+    presetCombo_ = new QComboBox(this);
+    presetCombo_->setToolTip(
+        tr("Load a built-in airframe (geometry; its tuned PID gains are sent "
+           "to the firmware when the sim starts)."));
+    presetCombo_->addItem(tr("Custom"), QString());
+    for (const auto &p : vsim::airframePresets())
+      presetCombo_->addItem(p.name, p.id);
+    row->addWidget(presetCombo_);
     row->addStretch();
     root->addLayout(row);
     connect(save, &QPushButton::clicked, this,
             &GeometryEditorWidget::onSaveFile);
     connect(load, &QPushButton::clicked, this,
             &GeometryEditorWidget::onLoadFile);
+    connect(presetCombo_, &QComboBox::activated, this,
+            &GeometryEditorWidget::onPresetActivated);
   }
 
   // -- Mesh, Mass & Inertia --
@@ -255,18 +200,22 @@ void GeometryEditorWidget::buildUi() {
       form->setContentsMargins(0, 0, 0, 0);
       form->setLabelAlignment(Qt::AlignRight);
 
-      r.px = spin(-2, 2, 3, 0.005, 0, QStringLiteral(" m"));
-      r.py = spin(-2, 2, 3, 0.005, 0, QStringLiteral(" m"));
-      r.pz = spin(-2, 2, 3, 0.005, 0, QStringLiteral(" m"));
+      // 4 decimals: the small presets (a 65 mm whoop) sit at a few cm, and the
+      // spinbox rounds to its decimals when the form is read back.
+      r.px = spin(-2, 2, 4, 0.005, 0, QStringLiteral(" m"));
+      r.py = spin(-2, 2, 4, 0.005, 0, QStringLiteral(" m"));
+      r.pz = spin(-2, 2, 4, 0.005, 0, QStringLiteral(" m"));
       r.ax = spin(-1, 1, 3, 0.05, 0);
       r.ay = spin(-1, 1, 3, 0.05, 0);
       r.az = spin(-1, 1, 3, 0.05, -1);
       r.spin = new QComboBox();
       r.spin->addItem(tr("CCW (+)"), +1);
       r.spin->addItem(tr("CW (−)"), -1);
-      r.kt = spin(0, 1, 8, 1e-6, 1.522e-5);
-      r.km = spin(0, 1, 9, 1e-7, 2.44e-7);
-      r.wmax = spin(0, 5000, 0, 50, 1200, QStringLiteral(" rad/s"));
+      // Wide enough for every preset (whoop k_moment 2.7e-11, 5668 rad/s) with
+      // four significant figures surviving the spinbox round trip.
+      r.kt = spin(0, 1, 12, 1e-7, 1.234e-6);
+      r.km = spin(0, 1, 14, 1e-9, 1.59e-8);
+      r.wmax = spin(0, 20000, 0, 50, 3365, QStringLiteral(" rad/s"));
       r.tau = spin(0.001, 0.5, 4, 0.001, 0.0125, QStringLiteral(" s"));
 
       form->addRow(tr("Pos X"), r.px);
@@ -298,12 +247,45 @@ void GeometryEditorWidget::buildUi() {
     connect(apply, &QPushButton::clicked, this, &GeometryEditorWidget::onApply);
   }
 
+  // Any manual edit of the airframe fields makes the vehicle a custom one: the
+  // Preset combo goes back to "Custom" so Start does not send a preset's gains
+  // for a modified airframe. Loading a config into the form (a preset, a file,
+  // restore) is guarded by syncing_ and does not count as an edit.
+  {
+    auto edited = [this] { onFormEdited(); };
+    const auto dbl = QOverload<double>::of(&QDoubleSpinBox::valueChanged);
+    const auto idx = QOverload<int>::of(&QComboBox::currentIndexChanged);
+    for (QDoubleSpinBox *sp : {scaleSpin_, massSpin_, transX_, transY_, transZ_,
+                               rotX_, rotY_, rotZ_})
+      connect(sp, dbl, this, edited);
+    connect(meshEdit_, &QLineEdit::textEdited, this, edited);
+    for (auto &r : rows_) {
+      for (QDoubleSpinBox *sp : {r.px, r.py, r.pz, r.ax, r.ay, r.az, r.kt,
+                                 r.km, r.wmax, r.tau})
+        connect(sp, dbl, this, edited);
+      connect(r.spin, idx, this, edited);
+    }
+  }
+
   // Pack sections to the top; without this the QVBoxLayout spreads the
   // slack between collapsed sections so they sit evenly apart.
   root->addStretch(1);
 }
 
+void GeometryEditorWidget::onFormEdited() {
+  if (syncing_ || presetCombo_->currentIndex() == 0)
+    return;
+  setPresetId(QString());
+  emit presetChosen(QString());
+}
+
+QString GeometryEditorWidget::presetId() const {
+  return presetCombo_->currentData().toString();
+}
+
 void GeometryEditorWidget::syncConfigToUi() {
+  const bool wasSyncing = syncing_;
+  syncing_ = true;
   meshEdit_->setText(cfg_.meshPath);
   scaleSpin_->setValue(cfg_.scale);
   massSpin_->setValue(cfg_.mass);
@@ -328,6 +310,7 @@ void GeometryEditorWidget::syncConfigToUi() {
     r.wmax->setValue(m.max_omega);
     r.tau->setValue(m.tau);
   }
+  syncing_ = wasSyncing;
 }
 
 void GeometryEditorWidget::syncUiToConfig() {
@@ -463,6 +446,29 @@ void GeometryEditorWidget::onCompute() {
   emit previewUpdated();
 }
 
+void GeometryEditorWidget::setPresetId(const QString &id) {
+  const int i = presetCombo_->findData(id);
+  QSignalBlocker b(presetCombo_);
+  presetCombo_->setCurrentIndex(i < 0 ? 0 : i);
+}
+
+void GeometryEditorWidget::onPresetActivated(int index) {
+  const QString id = presetCombo_->itemData(index).toString();
+  const vsim::AirframePreset *p = vsim::findAirframePreset(id);
+  if (!p) { // "Custom": keep what is in the form
+    emit presetChosen(QString());
+    return;
+  }
+  setConfig(p->geometry);
+  loadedName_ = p->name;
+  statusLbl_->setText(tr("Loaded preset \"%1\" (real pack %2; its PID gains "
+                         "are sent when the sim starts).")
+                          .arg(p->name, p->pack));
+  statusLbl_->setStyleSheet(QString("color:%1;").arg(Theme::hex(Theme::kOk)));
+  emit previewUpdated(); // refresh the preview and persist
+  emit presetChosen(p->id);
+}
+
 void GeometryEditorWidget::onApply() {
   syncUiToConfig();
   emit geometryApplied();
@@ -483,7 +489,7 @@ void GeometryEditorWidget::onSaveFile() {
         QString("color:%1;").arg(Theme::hex(Theme::kDanger)));
     return;
   }
-  f.write(QJsonDocument(configToJson(cfg_)).toJson(QJsonDocument::Indented));
+  f.write(QJsonDocument(vsim::geometryToJson(cfg_)).toJson(QJsonDocument::Indented));
   loadedName_ = QFileInfo(path).fileName();
   statusLbl_->setText(tr("Saved vehicle to %1").arg(loadedName_));
   statusLbl_->setStyleSheet(QString("color:%1;").arg(Theme::hex(Theme::kOk)));
@@ -512,7 +518,9 @@ void GeometryEditorWidget::onLoadFile() {
   }
   // setConfig syncs the form, re-loads the mesh + recomputes if its path
   // resolves (else keeps the stored inertia/CoM), and fires previewUpdated.
-  setConfig(configFromJson(doc.object()));
+  setConfig(vsim::geometryFromJson(doc.object()));
+  setPresetId(QString());
+  emit presetChosen(QString());
   loadedName_ = QFileInfo(path).fileName();
   statusLbl_->setText(tr("Loaded vehicle from %1").arg(loadedName_));
   statusLbl_->setStyleSheet(QString("color:%1;").arg(Theme::hex(Theme::kOk)));

@@ -214,7 +214,10 @@ set(GCS_SITL_SOURCES
     src/ui/widgets/CollapsibleSection.cpp
     src/ui/widgets/SimHudWidget.cpp
     src/vsim/SimWorker.cpp
+    src/vsim/VehicleJson.cpp
+    src/vsim/AirframePresets.cpp
     src/vsim/SitlModule.cpp
+    src/vsim/VfsDir.cpp
     src/vsim/SimRendererWidget.cpp
     src/vsim/MeshLoader.cpp
     src/vsim/WorldMeshBuilder.cpp
@@ -223,6 +226,7 @@ set(GCS_SITL_SOURCES
     src/vsim/procgen/Noise.cpp
     src/vsim/procgen/TerrainGen.cpp
     src/vsim/procgen/TerrainField.cpp
+    src/vsim/procgen/WorldPresets.cpp
     src/vsim/MassProperties.cpp
     src/vsim/RcBridge.cpp
     src/vsim/TrainingCourse.cpp
@@ -238,12 +242,17 @@ set(GCS_SITL_HEADERS
     src/autotune/SysId.h
     src/autotune/AutotuneWorker.h
     src/ui/widgets/SimulatorWidget.h
+    src/ui/widgets/PendingCommand.h
+    src/ui/widgets/CommandRetrier.h
+    src/ui/widgets/PanelWidgets.h
     src/ui/widgets/GeometryEditorWidget.h
     src/ui/widgets/WorldEditorWidget.h
     src/ui/widgets/ContourMinimapWidget.h
     src/ui/widgets/CollapsibleSection.h
     src/ui/widgets/SimHudWidget.h
     src/vsim/VsimTypes.h
+    src/vsim/VehicleJson.h
+    src/vsim/AirframePresets.h
     src/vsim/SimWorker.h
     src/vsim/SimRendererWidget.h
     src/vsim/MeshLoader.h
@@ -256,6 +265,7 @@ set(GCS_SITL_HEADERS
     src/vsim/procgen/TerrainGen.h
     src/vsim/procgen/TerrainField.h
     src/vsim/procgen/Flora.h
+    src/vsim/procgen/WorldPresets.h
     src/vsim/MassProperties.h
     src/vsim/RcBridge.h
     src/vsim/TrainingCourse.h
