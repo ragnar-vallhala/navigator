@@ -22,8 +22,85 @@
 
 namespace vsim {
 
+bool isFieldArenaBiome(const QString &biome) {
+  return procgen::isFieldBiome(biome.toLower().toStdString());
+}
+
 bool isKnownBiome(const QString &biome) {
-  return biome.compare(QStringLiteral("meadow"), Qt::CaseInsensitive) == 0;
+  return biome.compare(QStringLiteral("meadow"), Qt::CaseInsensitive) == 0 ||
+         isFieldArenaBiome(biome);
+}
+
+QList<QPair<QString, QString>> worldPresetList() {
+  QList<QPair<QString, QString>> l;
+  for (const auto &p : procgen::worldPresets())
+    l.append({QString::fromLatin1(p.id), QString::fromUtf8(p.label)});
+  return l;
+}
+
+QList<QPair<QString, QString>> windPresetList() {
+  QList<QPair<QString, QString>> l;
+  for (const auto &p : procgen::windPresets())
+    l.append({QString::fromLatin1(p.id), QString::fromUtf8(p.label)});
+  return l;
+}
+
+bool applyWorldPreset(WorldConfig &w, const QString &id, quint32 seed) {
+  procgen::PresetData d;
+  if (!procgen::buildWorldPreset(id.toStdString(), seed, d))
+    return false;
+  w.proceduralBiome = QString::fromStdString(d.biome);
+  w.proceduralSeed = seed;
+  if (d.biome == "meadow") {
+    // The original finite meadow keeps its own generator and defaults.
+    w.proceduralSizeM = 256.0f;
+    w.proceduralResolution = 192;
+    w.field = procgen::FieldParams{};
+    w.field.seed = seed;
+    w.flora = procgen::FloraParams{};
+    w.flora.seed = seed;
+    w.obstacles.clear();
+    return true;
+  }
+  w.proceduralSizeM = d.sizeM;
+  w.proceduralResolution = d.resolution;
+  w.field = d.field;
+  w.flora = d.flora;
+  w.obstacles.clear();
+  w.obstacles.reserve(static_cast<int>(d.obstacles.size()));
+  for (const procgen::PgObstacle &o : d.obstacles) {
+    Obstacle ob;
+    ob.type = o.type;
+    ob.pos = QVector3D(o.x, o.y, o.zc);
+    ob.size = QVector3D(o.sx, o.sy, o.sz);
+    ob.rotate = QVector3D(0.0f, 0.0f, o.yawDeg);
+    ob.restitution = 0.3f;
+    w.obstacles.push_back(ob);
+  }
+  return true;
+}
+
+WindConfig windPresetConfig(const QString &id, quint32 seed, bool *ok) {
+  procgen::WindPresetData d;
+  const bool good = procgen::buildWindPreset(id.toStdString(), seed, d);
+  if (ok)
+    *ok = good;
+  WindConfig c;
+  if (!good)
+    return c;
+  c.steady = QVector3D(d.steadyN, d.steadyE, d.steadyD);
+  c.gustAmp = d.gustAmp;
+  c.gustPeriod = d.gustPeriod;
+  c.turbSigma = d.turbSigma;
+  c.turbTau = d.turbTau;
+  c.enabled = d.enabled;
+  return c;
+}
+
+procgen::TerrainField arenaField(const WorldConfig &w) {
+  procgen::FieldParams p = w.field;
+  p.seed = static_cast<uint32_t>(w.proceduralSeed);
+  return procgen::TerrainField(p);
 }
 
 procgen::TerrainParams meadowParams(const WorldConfig &w) {
@@ -43,8 +120,14 @@ LoadedMesh generateProceduralWorld(const WorldConfig &w) {
   if (w.proceduralBiome.isEmpty() || !isKnownBiome(w.proceduralBiome))
     return out; // valid == false
 
-  const procgen::TerrainParams p = meadowParams(w);
-  const procgen::ProcMesh m = procgen::generateMeadow(p);
+  procgen::ProcMesh m;
+  if (isFieldArenaBiome(w.proceduralBiome)) {
+    const procgen::TerrainField f = arenaField(w);
+    const float sz = w.proceduralSizeM > 1.0f ? w.proceduralSizeM : 256.0f;
+    m = procgen::meshArena(f, sz, std::clamp(w.proceduralResolution, 4, 1024));
+  } else {
+    m = procgen::generateMeadow(meadowParams(w));
+  }
   if (m.empty())
     return out;
 
