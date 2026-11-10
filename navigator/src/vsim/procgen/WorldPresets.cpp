@@ -273,6 +273,36 @@ void layoutForest(const Ground &g, uint32_t seed, PresetData &d) {
   }
 }
 
+// Open terrain (hills/alpine/flat/desert) has nothing of known size in it, so a
+// pilot cannot judge height or speed. Plant slim survey poles on rings around
+// the spawn (collidable obstacles like any other). The renderer paints thin
+// poles in 1 m red/white bands, so counting bands reads height directly.
+void layoutMarkers(const Ground &g, uint32_t seed, PresetData &d) {
+  Rng rng(seed, 0x4d41524bu);
+  const float rings[3] = {24.0f, 48.0f, 90.0f};
+  const int counts[3] = {4, 6, 6};
+  const float lim = d.sizeM * 0.5f - 6.0f;
+  for (int r = 0; r < 3; ++r) {
+    const float a0 = rng.range(0.0f, 2.0f * kPi);
+    for (int i = 0; i < counts[r]; ++i) {
+      const float a = a0 + 2.0f * kPi * static_cast<float>(i) /
+                               static_cast<float>(counts[r]) +
+                      rng.range(-0.2f, 0.2f);
+      const float rad = rings[r] * rng.range(0.9f, 1.1f);
+      PgObstacle o;
+      o.type = 2;
+      o.x = rad * std::cos(a);
+      o.y = rad * std::sin(a);
+      o.sx = kMarkerPoleR;
+      if (std::fabs(o.x) > lim || std::fabs(o.y) > lim ||
+          !clearOfSpawn(o.x, o.y, o.sx))
+        continue;
+      seatUpright(g, o, o.sx, kMarkerPoleH);
+      d.obstacles.push_back(o);
+    }
+  }
+}
+
 PresetData baseArena(const std::string &biome, uint32_t seed, float sizeM) {
   PresetData d;
   d.biome = biome;
@@ -399,6 +429,8 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     layoutYard(g, seed, d);
   else if (id == "forest")
     layoutForest(g, seed, d);
+  else
+    layoutMarkers(g, seed, d); // hills / alpine / flat / desert
   out = std::move(d);
   return true;
 }

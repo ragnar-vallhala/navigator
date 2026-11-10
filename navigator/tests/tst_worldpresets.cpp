@@ -94,6 +94,7 @@ private slots:
   void slopeCapRespected();
   void spawnOnMeshAndPadFlat();
   void obstaclesClearOfSpawnAndSeated();
+  void openPresetsGetMarkerPoles();
   void racingGatesEvenlySpacedAndPassable();
   void windPresetsMagnitudes();
   void generateReappliesOnlyOnPresetOrSeedChange();
@@ -284,6 +285,30 @@ void TstWorldPresets::obstaclesClearOfSpawnAndSeated() {
                          footprint(p) + footprint(q) - 1e-3f,
                      (id + ": obstacles overlap").c_str());
           }
+      }
+    }
+  }
+}
+
+// Open terrain carries slim survey poles of known size (the renderer bands them
+// 1 m red/white) so a pilot can read height and speed: ringed around the spawn,
+// inside the arena, clear of the spawn pad, seated on the surface.
+void TstWorldPresets::openPresetsGetMarkerPoles() {
+  for (const char *id : {"hills", "alpine", "flat", "desert"}) {
+    for (uint32_t seed : {3u, 4u}) {
+      const PresetData &d = cached(id, seed);
+      QVERIFY2(d.obstacles.size() >= 12 && d.obstacles.size() <= 16, id);
+      const TerrainField f(d.field);
+      const float half = d.sizeM * 0.5f;
+      for (const PgObstacle &o : d.obstacles) {
+        QCOMPARE(o.type, 2);
+        QCOMPARE(o.sx, kMarkerPoleR);
+        QVERIFY2(o.sz >= kMarkerPoleH, id);
+        QVERIFY2(std::hypot(o.x, o.y) >= kSpawnClearM + o.sx - 1e-3f, id);
+        QVERIFY2(std::fabs(o.x) <= half && std::fabs(o.y) <= half, id);
+        const float g = arenaSurfaceHeight(f, d.sizeM, d.resolution, o.x, o.y);
+        QVERIFY2(-(o.zc + o.sz * 0.5f) <= g + 0.02f, id); // base not floating
+        QVERIFY2(-(o.zc - o.sz * 0.5f) > g, id);          // not buried
       }
     }
   }

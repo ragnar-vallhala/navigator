@@ -2269,6 +2269,11 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
   const vsim::WorldConfig &w = m_worldEditor->config();
   cancelWorldShip(); // a new world config makes any in-flight collision stale
 
+  // Only a finite procedural arena turns the horizon ground back on (below).
+  m_renderer->setHorizonGround(false);
+  if (m_downRenderer)
+    m_downRenderer->setHorizonGround(false);
+
   const bool endless = w.proceduralBiome.compare(QStringLiteral("endless"),
                                                  Qt::CaseInsensitive) == 0;
 
@@ -2475,8 +2480,11 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
       return;
     }
     m_renderer->setWorldMesh(m.positions, m.normals, m.colors);
-    if (m_downRenderer)
+    m_renderer->setHorizonGround(true); // ground detail + land to the horizon
+    if (m_downRenderer) {
       m_downRenderer->setWorldMesh(m.positions, m.normals, m.colors);
+      m_downRenderer->setHorizonGround(true);
+    }
     appendLog("world", tr("procedural world '%1' (seed %2): %3 tris")
                            .arg(w.proceduralBiome)
                            .arg(w.proceduralSeed)
