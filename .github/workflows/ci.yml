@@ -211,6 +211,19 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir build-win --output-on-failure
+      - name: Failing tests, run directly
+        if: failure()
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          # ctest swallowed the QtTest output of a failing test on Windows;
+          # run each failed test's exe on its own to see why.
+          for t in $(ctest --test-dir build-win --rerun-failed -N | sed -n 's/.*Test *#[0-9]*: //p'); do
+            exe=$(find build-win -name "$t.exe" | head -1)
+            echo "=== $t ($exe)"
+            "$exe" -v2 2>&1 | tail -60
+            echo "exit=${PIPESTATUS[0]}"
+          done
 
   # The one check branch protection requires: a job that skipped (docs-only
   # change, or commit lint on a push) is ok, anything else that did not
