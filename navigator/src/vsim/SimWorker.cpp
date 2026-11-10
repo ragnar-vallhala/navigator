@@ -71,6 +71,10 @@ SimSnapshot SimWorker::snapshot() const {
   return last_snap_;
 }
 
+bool SimWorker::claimSerialRcStart(std::atomic<bool> &gate) {
+  return !gate.exchange(true, std::memory_order_acq_rel);
+}
+
 void SimWorker::sendReset() { sendResetPose(0.0f, 0.0f, -0.05f); }
 
 void SimWorker::sendResetPose(float x, float y, float z) {
