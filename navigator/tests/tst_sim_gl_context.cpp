@@ -106,7 +106,8 @@ void loadScene(SimRendererWidget *r) {
   { // flora on a chunk (blades: pos xyz, yaw, height, flower, tint rgb)
     std::vector<float> bl;
     for (int i = 0; i < 64; ++i) {
-      const float x = 26.0f + float(i % 8) * 1.5f, y = -5.0f + float(i / 8) * 1.5f;
+      const int col = i % 8, row = i / 8; // grid cell, integer on purpose
+      const float x = 26.0f + float(col) * 1.5f, y = -5.0f + float(row) * 1.5f;
       for (float v : {x, y, 0.0f, 0.3f * float(i), 0.5f, float(i & 1), 0.3f, 0.6f, 0.2f})
         bl.push_back(v);
     }
