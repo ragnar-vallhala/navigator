@@ -237,6 +237,50 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
       TIMEOUT 60)
 endif()
 
+# ---- Airframe presets: data checks (no engine needed) ---------------------
+navigator_test(tst_airframe_presets
+    tst_airframe_presets.cpp
+    ${SRC}/vsim/AirframePresets.cpp
+    ${SRC}/vsim/VehicleJson.cpp)
+target_include_directories(tst_airframe_presets PRIVATE ${SRC}/vsim ${SRC}/ui/widgets)
+target_compile_definitions(tst_airframe_presets PRIVATE
+    AIRFRAME_VEHICLE_DIR="${CMAKE_SOURCE_DIR}/docs/vehicles")
+
+# ---- Airframe presets flown in the real firmware (SITL builds only) -------
+# Hover + yaw-sign per preset. Needs the engine module like tst_sitl_engine and
+# skips, saying why, without one. About a minute of wall-clock-paced sim.
+if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
+  navigator_test(tst_airframe_flight
+      tst_airframe_flight.cpp
+      ${SRC}/vsim/SitlModule.cpp ${SRC}/vsim/SitlModule.h
+      ${SRC}/vsim/VfsDir.cpp ${SRC}/vsim/VfsDir.h
+      ${SRC}/vsim/SimWorker.cpp ${SRC}/vsim/SimWorker.h
+      ${SRC}/vsim/AirframePresets.cpp
+      ${SRC}/protocol/CommandCodec.cpp
+      ${SRC}/core/crc.cpp)
+  target_include_directories(tst_airframe_flight PRIVATE
+      ${SRC}/vsim ${SRC}/ui/widgets ${SRC}/protocol ${SRC}/core ${VAYU_SITL_SDK})
+  target_link_libraries(tst_airframe_flight PRIVATE navlink_codec)
+  set_tests_properties(tst_airframe_flight PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
+      TIMEOUT 300)
+
+  # The Vehicle page's Preset combo: picking a preset keeps it, any manual edit
+  # of the airframe form flips it back to Custom. Needs the editor widget, so
+  # it builds with the mesh loader (assimp) like the app does.
+  find_package(assimp REQUIRED)
+  navigator_test(tst_geometry_editor_preset
+      tst_geometry_editor_preset.cpp
+      ${SRC}/ui/widgets/GeometryEditorWidget.cpp ${SRC}/ui/widgets/GeometryEditorWidget.h
+      ${SRC}/ui/widgets/CollapsibleSection.cpp ${SRC}/ui/widgets/CollapsibleSection.h
+      ${SRC}/core/Theme.cpp ${SRC}/core/ui/Buttons.h
+      ${SRC}/vsim/MeshLoader.cpp ${SRC}/vsim/MassProperties.cpp
+      ${SRC}/vsim/AirframePresets.cpp ${SRC}/vsim/VehicleJson.cpp)
+  target_include_directories(tst_geometry_editor_preset PRIVATE
+      ${SRC}/vsim ${SRC}/ui/widgets)
+  target_link_libraries(tst_geometry_editor_preset PRIVATE assimp::assimp)
+endif()
+
 # ---- Simulator Stop -> Start twice against the real engine ------------------
 # Spawn pose, Start commands ACK OK, a single RC feeder, a steady arm state.
 # Needs the engine module like tst_sitl_engine; skips, saying why, without one.

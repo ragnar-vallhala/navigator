@@ -236,6 +236,8 @@ private:
   void applyGeometryToRenderer();
   void persistGeometry(const vsim::GeometryConfig &g);
   vsim::GeometryConfig restoreGeometry();
+  void pushAirframeGains(bool announce);
+  QString m_presetId; // airframe preset whose gains Start sends ("" = custom)
   // Register a firmware push that the pre-sync command gate can drop: it is
   // sent once synced and re-sent every second until the firmware ACKs it (see
   // CommandRetrier). Other pushes (e.g. an airframe gain set) register here.
