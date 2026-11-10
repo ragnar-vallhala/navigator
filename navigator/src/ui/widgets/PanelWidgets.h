@@ -8,6 +8,8 @@
 #include <QGuiApplication>
 #include <QLabel>
 #include <QPainter>
+#include <QGridLayout>
+#include <QList>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QStyle>
@@ -20,6 +22,24 @@ namespace ui {
 inline int scrollAreaMinWidth(int contentMinWidth, int scrollBarWidth,
                               int frameWidth) {
   return contentMinWidth + scrollBarWidth + 2 * frameWidth;
+}
+
+// Lays `row` out in `grid`: one line, or (compact) wrapped over two lines so the
+// grid's minimum width drops. Only moves widgets; `stretch` (if any) is the one
+// that takes the spare width. Re-callable to switch modes live.
+inline void layoutWrappedRow(QGridLayout *grid, const QList<QWidget *> &row,
+                             bool compact, QWidget *stretch = nullptr) {
+  for (QWidget *w : row)
+    grid->removeWidget(w);
+  for (int c = 0; c < row.size(); ++c)
+    grid->setColumnStretch(c, 0);
+  const int perLine = compact ? (row.size() + 1) / 2 : row.size();
+  for (int i = 0; i < row.size(); ++i) {
+    grid->addWidget(row[i], i / perLine, i % perLine);
+    if (row[i] == stretch)
+      grid->setColumnStretch(i % perLine, 1);
+  }
+  grid->invalidate();
 }
 
 // QScrollArea whose minimumSizeHint follows its content widget's, so a

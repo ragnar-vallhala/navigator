@@ -290,6 +290,7 @@ constexpr const char *kRcUartPathDefault = "COM3";
 constexpr const char *kRcPathDefault = "/dev/input/js0";
 constexpr const char *kRcUartPathDefault = "/dev/ttyUSB0";
 #endif
+constexpr const char *kRcCompactKey = "simulator/compactRcRow";
 constexpr const char *kRcBaudKey = "simulator/rcBaud";
 constexpr const char *kRcMapAxisKey = "simulator/rcMapAxis"; // + func
 constexpr const char *kRcMapInvKey = "simulator/rcMapInv";   // + func
@@ -905,7 +906,8 @@ void SimulatorWidget::buildUi() {
     // first Start (firmware reads the RC path once at boot).
     {
       QSettings st;
-      auto *rcRow = new QHBoxLayout();
+      auto *rcRow = new QGridLayout();
+      rcRow->setContentsMargins(0, 0, 0, 0);
       m_rcEnable = new QCheckBox(tr("RC transmitter"), simBody);
       m_rcEnable->setChecked(st.value(kRcEnableKey, true).toBool());
       m_rcEnable->setToolTip(tr("Feed a USB RC transmitter (joystick) into "
@@ -915,7 +917,6 @@ void SimulatorWidget::buildUi() {
         if (m_rc)
           m_rc->setEnabled(on); // live, no restart
       });
-      rcRow->addWidget(m_rcEnable);
 
       // RC input source: a USB joystick (axes → channels) or a UART that
       // streams CSV microsecond frames straight off a serial port.
@@ -931,7 +932,6 @@ void SimulatorWidget::buildUi() {
              "channels; UART reads CSV µs frames directly."));
       connect(m_rcSource, QOverload<int>::of(&QComboBox::currentIndexChanged),
               this, [this] { applyRcSource(); });
-      rcRow->addWidget(m_rcSource);
 
       // Editable combo: type a device path, or drop down to pick an enumerated
       // serial port. Items + current text filled by applyRcSource().
@@ -952,7 +952,6 @@ void SimulatorWidget::buildUi() {
               });
       connect(m_rcPath->lineEdit(), &QLineEdit::editingFinished, this,
               [this] { commitRcPath(); });
-      rcRow->addWidget(m_rcPath, 1);
 
       m_rcBaud = new QComboBox(simBody);
       for (int b : {9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600})
@@ -970,7 +969,6 @@ void SimulatorWidget::buildUi() {
                 if (m_rc)
                   m_rc->setUartBaud(b);
               });
-      rcRow->addWidget(m_rcBaud);
 
       // Explicit Connect for the UART source. The sim does NOT open the serial
       // device until this is pressed, so it can't fight the board telemetry for
@@ -983,7 +981,6 @@ void SimulatorWidget::buildUi() {
              "only grabs the serial port while connected."));
       connect(m_rcConnect, &QPushButton::clicked, this,
               [this] { setRcUartConnected(!m_rcUartConnected); });
-      rcRow->addWidget(m_rcConnect);
 
       // Acro (rate) flight-mode toggle. This IS the simulated RC ch6 switch: it
       // drives RcBridge ch6, the firmware reads ch6 and resolves the mode (no GCS
@@ -1007,8 +1004,25 @@ void SimulatorWidget::buildUi() {
         if (m_rc)
           m_rc->setAcro(on); // toggles ch6 -> firmware switches mode
       });
-      rcRow->addWidget(m_acroChk);
+      // Optional wrapped layout so the panel can be narrower; layout only.
+      auto *compactChk = new QCheckBox(tr("Compact RC controls"), simBody);
+      compactChk->setToolTip(tr("Wrap the RC controls over two lines so the "
+                                "side panel can be made narrower."));
+      sv->addWidget(compactChk);
       sv->addLayout(rcRow);
+      const QList<QWidget *> rcWidgets{m_rcEnable, m_rcSource, m_rcPath,
+                                       m_rcBaud,   m_rcConnect, m_acroChk};
+      connect(compactChk, &QCheckBox::toggled, this,
+              [this, rcRow, rcWidgets](bool on) {
+                QSettings().setValue(kRcCompactKey, on);
+                ui::layoutWrappedRow(rcRow, rcWidgets, on, m_rcPath);
+                if (QWidget *p = parentWidget())
+                  p->updateGeometry();
+                updateGeometry();
+              });
+      const bool compactOn = st.value(kRcCompactKey, false).toBool();
+      ui::layoutWrappedRow(rcRow, rcWidgets, compactOn, m_rcPath);
+      compactChk->setChecked(compactOn);
 
       m_flightModeLabel = new QLabel(tr("mode: —"), simBody);
       m_flightModeLabel->setStyleSheet(
