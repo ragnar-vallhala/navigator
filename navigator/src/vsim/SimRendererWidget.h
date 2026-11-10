@@ -87,6 +87,18 @@ public:
       2.20f; // total cylinder (deck + skirt)
   void setHelipads(const std::vector<QVector3D> &pads);
 
+  // Far clip [m]. Fog (see drawLit) has fully taken over well before this; the
+  // old 200 m clip chopped the terrain off in a hard line against the sky.
+  static constexpr float kFarPlaneM = 3000.0f;
+  // Cylinders at or below this radius [m] are drawn as banded survey poles.
+  static constexpr float kPoleMaxR = 0.12f;
+  // True for a finite procedural arena: its terrain gets the ground detail and
+  // a detailed ground plane continues it to the horizon.
+  void setHorizonGround(bool on) {
+    horizonOn_ = on;
+    update();
+  }
+
   // Training course: glowing halo gates to fly through. setTrainingGates
   // replaces the gate layout; setTrainingActive updates which gate to aim for
   // (highlighted) and whether to draw the guidance arrow (drone -> next gate).
@@ -294,7 +306,7 @@ private:
   // Draws a pos+normal mesh through the lit program. view and model are
   // kept separate so normals transform by mat3(model) in world space.
   void drawLit(const Mesh &m, const QMatrix4x4 &view, const QMatrix4x4 &model,
-               const QVector3D &color);
+               const QVector3D &color, bool terrain = false, float bands = 0.0f);
 
   QMatrix4x4 cameraView() const;
   QVector3D freeForward() const; // free-cam look direction from yaw/pitch
@@ -326,6 +338,8 @@ private:
   int ul_shadowon_ = -1;
   int ul_sunint_ = -1;
   int ul_ambstr_ = -1;
+  int ul_terrain_ = -1;
+  int ul_bands_ = -1;
   float litSunInt_ = 1.0f; // terrain lighting look knobs (match grass)
   float litAmbStr_ = 1.0f;
 
@@ -381,6 +395,10 @@ private:
   Mesh ground_;
   Mesh unitBox_;     // [-0.5,0.5]^3, pos+normal (lit) — scaled per obstacle
   Mesh unitSphere_;  // radius-1 UV sphere, pos+normal
+  Mesh horizonQuad_; // unit XY quad (normal up): ground out to the horizon
+  bool horizonOn_ = false;
+  float horizonZ_ = 0.0f; // NED z of the horizon ground under an arena
+  QVector3D horizonCol_{0.33f, 0.45f, 0.24f};
   Mesh unitCyl_;     // radius-1, height-1 cylinder (+caps), pos+normal
   Mesh helipadDisk_; // radius-1 pad platform, local z in [-1(top)..0(base)]
   Mesh helipadMark_; // flat "H" + ring on the pad top (white), pos+normal

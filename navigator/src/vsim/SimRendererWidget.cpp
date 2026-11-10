@@ -115,8 +115,10 @@ uniform mat3 u_nmat;
 out vec3 v_normal;
 out vec3 v_color;
 out vec3 v_world;
+out vec3 v_local;
 void main() {
   v_world = (u_model * vec4(a_pos, 1.0)).xyz;
+  v_local = a_pos;
   gl_Position = u_mvp * vec4(a_pos, 1.0);
   v_normal = u_nmat * a_normal;
   v_color = a_color;
@@ -128,8 +130,11 @@ const char *kLitFragmentHead = R"GLSL(
 in vec3 v_normal;
 in vec3 v_color;
 in vec3 v_world;
+in vec3 v_local;             // object-space position (unit solids)
 out vec4 o_color;
 uniform vec3 u_color;
+uniform float u_terrain;     // 1 = ground: procedural albedo detail + grid
+uniform float u_bands;       // >0: pole painted in this many 1 m red/white bands
 uniform vec3 u_campos;       // camera world position (NED)
 uniform float u_fogdensity;  // aerial-perspective strength
 uniform float u_fogstart;    // metres before fog begins
@@ -138,8 +143,31 @@ uniform float u_ambstr;      // ambient-strength look knob (matches grass)
 )GLSL";
 
 const char *kLitFragmentMain = R"GLSL(
+// Ground detail. The terrain is one flat vertex colour per ~1.5 m cell, which
+// gives the eye nothing to track: no parallax, no speed or height cue. Three
+// noise octaves (patches of ~0.4 / 2 / 9 / 47 m, each fading out once it is
+// smaller than a few pixels) break the colour up, and a 1 / 10 / 100 m
+// survey grid gives a metric scale. All procedural, keyed on world position so
+// it sticks to the ground as the camera moves.
+float gh(vec2 p) { p = fract(p * vec2(123.34, 345.45)); p += dot(p, p + 34.345); return fract(p.x * p.y); }
+float gn(vec2 p) {
+  vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(gh(i), gh(i + vec2(1, 0)), f.x), mix(gh(i + vec2(0, 1)), gh(i + vec2(1, 1)), f.x), f.y);
+}
+// Anti-aliased grid line mask for a cell size [m]; vanishes once cells get
+// down to a few pixels so distant ground never shimmers.
+float gridLine(vec2 p, float cell, float w) {
+  vec2 c = p / cell;
+  vec2 fw = fwidth(c);
+  vec2 d = abs(fract(c - 0.5) - 0.5);
+  vec2 half_ = max(vec2(w), fw * 0.75);
+  vec2 l = 1.0 - smoothstep(half_ - fw, half_ + fw, d);
+  return max(l.x, l.y) * (1.0 - smoothstep(0.12, 0.35, max(fw.x, fw.y)));
+}
 void main() {
   vec3 n = normalize(v_normal);
+  vec3 toFrag = v_world - u_campos;
+  float dist = length(toFrag);
   vec3 sun = normalize(u_sundir);
   vec3 sunCol = vec3(1.04, 0.93, 0.74) * u_sunint;  // warm golden key (matches grass)
   // Wrapped diffuse for a soft terminator that still shows light direction.
@@ -150,11 +178,26 @@ void main() {
   vec3 ambient = mix(vec3(0.07, 0.09, 0.09),
                      vec3(0.22, 0.25, 0.26), clamp(hemi, 0.0, 1.0)) * u_ambstr;
   vec3 base = u_color * v_color;
+  if (u_terrain > 0.5) {
+    vec2 p = v_world.xy;
+    float f1 = 1.0 - smoothstep(4.0, 24.0, dist);
+    float f2 = 1.0 - smoothstep(25.0, 140.0, dist);
+    float f3 = 1.0 - smoothstep(120.0, 800.0, dist);
+    float v = (gn(p / 0.4) - 0.5) * 0.20 * f1 + (gn(p / 2.0) - 0.5) * 0.24 * f2 +
+              (gn(p / 9.0) - 0.5) * 0.28 * f3 + (gn(p / 47.0) - 0.5) * 0.22;
+    base *= 1.0 + v;
+    float up = smoothstep(0.55, 0.85, -n.z);       // grid only on level ground
+    float g = 0.07 * gridLine(p, 1.0, 0.015) + 0.16 * gridLine(p, 10.0, 0.004) +
+              0.26 * gridLine(p, 100.0, 0.0015);
+    base = mix(base, vec3(0.93, 0.94, 0.90), clamp(g * up, 0.0, 0.5));
+  }
+  if (u_bands > 0.5) {                              // survey pole: 1 m bands
+    float k = floor((v_local.z + 0.5) * u_bands);
+    base = (mod(k, 2.0) < 0.5) ? vec3(0.80, 0.14, 0.08) : vec3(0.92, 0.92, 0.88);
+  }
   vec3 lit  = base * (ambient + sunCol * wrap * 0.95 * shadowFactor(v_world, n, sun));
   // Aerial perspective: fade toward the sky behind the surface with distance,
   // so the streamed-terrain edge dissolves into haze.
-  vec3 toFrag = v_world - u_campos;
-  float dist = length(toFrag);
   vec3 vdir = dist > 1e-4 ? toFrag / dist : vec3(0.0, 0.0, 1.0);
   float fd = max(dist - u_fogstart, 0.0) * u_fogdensity;
   float fog = 1.0 - exp(-fd * fd);
@@ -466,6 +509,8 @@ void SimRendererWidget::initializeGL() {
   ul_shadowon_ = progLit_.uniformLocation("u_shadowon");
   ul_sunint_ = progLit_.uniformLocation("u_sunint");
   ul_ambstr_ = progLit_.uniformLocation("u_ambstr");
+  ul_terrain_ = progLit_.uniformLocation("u_terrain");
+  ul_bands_ = progLit_.uniformLocation("u_bands");
 
   progDepth_.addShaderFromSourceCode(QOpenGLShader::Vertex, kDepthVertexShader);
   progDepth_.addShaderFromSourceCode(QOpenGLShader::Fragment,
@@ -503,6 +548,14 @@ void SimRendererWidget::initializeGL() {
 #endif
 
   buildGroundGrid();
+  {
+    // Unit quad in the XY plane, normal up (NED -Z): the horizon ground.
+    std::vector<float> v;
+    const float c[4][2] = {{-0.5f, -0.5f}, {0.5f, -0.5f}, {0.5f, 0.5f}, {-0.5f, 0.5f}};
+    for (int i : {0, 1, 2, 0, 2, 3})
+      v.insert(v.end(), {c[i][0], c[i][1], 0.0f, 0.0f, 0.0f, -1.0f});
+    uploadLitMesh(horizonQuad_, v);
+  }
   buildObstacleMeshes();
   buildHelipadMeshes();
   buildAxes();
@@ -522,7 +575,7 @@ void SimRendererWidget::resizeGL(int w, int h) {
   fbH_ = h;
   glViewport(0, 0, w, h);
   proj_.setToIdentity();
-  proj_.perspective(60.0f, float(w) / std::max(1, h), 0.05f, 200.0f);
+  proj_.perspective(60.0f, float(w) / std::max(1, h), 0.05f, kFarPlaneM);
 }
 
 QVector3D SimRendererWidget::freeForward() const {
@@ -660,22 +713,39 @@ void SimRendererWidget::paintGL() {
   // Reference ground grid at z=0 — skipped when an imported world mesh is
   // shown (it carries its own ground plane at z=0; the two would z-fight).
   // training/showWorld/showChunks were computed above for the shadow pass.
-  if (!showWorld && !showChunks)
-    drawMesh(ground_, view, QVector3D(0.25f, 0.27f, 0.32f));
+  const bool horizonPlane =
+      worldVisible_ && !showChunks && (!showWorld || horizonOn_);
+  if (!horizonPlane && !showWorld && !showChunks)
+    drawMesh(ground_, view, QVector3D(0.25f, 0.27f, 0.32f)); // Vehicle mode
   drawMesh(axes_, view, QVector3D(1, 1, 1));
 
   // World geometry (imported mesh + obstacles) only in World mode; Vehicle
   // mode shows just the airframe.
   // Imported world mesh (lit solid, world frame).
   if (showWorld)
-    drawLit(worldMesh_, view, QMatrix4x4(), QVector3D(1.0f, 1.0f, 1.0f));
+    drawLit(worldMesh_, view, QMatrix4x4(), QVector3D(1.0f, 1.0f, 1.0f),
+            horizonOn_); // procedural terrain gets the ground detail
 
   // Streaming terrain chunks (lit, world frame). Same lit shader / vertex-color
   // path as the imported mesh, one draw per loaded chunk.
   if (showChunks)
     for (auto &kv : worldChunks_)
       if (kv.second->vertex_count)
-        drawLit(*kv.second, view, QMatrix4x4(), QVector3D(1.0f, 1.0f, 1.0f));
+        drawLit(*kv.second, view, QMatrix4x4(), QVector3D(1.0f, 1.0f, 1.0f),
+                true);
+
+  // With no terrain mesh in World mode, and around a finite procedural arena,
+  // draw a detailed ground out to the horizon instead of the old +/-10 m line
+  // grid that hung in a dark void. Drawn after the terrain so early-z skips the
+  // fragments the arena already covers. Vehicle mode keeps the plain grid.
+  if (horizonPlane) {
+    QMatrix4x4 m;
+    const bool atMesh = showWorld && horizonOn_;
+    m.translate(camEye_.x(), camEye_.y(), atMesh ? horizonZ_ : 0.0f);
+    m.scale(2.0f * kFarPlaneM, 2.0f * kFarPlaneM, 1.0f);
+    drawLit(horizonQuad_, view, m,
+            atMesh ? horizonCol_ : QVector3D(0.33f, 0.45f, 0.24f), true);
+  }
 
 #ifdef VAYU_SIM_GRASS
   // Grass over the terrain (after the ground so depth works). GPU-generated when
@@ -712,7 +782,13 @@ void SimRendererWidget::paintGL() {
     }
     if (obsMode_ && oi == selObs_)
       col = QVector3D(0.95f, 0.80f, 0.30f); // selected
-    drawLit(*mesh, view, m, col);
+    // Slim posts (gate posts, survey markers) get 1 m red/white bands so their
+    // height can be counted.
+    const float bands = (o.type == vsim::Obstacle::Cylinder &&
+                         o.size.x() <= kPoleMaxR && o.size.z() >= 1.0f)
+                            ? std::round(o.size.z())
+                            : 0.0f;
+    drawLit(*mesh, view, m, col, false, bands);
   }
 
   // Helipad landing platforms (scattered on flat ground; the drone spawns on one).
@@ -892,8 +968,8 @@ void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks) {
 }
 
 void SimRendererWidget::drawLit(const Mesh &m, const QMatrix4x4 &view,
-                                const QMatrix4x4 &model,
-                                const QVector3D &color) {
+                                const QMatrix4x4 &model, const QVector3D &color,
+                                bool terrain, float bands) {
   if (m.vertex_count == 0)
     return;
   progLit_.bind();
@@ -911,6 +987,8 @@ void SimRendererWidget::drawLit(const Mesh &m, const QMatrix4x4 &view,
   progLit_.setUniformValue(ul_shadowtex_, 1); // sampler on texture unit 1
   progLit_.setUniformValue(ul_sunint_, litSunInt_);
   progLit_.setUniformValue(ul_ambstr_, litAmbStr_);
+  progLit_.setUniformValue(ul_terrain_, terrain ? 1.0f : 0.0f);
+  progLit_.setUniformValue(ul_bands_, bands);
   glActiveTexture(GL_TEXTURE1);
   glBindTexture(GL_TEXTURE_2D, shadowTex_);
   glActiveTexture(GL_TEXTURE0);
@@ -974,6 +1052,8 @@ void SimRendererWidget::uploadWorldMesh() {
   // its baked material/vertex colors. Missing colors default to neutral grey.
   std::vector<float> data;
   data.reserve(pendingWorldPos_.size() * 9);
+  float lowestZ = -1e9f; // NED: largest z = lowest surface
+  QVector3D colSum(0, 0, 0);
   for (size_t i = 0; i < pendingWorldPos_.size(); ++i) {
     const QVector3D &p = pendingWorldPos_[i];
     const QVector3D n = (i < pendingWorldNrm_.size()) ? pendingWorldNrm_[i]
@@ -983,7 +1063,13 @@ void SimRendererWidget::uploadWorldMesh() {
                             : QVector3D(0.72f, 0.73f, 0.76f);
     data.insert(data.end(), {p.x(), p.y(), p.z(), n.x(), n.y(), n.z(), c.x(),
                              c.y(), c.z()});
+    lowestZ = std::max(lowestZ, p.z());
+    colSum += c;
   }
+  // Horizon ground for a finite procedural arena: just under its lowest point,
+  // in the arena's average surface colour so the join reads as continuous land.
+  horizonZ_ = lowestZ + 0.05f;
+  horizonCol_ = colSum / float(pendingWorldPos_.size());
   uploadColoredMesh(worldMesh_, data);
   pendingWorldPos_.clear();
   pendingWorldNrm_.clear();
