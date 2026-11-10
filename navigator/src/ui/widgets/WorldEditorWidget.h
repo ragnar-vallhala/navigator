@@ -46,6 +46,13 @@ public:
   // Wind & turbulence (its own staged Apply button, mockup World tab).
   const vsim::WindConfig &windConfig() const { return wind_; }
   void setWindConfig(const vsim::WindConfig &w);
+
+  // Procedural-world settings (biome, seed, size, field, flora, look, preset id)
+  // as a compact JSON string, using the same keys as the .vworld export. Used
+  // by SimulatorWidget to persist knob tweaks across restarts. Empty string if
+  // no procedural biome is set; deserialize leaves `w` untouched on bad input.
+  static QString serializeProcedural(const vsim::WorldConfig &w);
+  static bool deserializeProcedural(vsim::WorldConfig &w, const QString &json);
   // Live wind readout fed from the pose stream (instantaneous speed + heading).
   void setWindReadout(float speedMs, float dirDeg);
 
@@ -131,6 +138,8 @@ private:
   // Procedural world controls (Phase 0). Biome "None" = off (use imported
   // mesh); selecting a biome generates and takes precedence.
   QComboBox *procBiome_ = nullptr;
+  QString lastPreset_; // preset id/seed at the last apply or load
+  quint32 lastPresetSeed_ = 0;
   QComboBox *procPreset_ = nullptr; // world preset (biome + terrain + obstacles)
   QComboBox *windPreset_ = nullptr; // wind preset (calm / breezy / gusty)
   QSpinBox *procSeed_ = nullptr;

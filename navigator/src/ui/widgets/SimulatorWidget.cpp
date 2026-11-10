@@ -3483,6 +3483,8 @@ void SimulatorWidget::persistWorld(const vsim::WorldConfig &w) {
   // World preset (procedural arena): the id + seed regenerate it exactly.
   s.setValue("worldPreset", w.worldPreset);
   s.setValue("worldPresetSeed", w.proceduralSeed);
+  // Full procedural params (field, flora, look...): knob tweaks survive restart.
+  s.setValue("proceduralJson", WorldEditorWidget::serializeProcedural(w));
   s.beginWriteArray("obstacles", w.obstacles.size());
   for (int i = 0; i < w.obstacles.size(); ++i) {
     const vsim::Obstacle &o = w.obstacles[i];
@@ -3550,10 +3552,15 @@ vsim::WorldConfig SimulatorWidget::restoreWorld() {
   s.endArray();
   const QString preset = s.value("worldPreset").toString();
   const quint32 pseed = s.value("worldPresetSeed", w.proceduralSeed).toUInt();
+  const QString procJson = s.value("proceduralJson").toString();
   s.endGroup();
-  // Re-apply the preset to restore biome/field (not saved raw), but keep the
-  // saved obstacle list: it is the truth, including any user edits after it.
-  if (!preset.isEmpty()) {
+  // Full params saved: restore them verbatim (the preset is NOT re-applied over
+  // hand-tuned knobs). Older settings have only preset id + seed: regenerate
+  // biome/field from those and keep the saved obstacle list (user edits).
+  if (!procJson.isEmpty() &&
+      WorldEditorWidget::deserializeProcedural(w, procJson)) {
+    // restored verbatim
+  } else if (!preset.isEmpty()) {
     const QVector<vsim::Obstacle> saved = w.obstacles;
     if (vsim::applyWorldPreset(w, preset, pseed)) {
       w.worldPreset = preset;

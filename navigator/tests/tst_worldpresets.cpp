@@ -96,7 +96,16 @@ private slots:
   void obstaclesClearOfSpawnAndSeated();
   void racingGatesEvenlySpacedAndPassable();
   void windPresetsMagnitudes();
+  void generateReappliesOnlyOnPresetOrSeedChange();
 };
+
+void TstWorldPresets::generateReappliesOnlyOnPresetOrSeedChange() {
+  QVERIFY(!presetNeedsReapply("hills", 5, "", 5));      // custom world
+  QVERIFY(!presetNeedsReapply("hills", 5, "hills", 5)); // nothing changed
+  QVERIFY(presetNeedsReapply("hills", 5, "hills", 6));  // new seed
+  QVERIFY(presetNeedsReapply("hills", 5, "forest", 5)); // new preset
+  QVERIFY(presetNeedsReapply("", 5, "hills", 5));       // first pick
+}
 
 void TstWorldPresets::unknownIdRejected() {
   PresetData d;

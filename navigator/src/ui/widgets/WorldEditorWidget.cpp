@@ -37,6 +37,7 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QListWidget>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QVBoxLayout>
 
@@ -325,9 +326,8 @@ void WorldEditorWidget::buildProceduralSection(QVBoxLayout *root) {
   procBiome_->addItem(tr("Meadow (finite arena)"), QStringLiteral("meadow"));
   procBiome_->addItem(tr("Endless meadow (streaming)"),
                       QStringLiteral("endless"));
-  for (const auto &p : vsim::worldPresetList())
-    if (p.first != QLatin1String("meadow"))
-      procBiome_->addItem(p.second, p.first);
+  // Preset-only biomes (hills/alpine/...) are not listed: picking one here
+  // would mesh with meadow defaults. They come from the World preset combo.
 
   procPreset_ = new QComboBox(body);
   procPreset_->addItem(tr("Custom"), QString());
@@ -337,8 +337,7 @@ void WorldEditorWidget::buildProceduralSection(QVBoxLayout *root) {
       tr("One-click procedural worlds, all generated from the Seed below "
          "(same seed -> same world). Replaces the terrain settings and the "
          "obstacle list; racing/yard/forest add gates, boxes or trees that "
-         "the simulator collides with. Generate re-rolls with the current "
-         "seed."));
+         "the simulator collides with."));
 
   procSeed_ = new QSpinBox(body);
   procSeed_->setRange(0, 2147483647);
@@ -416,10 +415,15 @@ void WorldEditorWidget::buildProceduralSection(QVBoxLayout *root) {
     auto *row = new QHBoxLayout();
     auto *gen = new ui::GhostButton(tr("Generate"), body);
     gen->setToolTip(
-        tr("(Re)generate the world from the current biome params."));
+        tr("(Re)generate the world from the current biome params. With a "
+           "world preset selected, a changed seed or preset re-rolls its "
+           "terrain and obstacles; otherwise your terrain knobs and obstacle "
+           "edits are kept."));
     connect(gen, &QPushButton::clicked, this, [this, pull] {
       pull();
-      if (!cfg_.worldPreset.isEmpty() &&
+      if (vsim::procgen::presetNeedsReapply(
+              lastPreset_.toStdString(), lastPresetSeed_,
+              cfg_.worldPreset.toStdString(), cfg_.proceduralSeed) &&
           vsim::applyWorldPreset(cfg_, cfg_.worldPreset, cfg_.proceduralSeed)) {
         syncConfigToUi();
         emit obstaclesChanged();
@@ -510,8 +514,14 @@ void WorldEditorWidget::buildWindSection(QVBoxLayout *root) {
 
   // Dirty tracking: any edit re-enables Apply (staged-apply UX, D2).
   auto markDirty = [this] {
-    if (!windSyncing_ && windApplyBtn_)
+    if (windSyncing_)
+      return;
+    if (windApplyBtn_)
       windApplyBtn_->setEnabled(true);
+    if (windPreset_ && windPreset_->currentIndex() != 0) {
+      const QSignalBlocker b(windPreset_); // edited by hand -> Custom
+      windPreset_->setCurrentIndex(0);
+    }
   };
   for (QDoubleSpinBox *s :
        {windN_, windE_, windD_, gustAmp_, gustPeriod_, turbSigma_})
@@ -522,6 +532,32 @@ void WorldEditorWidget::buildWindSection(QVBoxLayout *root) {
 
   sec->setContentWidget(body);
   root->addWidget(sec);
+}
+
+QString WorldEditorWidget::serializeProcedural(const vsim::WorldConfig &w) {
+  const QJsonObject p = worldToJson(w).value("procedural").toObject();
+  if (p.isEmpty())
+    return QString();
+  return QString::fromUtf8(QJsonDocument(p).toJson(QJsonDocument::Compact));
+}
+
+bool WorldEditorWidget::deserializeProcedural(vsim::WorldConfig &w,
+                                              const QString &json) {
+  QJsonParseError err;
+  const QJsonDocument d = QJsonDocument::fromJson(json.toUtf8(), &err);
+  if (err.error != QJsonParseError::NoError || !d.isObject())
+    return false;
+  const vsim::WorldConfig t =
+      worldFromJson(QJsonObject{{"procedural", d.object()}});
+  w.proceduralBiome = t.proceduralBiome;
+  w.proceduralSeed = t.proceduralSeed;
+  w.proceduralSizeM = t.proceduralSizeM;
+  w.proceduralResolution = t.proceduralResolution;
+  w.worldPreset = t.worldPreset;
+  w.field = t.field;
+  w.flora = t.flora;
+  w.look = t.look;
+  return true;
 }
 
 void WorldEditorWidget::syncWindToUi() {
@@ -599,8 +635,15 @@ void WorldEditorWidget::buildProceduralTuningSection(QVBoxLayout *root) {
     form->addRow(label, s);
     connect(s, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
             [this, ref](double v) {
-              if (!procSyncing_)
-                *ref = static_cast<float>(v);
+              if (procSyncing_)
+                return;
+              *ref = static_cast<float>(v);
+              cfg_.worldPreset.clear(); // hand-tuned: no longer the preset
+              if (procPreset_) {
+                procSyncing_ = true;
+                procPreset_->setCurrentIndex(0);
+                procSyncing_ = false;
+              }
             });
     procKnobSyncers_.push_back([s, ref] { s->setValue(*ref); });
   };
@@ -1014,6 +1057,8 @@ void WorldEditorWidget::syncFormFromSelection() {
 }
 
 void WorldEditorWidget::syncConfigToUi() {
+  lastPreset_ = cfg_.worldPreset;
+  lastPresetSeed_ = cfg_.proceduralSeed;
   gravity_->setValue(cfg_.gravity);
   groundZ_->setValue(cfg_.ground_z);
   rest_->setValue(cfg_.restitution);
@@ -1059,7 +1104,13 @@ void WorldEditorWidget::setConfig(const vsim::WorldConfig &c) {
 
   procSyncing_ = true;
   if (procBiome_) {
-    const int idx = procBiome_->findData(cfg_.proceduralBiome);
+    int idx = procBiome_->findData(cfg_.proceduralBiome);
+    if (idx < 0 && vsim::isFieldArenaBiome(cfg_.proceduralBiome)) {
+      // Preset-only biome: show it (read-only entry) rather than "None".
+      procBiome_->addItem(tr("%1 (preset)").arg(cfg_.proceduralBiome),
+                          cfg_.proceduralBiome);
+      idx = procBiome_->count() - 1;
+    }
     procBiome_->setCurrentIndex(idx >= 0 ? idx : 0);
   }
   if (procPreset_) {

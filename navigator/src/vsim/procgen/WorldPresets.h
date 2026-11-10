@@ -85,6 +85,14 @@ bool isFieldBiome(const std::string &biome); // hills/alpine/flat/desert/...
 // Fill `out` for preset `id`; false if the id is unknown.
 bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out);
 
+// Generate re-rolls a preset only when its id or seed changed since the last
+// apply (or load); otherwise the current terrain knobs + obstacles are kept.
+inline bool presetNeedsReapply(const std::string &appliedId,
+                               uint32_t appliedSeed, const std::string &id,
+                               uint32_t seed) {
+  return !id.empty() && (id != appliedId || seed != appliedSeed);
+}
+
 // Arena meshing: chunk geometry shared by the mesh, the spawn height and the
 // minimap so they all use one lattice.
 inline float arenaChunkM(float sizeM) { return sizeM * 0.5f; }
