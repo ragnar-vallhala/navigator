@@ -833,7 +833,9 @@ void MainWindow::buildMenuBar() {
         if (QMessageBox::question(
                 this, tr("Reset firmware settings"),
                 tr("Stop the simulator and erase the simulator firmware's "
-                   "saved settings (tuned gains) in\n%1 ?")
+                   "saved settings (tuned gains) in\n%1 ?\n\nThe running "
+                   "app keeps a copy in memory: restart Navigator before "
+                   "starting the simulator again.")
                     .arg(priv),
                 QMessageBox::Yes | QMessageBox::Cancel,
                 QMessageBox::Cancel) != QMessageBox::Yes)
@@ -843,9 +845,18 @@ void MainWindow::buildMenuBar() {
         QString why;
         const QString appData =
             QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-        if (vsim::resetPrivateVfs(priv, appData, false, &why))
-          m_logPanel->appendLog("[GCS] firmware settings reset: " + priv);
-        else
+        if (vsim::resetPrivateVfs(priv, appData, false, &why)) {
+          m_logPanel->appendLog("[GCS] firmware settings erased: " + priv +
+                                " (restart Navigator to apply)");
+          // The firmware module caches 0:pid.bin in RAM and is never
+          // unloaded, so until a restart the next Start or gain save would
+          // write the old settings back.
+          QMessageBox::information(
+              this, tr("Reset firmware settings"),
+              tr("Saved settings erased. Restart Navigator before starting "
+                 "the simulator again; until then the firmware still holds "
+                 "the old values in memory and would save them back."));
+        } else
           QMessageBox::warning(this, tr("Reset firmware settings"), why);
       }));
 #endif
