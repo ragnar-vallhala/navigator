@@ -37,6 +37,7 @@ class QVBoxLayout;
 // the renderer + persistence stay in sync without an explicit Apply.
 class WorldEditorWidget : public QWidget {
   Q_OBJECT
+  friend class TstWorldEditor; // headless test drives the real handlers
 public:
   explicit WorldEditorWidget(QWidget *parent = nullptr);
 
@@ -90,6 +91,7 @@ private:
   void buildObstacleSection(QVBoxLayout *root);
   void syncConfigToUi();
   void syncUiToConfig();
+  void syncProcToUi();          // cfg_ -> procedural section widgets
   void syncWindToUi();          // wind_ -> spinboxes/checkbox
   void syncUiToWind();          // spinboxes/checkbox -> wind_
   void refreshObstacleList();   // list labels from cfg_.obstacles
@@ -149,4 +151,5 @@ private:
   // Generator-tuning knobs: each pushes a sync lambda (cfg_ -> spinbox) here so
   // setConfig can refresh them all without a member per knob.
   std::vector<std::function<void()>> procKnobSyncers_;
+  std::vector<QDoubleSpinBox *> procKnobSpins_; // same order as the syncers
 };

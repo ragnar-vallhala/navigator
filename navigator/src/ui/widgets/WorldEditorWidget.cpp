@@ -646,6 +646,7 @@ void WorldEditorWidget::buildProceduralTuningSection(QVBoxLayout *root) {
               }
             });
     procKnobSyncers_.push_back([s, ref] { s->setValue(*ref); });
+    procKnobSpins_.push_back(s);
   };
   auto group = [&](const QString &title) {
     auto *l = new QLabel(title, body);
@@ -657,7 +658,7 @@ void WorldEditorWidget::buildProceduralTuningSection(QVBoxLayout *root) {
   group(tr("Terrain"));
   {
     auto *f = new QFormLayout();
-    knob(f, tr("Peak height:"), 5, 250, 0, 5, &cfg_.field.heightM, tr(" m"));
+    knob(f, tr("Peak height:"), 0.5, 250, 0, 5, &cfg_.field.heightM, tr(" m"));
     knob(f, tr("Feature size:"), 40, 800, 0, 10, &cfg_.field.featureM,
          tr(" m"));
     knob(f, tr("Mountain amount:"), 0, 1, 2, 0.05, &cfg_.field.mountainMix, {});
@@ -668,9 +669,9 @@ void WorldEditorWidget::buildProceduralTuningSection(QVBoxLayout *root) {
   group(tr("Surface colour — elevation fraction (0=valley, 1=peak)"));
   {
     auto *f = new QFormLayout();
-    knob(f, tr("Brown above:"), 0, 1, 2, 0.02, &cfg_.field.colBrownT, {});
-    knob(f, tr("Rock above:"), 0, 1, 2, 0.02, &cfg_.field.colRockT, {});
-    knob(f, tr("Snow above:"), 0, 1, 2, 0.02, &cfg_.field.colSnowT, {});
+    knob(f, tr("Brown above:"), 0, 2, 2, 0.02, &cfg_.field.colBrownT, {});
+    knob(f, tr("Rock above:"), 0, 2, 2, 0.02, &cfg_.field.colRockT, {});
+    knob(f, tr("Snow above:"), 0, 2, 2, 0.02, &cfg_.field.colSnowT, {});
     knob(f, tr("Slope→rock:"), 0, 1, 2, 0.02, &cfg_.field.colSlopeT, {});
     col->addLayout(f);
   }
@@ -1066,6 +1067,42 @@ void WorldEditorWidget::syncConfigToUi() {
   angDrag_->setValue(cfg_.angular_drag);
   rightGain_->setValue(cfg_.ground_right_gain);
   rightDamp_->setValue(cfg_.ground_right_damp);
+  syncProcToUi();
+}
+
+// Refresh every widget the procedural section's pull() reads (biome, preset,
+// seed, size, resolution, knobs) from cfg_, silently (procSyncing_), so a
+// later pull() cannot write stale values back over an applied preset.
+void WorldEditorWidget::syncProcToUi() {
+  procSyncing_ = true;
+  if (procBiome_) {
+    // Drop the read-only "<biome> (preset)" entry of a previous preset.
+    for (int i = procBiome_->count() - 1; i >= 0; --i)
+      if (vsim::isFieldArenaBiome(procBiome_->itemData(i).toString()) &&
+          procBiome_->itemData(i).toString() != cfg_.proceduralBiome)
+        procBiome_->removeItem(i);
+    int idx = procBiome_->findData(cfg_.proceduralBiome);
+    if (idx < 0 && vsim::isFieldArenaBiome(cfg_.proceduralBiome)) {
+      // Preset-only biome: show it (read-only entry) rather than "None".
+      procBiome_->addItem(tr("%1 (preset)").arg(cfg_.proceduralBiome),
+                          cfg_.proceduralBiome);
+      idx = procBiome_->count() - 1;
+    }
+    procBiome_->setCurrentIndex(idx >= 0 ? idx : 0);
+  }
+  if (procPreset_) {
+    const int pi = procPreset_->findData(cfg_.worldPreset);
+    procPreset_->setCurrentIndex(pi >= 0 ? pi : 0);
+  }
+  if (procSeed_)
+    procSeed_->setValue(static_cast<int>(cfg_.proceduralSeed));
+  if (procSizeM_)
+    procSizeM_->setValue(cfg_.proceduralSizeM);
+  if (procResolution_)
+    procResolution_->setValue(cfg_.proceduralResolution);
+  for (auto &f : procKnobSyncers_)
+    f(); // refresh the tuning knobs from cfg_
+  procSyncing_ = false;
 }
 
 void WorldEditorWidget::syncUiToConfig() {
@@ -1101,29 +1138,4 @@ void WorldEditorWidget::setConfig(const vsim::WorldConfig &c) {
     if (worldOffset_[i])
       worldOffset_[i]->setValue(cfg_.worldMeshOffset[i]);
   worldMeshSyncing_ = false;
-
-  procSyncing_ = true;
-  if (procBiome_) {
-    int idx = procBiome_->findData(cfg_.proceduralBiome);
-    if (idx < 0 && vsim::isFieldArenaBiome(cfg_.proceduralBiome)) {
-      // Preset-only biome: show it (read-only entry) rather than "None".
-      procBiome_->addItem(tr("%1 (preset)").arg(cfg_.proceduralBiome),
-                          cfg_.proceduralBiome);
-      idx = procBiome_->count() - 1;
-    }
-    procBiome_->setCurrentIndex(idx >= 0 ? idx : 0);
-  }
-  if (procPreset_) {
-    const int pi = procPreset_->findData(cfg_.worldPreset);
-    procPreset_->setCurrentIndex(pi >= 0 ? pi : 0);
-  }
-  if (procSeed_)
-    procSeed_->setValue(static_cast<int>(cfg_.proceduralSeed));
-  if (procSizeM_)
-    procSizeM_->setValue(cfg_.proceduralSizeM);
-  if (procResolution_)
-    procResolution_->setValue(cfg_.proceduralResolution);
-  for (auto &f : procKnobSyncers_)
-    f(); // refresh the tuning knobs from cfg_
-  procSyncing_ = false;
 }
