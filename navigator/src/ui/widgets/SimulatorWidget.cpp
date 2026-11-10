@@ -22,6 +22,7 @@
 #include "../../vsim/MeshLoader.h"
 #include "../../vsim/SitlModule.h"
 #include "protocol/CommandCodec.h"
+#include "navlink_msgs.h" // NAVLINK_MSGID_CMD_SET_PID: the ack's `command`
 #include "../../vsim/ProceduralWorld.h"
 #include "../../vsim/WorldMeshBuilder.h"
 #include "CollapsibleSection.h"
@@ -604,6 +605,11 @@ void SimulatorWidget::buildUi() {
     connect(m_geomEditor, &GeometryEditorWidget::presetChosen, this,
             [this](const QString &id) {
               m_presetId = id;
+              // Preset changed (or went Custom): the old round is moot. The
+              // new set is armed when Apply pushes it.
+              m_gainPush.cancel();
+              if (m_gainTimer)
+                m_gainTimer->stop();
               QSettings().setValue("simulator/presetId", id);
             });
     connect(m_geomEditor, &GeometryEditorWidget::geometryApplied, this, [this] {
@@ -3218,7 +3224,10 @@ void SimulatorWidget::startInAppSim() {
         return;
       const auto c = m_geomEditor->physicsConfig();
       pushFirmwareMotorGeometry(c);
-      pushAirframeGains(false); // same gains again, not logged twice
+      if (m_gainPush.pending()) { // already ACKed: nothing to re-assert
+        pushAirframeGains(false); // same gains again, not logged twice
+        m_gainPush.noteSent(m_gainClock.elapsed());
+      }
       m_sim->sendGeometry(c);
       pushRatesToSim(); // re-assert loop rates too: the daemon boots at its
                         // compiled default, so a dropped/raced SET_RATES would
@@ -3332,6 +3341,9 @@ void SimulatorWidget::stopInAppSim() {
   }
   m_sim->deleteLater();
   m_sim = nullptr;
+  m_gainPush.cancel(); // nothing left to ACK
+  if (m_gainTimer)
+    m_gainTimer->stop();
   m_propAudio.setMotors({0.0f, 0.0f, 0.0f, 0.0f}); // silence once stopped
   m_simStartBtn->setEnabled(true);
   if (m_simAttachBtn)
@@ -3418,13 +3430,79 @@ void SimulatorWidget::applyGeometryToRenderer() {
 // see why their tune changed, or that it was deliberately left alone.
 void SimulatorWidget::pushAirframeGains(bool announce) {
   pushPresetGains(m_presetId);
+  if (announce)
+    armGainRetry();
   if (!announce)
     return;
   appendLog("geom",
             m_presetId.isEmpty()
                 ? tr("custom vehicle: firmware keeps its current gains")
-                : tr("sent %1 gains to firmware")
+                : tr("sent %1 gains to firmware (waiting for ACK)")
                       .arg(m_presetId));
+}
+
+// The firmware drops every command until its clock is disciplined, so a single
+// push can be lost and the sim would then fly stock gains. Track the push as
+// pending and re-send once a second until the firmware ACKs it (see
+// GainPushTracker for the acknowledgement rule), giving up visibly after 30 s.
+void SimulatorWidget::armGainRetry() {
+  if (!m_gainClock.isValid())
+    m_gainClock.start();
+  const vsim::AirframePreset *p = vsim::findAirframePreset(m_presetId);
+  m_gainPush.begin(m_presetId, p ? int(p->gains.size()) : 0,
+                   m_gainClock.elapsed());
+  if (!m_gainTimer) {
+    m_gainTimer = new QTimer(this);
+    m_gainTimer->setInterval(int(GainPushTracker::kRetryMs));
+    connect(m_gainTimer, &QTimer::timeout, this, [this] { gainRetryTick(); });
+  }
+  if (m_gainPush.pending())
+    m_gainTimer->start();
+  else
+    m_gainTimer->stop();
+}
+
+void SimulatorWidget::gainRetryTick() {
+  if (!m_sim) { // sim stopped under us
+    m_gainPush.cancel();
+    m_gainTimer->stop();
+    return;
+  }
+  const QString id = m_gainPush.id();
+  switch (m_gainPush.tick(m_gainClock.elapsed())) {
+  case GainPushTracker::Action::Resend:
+    pushPresetGains(id); // quiet: one log line per round, not per retry
+    break;
+  case GainPushTracker::Action::GaveUp:
+    m_gainTimer->stop();
+    appendLog("geom", tr("firmware did not acknowledge %1 gains; the "
+                         "simulator may fly stock gains")
+                          .arg(id));
+    break;
+  case GainPushTracker::Action::None:
+    break;
+  }
+  if (!m_gainPush.pending())
+    m_gainTimer->stop();
+}
+
+void SimulatorWidget::onCommandAck(quint32 command, quint8 reqSeq,
+                                   quint8 result) {
+  Q_UNUSED(reqSeq); // acks are counted per round, not matched per slot
+  if (command != NAVLINK_MSGID_CMD_SET_PID || !m_gainPush.pending())
+    return;
+  const int expected = m_gainPush.expected();
+  const QString id = m_gainPush.id();
+  const int retries = m_gainPush.retries();
+  if (!m_gainPush.onAck(result, m_gainClock.elapsed()))
+    return;
+  if (m_gainTimer)
+    m_gainTimer->stop();
+  appendLog("geom", tr("firmware accepted %1 gains (%2/%2 ACK OK%3)")
+                        .arg(id)
+                        .arg(expected)
+                        .arg(retries ? tr(", after %1 resend(s)").arg(retries)
+                                     : QString()));
 }
 
 void SimulatorWidget::persistGeometry(const vsim::GeometryConfig &g) {

@@ -49,7 +49,9 @@ extern "C" {}
 #include <set>
 #include <unordered_map>
 
+#include "GainPushTracker.h"
 #include <QByteArray>
+#include <QElapsedTimer>
 
 class QGridLayout;
 class QStackedWidget;
@@ -144,6 +146,11 @@ public slots:
   // meta-object system.
   void onUartBytes();
 
+  // The firmware's COMMAND_ACK stream (MainWindow wires DroneProtocol's
+  // commandAckReceived here). Only CMD_SET_PID acks matter: they confirm the
+  // airframe gains were accepted, ending the push retries.
+  void onCommandAck(quint32 command, quint8 reqSeq, quint8 result);
+
   // Append firmware UART2 bytes to the coalescing buffer (called from the C
   // trampoline on the sim worker thread) and queue at most one onUartBytes()
   // drain. Public so the trampoline can reach it.
@@ -229,6 +236,11 @@ private:
   vsim::GeometryConfig restoreGeometry();
   void pushAirframeGains(bool announce);
   QString m_presetId; // airframe preset whose gains Start sends ("" = custom)
+  void armGainRetry();    // (re)start the pending state for m_presetId
+  void gainRetryTick();   // ~1 Hz: re-send while the firmware has not ACKed
+  GainPushTracker m_gainPush;
+  class QTimer *m_gainTimer = nullptr;
+  QElapsedTimer m_gainClock;
   void persistWorld(const vsim::WorldConfig &w);
   vsim::WorldConfig restoreWorld();
   void persistWind(const vsim::WindConfig &w);

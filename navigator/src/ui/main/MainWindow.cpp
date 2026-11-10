@@ -337,6 +337,10 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   // replay. The signature matches; SimSource just re-emits as an ITelemetrySource.
   connect(m_simulatorWidget, &SimulatorWidget::dataReceived, m_simSource,
           &SimSource::feed);
+  // The firmware's COMMAND_ACKs come back through the same parser; the widget
+  // uses the CMD_SET_PID ones to know its airframe gains landed.
+  connect(m_engine->protocol(), &DroneProtocol::commandAckReceived,
+          m_simulatorWidget, &SimulatorWidget::onCommandAck);
   // AT-1: the autotune tab proposes gains; applying to firmware is an explicit
   // operator action. Turn the proposal into CMD_SET_PID frames and send them
   // over the live link (sendToFc refuses in replay; we also require a link).

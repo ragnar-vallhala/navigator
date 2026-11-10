@@ -22,6 +22,10 @@ function(navigator_test name)
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endfunction()
 
+# ---- Airframe-gain push retry / ACK state machine (header only) -----------
+navigator_test(tst_gain_push_tracker tst_gain_push_tracker.cpp)
+target_include_directories(tst_gain_push_tracker PRIVATE ${SRC}/ui/widgets)
+
 # ---- Time-sync estimator (NTP offset/delay, jitter filter, skew) ----------
 navigator_test(tst_time_sync_estimator
     tst_time_sync_estimator.cpp
