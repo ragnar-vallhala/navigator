@@ -571,6 +571,9 @@ void SimulatorWidget::buildUi() {
 
   m_rightStack = new QStackedWidget(splitter);
   splitter->addWidget(m_rightStack);
+  // The panel's minimum width follows its pages (MinWidthScrollArea), so
+  // forbid dragging it to nothing instead of cropping its contents.
+  splitter->setChildrenCollapsible(false);
 
   // ===== Vehicle page: airframe geometry + motor editor =====
   {
@@ -606,7 +609,7 @@ void SimulatorWidget::buildUi() {
     vehV->addWidget(buildFaultPanel());
     vehV->addStretch();
 
-    auto *scroll = new QScrollArea();
+    auto *scroll = new ui::MinWidthScrollArea();
     scroll->setWidgetResizable(true);
     scroll->setWidget(vehWrap);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -1105,11 +1108,11 @@ void SimulatorWidget::buildUi() {
     logRow->addWidget(openBtn);
     sv->addLayout(logRow);
 
-    m_logPathLabel = new QLabel(tr("Current log: (none)"), simBody);
+    m_logPathLabel = new ui::ElidedLabel(simBody);
+    m_logPathLabel->setFullText(tr("Current log: (none)"));
     m_logPathLabel->setStyleSheet(
         QString("color: %1; font-family: monospace; font-size: 11px;")
             .arg(Theme::hex(Theme::kTextMuted)));
-    m_logPathLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     sv->addWidget(m_logPathLabel);
 
     m_log = new QPlainTextEdit(simBody);
@@ -1122,7 +1125,7 @@ void SimulatorWidget::buildUi() {
     pv->addWidget(simSec);
     pv->addStretch();
 
-    auto *scroll = new QScrollArea();
+    auto *scroll = new ui::MinWidthScrollArea();
     scroll->setWidgetResizable(true);
     scroll->setWidget(page);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -1133,7 +1136,7 @@ void SimulatorWidget::buildUi() {
   {
     auto *page = new QWidget();
     buildAutotunePage(page);
-    auto *scroll = new QScrollArea();
+    auto *scroll = new ui::MinWidthScrollArea();
     scroll->setWidgetResizable(true);
     scroll->setWidget(page);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -3675,7 +3678,7 @@ void SimulatorWidget::openNewLogFile() {
   }
   m_runClock.start(); // monotonic per-record timestamp base
   if (m_logPathLabel) {
-    m_logPathLabel->setText(QString("Ground-truth log: %1").arg(path));
+    m_logPathLabel->setFullText(QString("Ground-truth log: %1").arg(path));
     m_logPathLabel->setStyleSheet(
         QString("color: %1; font-family: monospace; font-size: 11px;")
             .arg(Theme::hex(Theme::kOk)));

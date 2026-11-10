@@ -27,6 +27,7 @@
 #include "ContourMinimapWidget.h"
 #include "HorizonHud.h"
 #include "TuneChart.h"
+#include "PanelWidgets.h"
 #include "AutotuneGains.h"
 #include "../../audio/PropAudio.h"
 
@@ -251,7 +252,7 @@ private:
   // ---- per-run physics ground-truth log (gt-*.bin) ----
   QString m_logDir; // editable in UI
   QLineEdit *m_logDirEdit = nullptr;
-  QLabel *m_logPathLabel = nullptr; // shows current run's file
+  ui::ElidedLabel *m_logPathLabel = nullptr; // shows current run's file
   std::unique_ptr<QFile> m_runLog;  // open while sim running
   qint64 m_runLogBytes = 0;
   QElapsedTimer m_runClock; // monotonic per-record t_us base
