@@ -223,4 +223,19 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
   set_tests_properties(tst_airframe_flight PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
       TIMEOUT 300)
+
+  # The Vehicle page's Preset combo: picking a preset keeps it, any manual edit
+  # of the airframe form flips it back to Custom. Needs the editor widget, so
+  # it builds with the mesh loader (assimp) like the app does.
+  find_package(assimp REQUIRED)
+  navigator_test(tst_geometry_editor_preset
+      tst_geometry_editor_preset.cpp
+      ${SRC}/ui/widgets/GeometryEditorWidget.cpp ${SRC}/ui/widgets/GeometryEditorWidget.h
+      ${SRC}/ui/widgets/CollapsibleSection.cpp ${SRC}/ui/widgets/CollapsibleSection.h
+      ${SRC}/core/Theme.cpp ${SRC}/core/ui/Buttons.h
+      ${SRC}/vsim/MeshLoader.cpp ${SRC}/vsim/MassProperties.cpp
+      ${SRC}/vsim/AirframePresets.cpp ${SRC}/vsim/VehicleJson.cpp)
+  target_include_directories(tst_geometry_editor_preset PRIVATE
+      ${SRC}/vsim ${SRC}/ui/widgets)
+  target_link_libraries(tst_geometry_editor_preset PRIVATE assimp::assimp)
 endif()

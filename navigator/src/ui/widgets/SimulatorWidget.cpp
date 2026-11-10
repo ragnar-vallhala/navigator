@@ -606,8 +606,10 @@ void SimulatorWidget::buildUi() {
     connect(m_geomEditor, &GeometryEditorWidget::geometryApplied, this, [this] {
       applyGeometryToRenderer();
       pushFirmwareMotorGeometry(m_geomEditor->physicsConfig());
-      if (m_sim)
+      if (m_sim) {
         m_sim->sendGeometry(m_geomEditor->physicsConfig());
+        pushAirframeGains(true); // the gains follow the airframe, live
+      }
       persistGeometry(m_geomEditor->config());
       appendLog(
           "geom",
@@ -3186,7 +3188,7 @@ void SimulatorWidget::startInAppSim() {
     pushRatesToSim(); // apply configured loop rates before geometry/world
     pushFirmwareMotorGeometry(
         cfg); // firmware roll/pitch/yaw mix signs (physics frame)
-    pushPresetGains(m_presetId); // the airframe's tuned gains (if a preset)
+    pushAirframeGains(true); // the airframe's tuned gains (if a preset)
     m_sim->sendGeometry(cfg); // in-process physics motor layout
     m_sim->sendWorld(m_worldEditor->config());
     m_sim->sendObstacles(m_worldEditor->config().obstacles);
@@ -3213,7 +3215,7 @@ void SimulatorWidget::startInAppSim() {
         return;
       const auto c = m_geomEditor->physicsConfig();
       pushFirmwareMotorGeometry(c);
-      pushPresetGains(m_presetId);
+      pushAirframeGains(false); // same gains again, not logged twice
       m_sim->sendGeometry(c);
       pushRatesToSim(); // re-assert loop rates too: the daemon boots at its
                         // compiled default, so a dropped/raced SET_RATES would
@@ -3406,6 +3408,20 @@ void SimulatorWidget::applyGeometryToRenderer() {
                                    m_geomEditor->meshNormals());
     m_downRenderer->setMotorLayout(pos, axis, spin);
   }
+}
+
+// Push the current airframe's gains and, when `announce`, say so in the log:
+// the firmware saves applied gains (0:pid.bin), so the user should be able to
+// see why their tune changed, or that it was deliberately left alone.
+void SimulatorWidget::pushAirframeGains(bool announce) {
+  pushPresetGains(m_presetId);
+  if (!announce)
+    return;
+  appendLog("geom",
+            m_presetId.isEmpty()
+                ? tr("custom vehicle: firmware keeps its current gains")
+                : tr("sent %1 gains to firmware (saved to pid.bin)")
+                      .arg(m_presetId));
 }
 
 void SimulatorWidget::persistGeometry(const vsim::GeometryConfig &g) {

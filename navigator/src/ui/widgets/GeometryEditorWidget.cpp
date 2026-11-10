@@ -247,12 +247,45 @@ void GeometryEditorWidget::buildUi() {
     connect(apply, &QPushButton::clicked, this, &GeometryEditorWidget::onApply);
   }
 
+  // Any manual edit of the airframe fields makes the vehicle a custom one: the
+  // Preset combo goes back to "Custom" so Start does not send a preset's gains
+  // for a modified airframe. Loading a config into the form (a preset, a file,
+  // restore) is guarded by syncing_ and does not count as an edit.
+  {
+    auto edited = [this] { onFormEdited(); };
+    const auto dbl = QOverload<double>::of(&QDoubleSpinBox::valueChanged);
+    const auto idx = QOverload<int>::of(&QComboBox::currentIndexChanged);
+    for (QDoubleSpinBox *sp : {scaleSpin_, massSpin_, transX_, transY_, transZ_,
+                               rotX_, rotY_, rotZ_})
+      connect(sp, dbl, this, edited);
+    connect(meshEdit_, &QLineEdit::textEdited, this, edited);
+    for (auto &r : rows_) {
+      for (QDoubleSpinBox *sp : {r.px, r.py, r.pz, r.ax, r.ay, r.az, r.kt,
+                                 r.km, r.wmax, r.tau})
+        connect(sp, dbl, this, edited);
+      connect(r.spin, idx, this, edited);
+    }
+  }
+
   // Pack sections to the top; without this the QVBoxLayout spreads the
   // slack between collapsed sections so they sit evenly apart.
   root->addStretch(1);
 }
 
+void GeometryEditorWidget::onFormEdited() {
+  if (syncing_ || presetCombo_->currentIndex() == 0)
+    return;
+  setPresetId(QString());
+  emit presetChosen(QString());
+}
+
+QString GeometryEditorWidget::presetId() const {
+  return presetCombo_->currentData().toString();
+}
+
 void GeometryEditorWidget::syncConfigToUi() {
+  const bool wasSyncing = syncing_;
+  syncing_ = true;
   meshEdit_->setText(cfg_.meshPath);
   scaleSpin_->setValue(cfg_.scale);
   massSpin_->setValue(cfg_.mass);
@@ -277,6 +310,7 @@ void GeometryEditorWidget::syncConfigToUi() {
     r.wmax->setValue(m.max_omega);
     r.tau->setValue(m.tau);
   }
+  syncing_ = wasSyncing;
 }
 
 void GeometryEditorWidget::syncUiToConfig() {

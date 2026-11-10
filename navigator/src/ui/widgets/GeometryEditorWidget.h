@@ -89,6 +89,7 @@ public:
   // Show which built-in preset is loaded in the Preset combo ("" = Custom)
   // without emitting presetChosen().
   void setPresetId(const QString &id);
+  QString presetId() const; // current preset id, "" = custom
 
   const std::vector<QVector3D> &meshPositions() const { return meshPos_; }
   const std::vector<QVector3D> &meshNormals() const { return meshNrm_; }
@@ -113,6 +114,7 @@ private slots:
   void onSaveFile(); // export the vehicle to a portable .json
   void onLoadFile(); // import a vehicle .json
   void onPresetActivated(int index);
+  void onFormEdited(); // a manual edit: the vehicle is now custom
 
 private:
   void buildUi();
@@ -126,6 +128,7 @@ private:
   std::vector<QVector3D> meshPos_;
   std::vector<QVector3D> meshNrm_;
 
+  bool syncing_ = false; // form being loaded from a config, not edited
   QComboBox *presetCombo_ = nullptr;
   QLineEdit *meshEdit_ = nullptr;
   QDoubleSpinBox *scaleSpin_ = nullptr;
