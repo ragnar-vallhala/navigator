@@ -620,6 +620,7 @@ void SimulatorWidget::buildUi() {
     connect(m_geomEditor, &GeometryEditorWidget::presetChosen, this,
             [this](const QString &id) {
               m_presetId = id;
+              applyGeometryToRenderer(); // the model depicts the new class
               // Preset changed (or went Custom): the old round is moot. The
               // new set is armed when Apply pushes it.
               m_retrier.cancel(QStringLiteral("gains"));
@@ -1243,6 +1244,7 @@ void SimulatorWidget::buildUi() {
                             hadSavedGeometry ? QString() : QStringLiteral("5in"))
                      .toString();
     m_geomEditor->setPresetId(m_presetId);
+    applyGeometryToRenderer(); // model class follows the restored preset
   }
   m_worldEditor->setConfig(restoreWorld());
   m_worldEditor->setWindConfig(restoreWind());
@@ -3684,6 +3686,7 @@ void SimulatorWidget::applyGeometryToRenderer() {
     spin[i] = cfg.motors[i].spin;
   }
   m_renderer->setMotorLayout(pos, axis, spin);
+  m_renderer->setAirframeStyle(m_presetId, cfg.propRadius);
 
   // Mirror the airframe into the down-cam PiP so its bird's-eye shows the drone.
   if (m_downRenderer) {
@@ -3691,6 +3694,7 @@ void SimulatorWidget::applyGeometryToRenderer() {
       m_downRenderer->setDroneMesh(m_geomEditor->meshPositions(),
                                    m_geomEditor->meshNormals());
     m_downRenderer->setMotorLayout(pos, axis, spin);
+    m_downRenderer->setAirframeStyle(m_presetId, cfg.propRadius);
   }
 }
 
