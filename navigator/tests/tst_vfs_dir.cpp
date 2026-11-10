@@ -79,6 +79,12 @@ private slots:
     // the app-data root itself is not "inside" it either
     QVERIFY(!vsim::resetPrivateVfs(root.path(), root.path(), false, &why));
     // a symlink inside app data pointing outside must not be followed
+#ifdef Q_OS_WIN
+    // QFile::link makes a "link.lnk" shortcut on Windows, not a symlink, so
+    // root/link does not exist and there is nothing to follow; the checks
+    // above still ran. (Windows CI showed exactly this: 7 pass, this fails.)
+    QSKIP("QFile::link creates a .lnk shortcut on Windows, not a symlink");
+#endif
     QVERIFY(QFile::link(other.path(), root.path() + "/link"));
     QVERIFY(!vsim::resetPrivateVfs(root.path() + "/link", root.path(), false,
                                    &why));
