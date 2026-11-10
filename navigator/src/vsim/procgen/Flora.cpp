@@ -115,7 +115,10 @@ std::vector<FloraInstance> scatterFlora(const TerrainField &f, int cx, int cy,
       const float altF =
           1.0f - smoothstep(p.grassMaxFrac * 0.55f, p.grassMaxFrac, t);
       const float slopeF = smoothstep(p.slopeLo, p.slopeHi, flatness);
-      const float density = altF * slopeF;
+      // Tracks, ponds, rock and bare patches of the ground-cover layer stay
+      // grass-free so the blades do not paint over them.
+      const float density =
+          altF * slopeF * f.grassFactor(baseX, baseY, h, flatness);
       if (density <= 0.0f)
         continue;
       if (u01(hcell(gx, gy, p.seed, 3)) > density)

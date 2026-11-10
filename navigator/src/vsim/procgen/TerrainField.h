@@ -29,6 +29,7 @@
 // bowl. Qt-free and deterministic from one seed.
 #pragma once
 
+#include "GroundCover.h"
 #include "Noise.h"
 #include "ProcgenTypes.h"
 
@@ -59,7 +60,8 @@ struct FieldParams {
 
   // World-preset extensions (all default to the original behaviour).
   int shape = 0;   // 0 = hills/mountains (macro field), 1 = wind-blown dunes
-  int palette = 0; // colour table for color(): see TerrainField.cpp (0 = meadow)
+  int palette = 0; // colour table (GroundPalette): base in TerrainField.cpp,
+                   // cover layer in GroundCover.cpp
   // Added to the macro [0,1] field before the mountain threshold: >0 forces
   // hills/mountains everywhere (so a small arena doesn't land in an empty basin).
   float mountainBias = 0.0f;
@@ -84,6 +86,15 @@ public:
   // (1 = level ground, 0 = vertical). Green valley -> olive -> rock.
   PgVec3 color(float h, float flatness) const;
 
+  // color() plus the ground-cover layer (tint, patches, tracks, rock, ponds,
+  // fields) at world (wx, wy). Meshing uses this; `grass` in the result is the
+  // fraction of the ground that may carry grass there.
+  GroundCover::Sample colorAt(float wx, float wy, float h, float flatness) const;
+  // Grass density multiplier at (wx, wy) (0 on tracks/water/rock/bare patches).
+  float grassFactor(float wx, float wy, float h, float flatness) const {
+    return colorAt(wx, wy, h, flatness).grass;
+  }
+
   const FieldParams &params() const { return p_; }
 
 private:
@@ -92,6 +103,7 @@ private:
   Noise mtn_;
   Noise macro_;
   Noise warp_;
+  GroundCover cover_;
   float rawHeight(float wx, float wy) const; // before the spawn pad
   float duneHeight(float wx, float wy) const;
   float padHeight_ = 0.0f; // raw elevation at the origin (spawn pad level)

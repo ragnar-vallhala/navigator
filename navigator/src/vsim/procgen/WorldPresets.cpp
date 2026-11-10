@@ -361,7 +361,7 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     f.mountainMix = 0.35f;
     f.mountainBias = 0.6f;
     f.maxSlope = 0.5f;
-    f.palette = 3;
+    f.palette = kPalHills;
     noSnowNoRock(f);
     f.colSlopeT = 0.9f;
   } else if (id == "alpine") {
@@ -370,7 +370,7 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     f.mountainMix = 0.85f;
     f.mountainBias = 0.15f;
     f.maxSlope = 0.9f;
-    f.palette = 3;
+    f.palette = kPalAlpine;
     f.colBrownT = 0.28f;
     f.colRockT = 0.55f;
     f.colSnowT = 0.58f;
@@ -382,14 +382,14 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     f.heightM = 1.2f;
     f.mountainMix = 0.0f;
     f.maxSlope = 0.3f;
-    f.palette = 3;
+    f.palette = kPalFlat;
     noSnowNoRock(f);
   } else if (id == "desert") {
     f.shape = 1;
     f.heightM = 16.0f;
     f.featureM = 75.0f; // dune wavelength
     f.maxSlope = 0.5f;
-    f.palette = 1;
+    f.palette = kPalDesert;
     noSnowNoRock(f);
     f.colBrownT = 0.35f;
     f.colSlopeT = 0.9f;
@@ -401,7 +401,7 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     f.mountainMix = 0.1f;
     f.mountainBias = 0.5f;
     f.maxSlope = 0.5f;
-    f.palette = 2;
+    f.palette = kPalForest;
     noSnowNoRock(f);
     f.colSlopeT = 0.8f;
   } else if (id == "racing") {
@@ -410,7 +410,7 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     f.heightM = 5.0f;
     f.mountainMix = 0.0f;
     f.maxSlope = 0.25f;
-    f.palette = 3;
+    f.palette = kPalRacing;
     noSnowNoRock(f);
   } else { // yard
     d.sizeM = 240.0f;
@@ -418,7 +418,7 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     f.heightM = 0.6f;
     f.mountainMix = 0.0f;
     f.maxSlope = 0.2f;
-    f.palette = 4;
+    f.palette = kPalYard;
     noSnowNoRock(f);
   }
   const TerrainField field(f);

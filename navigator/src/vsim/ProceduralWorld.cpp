@@ -57,6 +57,7 @@ bool applyWorldPreset(WorldConfig &w, const QString &id, quint32 seed) {
     w.proceduralResolution = 192;
     w.field = procgen::FieldParams{};
     w.field.seed = seed;
+    w.field.palette = procgen::kPalMeadow; // same cover masks as the mesh
     w.flora = procgen::FloraParams{};
     w.flora.seed = seed;
     w.obstacles.clear();
@@ -75,6 +76,7 @@ bool applyWorldPreset(WorldConfig &w, const QString &id, quint32 seed) {
     ob.size = QVector3D(o.sx, o.sy, o.sz);
     ob.rotate = QVector3D(0.0f, 0.0f, o.yawDeg);
     ob.restitution = 0.3f;
+    ob.style = o.style;
     w.obstacles.push_back(ob);
   }
   return true;

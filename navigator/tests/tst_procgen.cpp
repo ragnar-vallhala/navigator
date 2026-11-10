@@ -24,6 +24,7 @@
 
 #include "ChunkStreamer.h"
 #include "procgen/Flora.h"
+#include "procgen/GroundCover.h"
 #include "procgen/Heightfield.h"
 #include "procgen/Noise.h"
 #include "procgen/TerrainField.h"
@@ -56,6 +57,10 @@ private slots:
   void sameSeedSameMesh();
   void differentSeedDiffersMesh();
   void fieldIsDeterministicAndBounded();
+  void groundCoverDeterministicAndBounded();
+  void groundCoverGivesVarietyInEveryPalette();
+  void groundCoverPondsAndTracksExist();
+  void fieldMeshColoursVary();
   void fieldChunksTileSeamlessly();
   void fieldChunkSoupIntegrity();
   void streamerLoadsNeighborhood();
@@ -580,6 +585,115 @@ void TstProcgen::spawnAndPadHeightsMatchCollisionSurface() {
   QVERIFY2(worst <= tol, "pad/spawn height is not on the collision surface");
 }
 
+
+// ---- ground cover ----------------------------------------------------------
+
+namespace {
+const PgVec3 kBase{0.30f, 0.40f, 0.20f};
+float luma(const PgVec3 &c) { return 0.3f * c.x + 0.59f * c.y + 0.11f * c.z; }
+} // namespace
+
+void TstProcgen::groundCoverDeterministicAndBounded() {
+  for (int pal = 0; pal <= 9; ++pal) {
+    const GroundCover a(1337u, pal), b(1337u, pal), c(4242u, pal);
+    bool seedDiffers = false;
+    for (float y = -200.0f; y <= 200.0f; y += 9.7f)
+      for (float x = -200.0f; x <= 200.0f; x += 9.7f) {
+        const GroundCover::Sample sa = a.sample(x, y, kBase, 0.2f, 0.99f);
+        const GroundCover::Sample sb = b.sample(x, y, kBase, 0.2f, 0.99f);
+        const GroundCover::Sample sc = c.sample(x, y, kBase, 0.2f, 0.99f);
+        QCOMPARE(sa.color.x, sb.color.x);
+        QCOMPARE(sa.color.y, sb.color.y);
+        QCOMPARE(sa.color.z, sb.color.z);
+        QCOMPARE(sa.grass, sb.grass);
+        for (float v : {sa.color.x, sa.color.y, sa.color.z, sa.grass}) {
+          QVERIFY(std::isfinite(v));
+          QVERIFY(v >= 0.0f && v <= 1.0f);
+        }
+        seedDiffers = seedDiffers || sa.color.x != sc.color.x;
+      }
+    QVERIFY2(seedDiffers, qPrintable(QString("palette %1 ignores the seed").arg(pal)));
+  }
+  // Steep / high inputs and the origin must not produce NaN either.
+  const GroundCover g(7u, kPalAlpine);
+  const GroundCover::Sample s = g.sample(0.0f, 0.0f, kBase, 1.0f, 0.0f);
+  QVERIFY(std::isfinite(s.color.x + s.color.y + s.color.z + s.grass));
+}
+
+void TstProcgen::groundCoverGivesVarietyInEveryPalette() {
+  for (int pal = 0; pal <= 9; ++pal) {
+    const GroundCover g(1337u, pal);
+    float lo = 9.0f, hi = -9.0f;
+    double sum = 0.0, sum2 = 0.0;
+    int n = 0, nonGrass = 0;
+    for (float y = -200.0f; y <= 200.0f; y += 4.0f)
+      for (float x = -200.0f; x <= 200.0f; x += 4.0f) {
+        const GroundCover::Sample s = g.sample(x, y, kBase, 0.05f, 1.0f);
+        const float l = luma(s.color);
+        lo = std::min(lo, l);
+        hi = std::max(hi, l);
+        sum += l;
+        sum2 += static_cast<double>(l) * l;
+        ++n;
+        nonGrass += s.grass < 0.5f ? 1 : 0;
+      }
+    const double mean = sum / n, sd = std::sqrt(std::max(0.0, sum2 / n - mean * mean));
+    const QString tag = QString("palette %1").arg(pal);
+    QVERIFY2(sd > 0.02, qPrintable(tag + " luma stddev too small"));
+    QVERIFY2(hi - lo > 0.12f, qPrintable(tag + " luma range too small"));
+    // Some, but not most, of the ground is track/water/rock/bare.
+    const double frac = static_cast<double>(nonGrass) / n;
+    QVERIFY2(frac > 0.002 && frac < 0.7, qPrintable(tag + QString(" non-grass %1").arg(frac)));
+  }
+}
+
+void TstProcgen::groundCoverPondsAndTracksExist() {
+  // Palettes with ponds: a level low sample somewhere over 800 m reads as water
+  // (blue-dominant, grass-free). Level ground only, since ponds are flat colour.
+  for (int pal : {0, 2, 3, 5, 6, 7, 8, 9}) {
+    const GroundCover g(1337u, pal);
+    int water = 0;
+    for (float y = -400.0f; y <= 400.0f; y += 3.0f)
+      for (float x = -400.0f; x <= 400.0f; x += 3.0f) {
+        const GroundCover::Sample s = g.sample(x, y, kBase, 0.02f, 1.0f);
+        if (s.grass < 0.2f && s.color.z > s.color.x + 0.03f)
+          ++water;
+      }
+    QVERIFY2(water > 30, qPrintable(QString("palette %1: only %2 water samples").arg(pal).arg(water)));
+  }
+  // The desert has no ponds.
+  const GroundCover d(1337u, kPalDesert);
+  for (float y = -400.0f; y <= 400.0f; y += 5.0f)
+    for (float x = -400.0f; x <= 400.0f; x += 5.0f) {
+      const GroundCover::Sample s = d.sample(x, y, kBase, 0.02f, 1.0f);
+      QVERIFY(!(s.grass < 0.2f && s.color.z > s.color.x + 0.1f));
+    }
+  // Ponds never open on a slope (they would tilt): steep ground keeps grass.
+  const GroundCover g(1337u, kPalFlat);
+  for (float y = -400.0f; y <= 400.0f; y += 6.0f)
+    for (float x = -400.0f; x <= 400.0f; x += 6.0f) {
+      const GroundCover::Sample s = g.sample(x, y, kBase, 0.02f, 0.80f);
+      QVERIFY(!(s.grass < 0.2f && s.color.z > s.color.x + 0.03f));
+    }
+}
+
+void TstProcgen::fieldMeshColoursVary() {
+  for (int pal = 0; pal <= 9; ++pal) {
+    FieldParams p;
+    p.seed = 99u;
+    p.palette = pal;
+    p.heightM = 20.0f;
+    const TerrainField f(p);
+    const ProcMesh m = meshFieldChunk(f, 0, 0, 200.0f, 64);
+    float lo = 9.0f, hi = -9.0f;
+    for (const PgVec3 &c : m.colors) {
+      QVERIFY(std::isfinite(c.x + c.y + c.z));
+      lo = std::min(lo, luma(c));
+      hi = std::max(hi, luma(c));
+    }
+    QVERIFY2(hi - lo > 0.08f, qPrintable(QString("palette %1 mesh is one colour").arg(pal)));
+  }
+}
 
 QTEST_MAIN(TstProcgen)
 #include "tst_procgen.moc"

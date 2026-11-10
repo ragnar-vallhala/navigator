@@ -200,6 +200,7 @@ navigator_test(tst_procgen
     ${SRC}/vsim/procgen/Noise.cpp
     ${SRC}/vsim/procgen/TerrainGen.cpp
     ${SRC}/vsim/procgen/TerrainField.cpp
+    ${SRC}/vsim/procgen/GroundCover.cpp
     ${SRC}/vsim/procgen/WorldPresets.cpp
     ${SRC}/vsim/procgen/Flora.cpp
     ${SRC}/vsim/ChunkStreamer.cpp)
@@ -210,6 +211,7 @@ navigator_test(tst_worldpresets
     tst_worldpresets.cpp
     ${SRC}/vsim/procgen/Noise.cpp
     ${SRC}/vsim/procgen/TerrainField.cpp
+    ${SRC}/vsim/procgen/GroundCover.cpp
     ${SRC}/vsim/procgen/WorldPresets.cpp)
 target_include_directories(tst_worldpresets PRIVATE ${SRC}/vsim)
 
@@ -231,6 +233,7 @@ if(NAVIGATOR_SITL)
       ${SRC}/vsim/procgen/Noise.cpp
       ${SRC}/vsim/procgen/TerrainGen.cpp
       ${SRC}/vsim/procgen/TerrainField.cpp
+      ${SRC}/vsim/procgen/GroundCover.cpp
       ${SRC}/vsim/procgen/WorldPresets.cpp)
   target_include_directories(tst_worldeditor PRIVATE ${SRC}/vsim ${SRC}/ui/widgets)
 endif()
