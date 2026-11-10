@@ -35,6 +35,7 @@
 #include "navlink_msgs.h"
 
 #include <QSignalSpy>
+#include <QDir>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -175,12 +176,22 @@ void TstAirframeFlight::waitSim(double seconds) {
 }
 
 void TstAirframeFlight::initTestCase() {
+  // A private persisted-gains store (0:pid.bin) and FIFO names, set BEFORE the
+  // engine module is first touched so load order cannot matter. The firmware
+  // loads its gains from this store at boot, so it must start empty or a stale
+  // 0_pid.bin (a user's tune, another run's gains) leaks into the flight.
+  // A caller may pre-set VAYU_VFS_DIR to a fresh directory of their own.
+  QString vfs = qEnvironmentVariable("VAYU_VFS_DIR");
+  if (vfs.isEmpty()) {
+    QVERIFY(vfs_.isValid());
+    vfs = vfs_.path();
+    qputenv("VAYU_VFS_DIR", vfs.toLocal8Bit());
+  }
+  QVERIFY2(QDir(vfs).isEmpty(), qPrintable("VAYU_VFS_DIR not empty: " + vfs));
+  if (qEnvironmentVariableIsEmpty("VSIM_FIFO_SUFFIX"))
+    qputenv("VSIM_FIFO_SUFFIX", "_tstaf" + QByteArray::number(::getpid()));
   if (!SitlModule::instance().available())
     QSKIP(qPrintable("no SITL engine module: " + SitlModule::instance().error()));
-  QVERIFY(vfs_.isValid());
-  // Keep the firmware's persisted gains (0:pid.bin) out of the user's /tmp.
-  qputenv("VAYU_VFS_DIR", vfs_.path().toLocal8Bit());
-  qputenv("VSIM_FIFO_SUFFIX", "_tstaf" + QByteArray::number(::getpid()));
   QString slave;
   QVERIFY(rc_.open(&slave));
   qputenv("VAYU_UART_RC_PATH", slave.toLocal8Bit());
@@ -295,9 +306,16 @@ void TstAirframeFlight::configure(const vsim::AirframePreset &p) {
   }
   send(CommandCodec::encodeSetMotorGeometry(x, y, spin));
   sim_->sendGeometry(p.geometry);
-  for (const PidSetCmd &c : p.gains)
-    send(CommandCodec::encodeSetPid(c.controller, c.axis, c.kp, c.ki, c.kd,
-                                    c.kff));
+  // AF_GAINS=stock: send no CMD_SET_PID at all (the firmware's own defaults).
+  // AF_GS=<x>: scale the preset's rate-loop kp/ki/kd (limit-cycle onset sweeps).
+  if (qEnvironmentVariable("AF_GAINS") != "stock") {
+    const double gs = qEnvironmentVariable("AF_GS", "1").toDouble();
+    for (const PidSetCmd &c : p.gains) {
+      const double k = c.controller == 1 ? gs : 1.0;
+      send(CommandCodec::encodeSetPid(c.controller, c.axis, c.kp * k,
+                                      c.ki * k, c.kd * k, c.kff));
+    }
+  }
   waitSim(0.3);
 }
 

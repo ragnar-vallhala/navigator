@@ -52,7 +52,7 @@ constexpr Row kRows[] = {
      {{4.5e-4f, 1.2e-3f, 7.5e-6f}, {3.8e-4f, 4.5e-4f, 7.5e-6f}, {6.0e-4f, 1.2e-3f, 0.0f}}},
     {"3in", "3-inch light (F1404 3800KV)", "4S", 0.180f, 0.0381f, 0.0502f,
      1.38e-4f, 1.57e-4f, 2.70e-4f, 3.46e-7f, 2.73e-9f, 2753.0f, 0.010f,
-     {{3.9e-4f, 1.1e-3f, 6.5e-6f}, {3.2e-4f, 3.8e-4f, 6.3e-6f}, {4.9e-4f, 9.7e-4f, 0.0f}}},
+     {{3.3e-4f, 9.3e-4f, 5.5e-6f}, {2.7e-4f, 3.2e-4f, 5.4e-6f}, {4.2e-4f, 8.2e-4f, 0.0f}}},
     {"7in", "7-inch long range (F90 1300KV)", "6S", 1.165f, 0.0889f, 0.1156f,
      3.78e-3f, 4.62e-3f, 7.70e-3f, 5.49e-6f, 9.32e-8f, 1942.0f, 0.020f,
      {{3.3e-4f, 8.8e-4f, 5.4e-6f}, {2.8e-4f, 3.4e-4f, 5.7e-6f}, {4.5e-4f, 9.0e-4f, 0.0f}}},
@@ -90,17 +90,25 @@ GeometryConfig geometryFromRow(const Row &r) {
 
 // Rate-loop gains from the row, angle loop stock (3.0 / 3.0 / 1.2 1/s).
 //
-// Why not the stock gains: the firmware defaults are a hardware tune; flown in
-// the sim on any of these airframes they put the rate loop into a limit cycle
-// (motors slamming between idle and full, which rectifies into a runaway climb).
-// The 5-inch set is the stock gains x0.15 (the limit cycle starts at about x0.4
-// here, so that is a 2.5x margin). The others scale it so the rate-loop
-// crossover keeps its place against the motor lag:
+// Why not the stock gains: the firmware defaults are a hardware tune. Flown in
+// the sim on a clean gain store (VAYU_VFS_DIR empty, so no stale 0:pid.bin) the
+// stock gains put the rate loop of the 5in, 3in, 7in and whoop into a limit
+// cycle (motors slamming between idle and full, which rectifies into a runaway
+// climb), and the 10in is marginal (22 deg attitude excursions in a hover).
+//
+// The 5-inch set is the stock rate gains x0.15; flown, it is stable up to
+// x2.5 of itself and limit-cycles at x4 (onset x0.4-0.6 of stock). The others
+// start from the same rule, which keeps the rate-loop crossover in place
+// against the motor lag:
 //     kp_i = kp_5in * (K_5in / K_i) * (tau_5in / tau_i)
-// with K the roll/pitch/yaw plant gain, torque per unit mixer output over
-// inertia, from each airframe's own k_thrust, max_omega, arm and inertia.
-// The whoop is the exception: flown, that rule (x0.34) left its roll step
-// under-damped, so its set is 4x the rule's (about the 5-inch magnitude).
+// with K the roll/pitch/yaw plant gain (torque per unit mixer output over
+// inertia) from each airframe's own k_thrust, max_omega, arm and inertia, and
+// were then checked by flight. Margin to the limit cycle, as a multiple of the
+// table gains: 5in 2.5-4, 7in and 10in over 4 (not found), whoop 2.5-4 (spread
+// 0.65 at x4). The 3in limit-cycled at x2.5 with the rule's value, so its set
+// is that value x0.85 (stable at x2 of the old value), for a margin of about 2.5.
+// The whoop's set is 4x the rule's value: the rule's own left its step
+// under-damped.
 QVector<PidSetCmd> gainsFor(const Row &r) {
   QVector<PidSetCmd> g;
   for (int ax = 0; ax < 3; ++ax)
