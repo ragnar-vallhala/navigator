@@ -73,6 +73,14 @@ public:
   // The paths that were tried, in order, for a "why can't it find it" message.
   static QStringList searchPaths();
 
+  // Why `candidate` failed QLibrary::load(), given that call's errorString().
+  // "not found" / "no such directory" only when the file really is absent;
+  // otherwise the loader's own text (wrong ABI/architecture, missing symbol or
+  // dependency, not a shared object), because the file being there makes
+  // "not found" misleading.
+  static QString loadFailureReason(const QString &candidate,
+                                   const QString &libraryError);
+
 private:
   SitlModule();
 

@@ -86,11 +86,14 @@ QJsonObject worldToJson(const vsim::WorldConfig &w) {
   root["world_mesh_offset"] = vec3ToJson(w.worldMeshOffset);
   QJsonArray obs;
   for (const vsim::Obstacle &o : w.obstacles) {
-    obs.append(QJsonObject{{"type", o.type},
-                           {"pos", vec3ToJson(o.pos)},
-                           {"size", vec3ToJson(o.size)},
-                           {"rotate", vec3ToJson(o.rotate)},
-                           {"restitution", o.restitution}});
+    QJsonObject jo{{"type", o.type},
+                   {"pos", vec3ToJson(o.pos)},
+                   {"size", vec3ToJson(o.size)},
+                   {"rotate", vec3ToJson(o.rotate)},
+                   {"restitution", o.restitution}};
+    if (o.style != 0) // look only; omitted for plain shapes (old files unchanged)
+      jo["style"] = o.style;
+    obs.append(jo);
   }
   root["obstacles"] = obs;
   if (!w.proceduralBiome.isEmpty()) {
@@ -161,6 +164,7 @@ vsim::WorldConfig worldFromJson(const QJsonObject &root) {
     ob.size = vec3FromJson(o.value("size"), ob.size);
     ob.rotate = vec3FromJson(o.value("rotate"), ob.rotate);
     ob.restitution = o.value("restitution").toDouble(ob.restitution);
+    ob.style = o.value("style").toInt(ob.style);
     w.obstacles.push_back(ob);
   }
   const QJsonObject pg = root.value("procedural").toObject();

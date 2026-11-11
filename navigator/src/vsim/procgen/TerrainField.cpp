@@ -41,6 +41,7 @@ inline PgVec3 mix(const PgVec3 &a, const PgVec3 &b, float t) {
 TerrainField::TerrainField(const FieldParams &p)
     : p_(p), hills_(p.seed), mtn_(p.seed ^ 0x9e3779b9u),
       macro_(p.seed ^ 0x68bc21ebu), warp_(p.seed ^ 0xb5297a4du),
+      cover_(p.seed, p.palette),
       baseFreq_(p.featureM > 0.0f ? 1.0f / p.featureM : 1.0f / 150.0f),
       macroFreq_(p.macroM > 0.0f ? 1.0f / p.macroM : 1.0f / 1400.0f) {
   duneDir_ = static_cast<float>(p.seed % 628u) * 0.01f;
@@ -141,7 +142,9 @@ PgVec3 TerrainField::color(float h, float flatness) const {
   PgVec3 brown{0.29f, 0.23f, 0.15f};
   PgVec3 rock{0.33f, 0.33f, 0.32f};
   PgVec3 snow{0.80f, 0.83f, 0.88f};
-  switch (p_.palette) {
+  // Palettes 6+ (alpine/hills/flat/racing) share the pasture base; their
+  // difference is in the cover layer.
+  switch (p_.palette >= 6 ? 3 : p_.palette) {
   case 1: // desert sand: shaded troughs -> sunlit crests
     green = {0.66f, 0.51f, 0.31f};
     brown = {0.84f, 0.72f, 0.48f};
@@ -184,6 +187,12 @@ PgVec3 TerrainField::color(float h, float flatness) const {
       smoothstep(p_.colSnowT, p_.colSnowT + 0.2f, t) * (1.0f - 0.7f * steepMix);
   c = mix(c, snow, snowAmt);
   return c;
+}
+
+GroundCover::Sample TerrainField::colorAt(float wx, float wy, float h,
+                                          float flatness) const {
+  const float t = clamp01(p_.heightM > 0.0f ? h / p_.heightM : 0.0f);
+  return cover_.sample(wx, wy, color(h, flatness), t, flatness);
 }
 
 namespace {
@@ -308,7 +317,7 @@ ProcMesh meshFieldChunk(const TerrainField &f, int cx, int cy, float chunkM,
                       y0 + step * static_cast<float>(j), -h};
       nrm[k] = PgVec3{nx, ny, nz};
       const float flatness = nz < 0.0f ? -nz : 0.0f;
-      col[k] = f.color(h, flatness);
+      col[k] = f.colorAt(pos[k].x, pos[k].y, h, flatness).color;
     }
   }
 

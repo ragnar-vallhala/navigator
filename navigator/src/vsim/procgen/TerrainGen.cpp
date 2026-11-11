@@ -16,6 +16,8 @@
  */
 #include "TerrainGen.h"
 
+#include "GroundCover.h"
+
 #include "Noise.h"
 
 #include <algorithm>
@@ -125,6 +127,7 @@ ProcMesh meshFromHeightfield(const Heightfield &hf, const TerrainParams &p) {
   std::vector<PgVec3> pos(static_cast<std::size_t>(n) * n);
   std::vector<PgVec3> nrm(static_cast<std::size_t>(n) * n);
   std::vector<PgVec3> col(static_cast<std::size_t>(n) * n);
+  const GroundCover cover(p.seed, kPalMeadow);
   for (int iy = 0; iy < n; ++iy) {
     for (int ix = 0; ix < n; ++ix) {
       const std::size_t i = static_cast<std::size_t>(iy) * n + ix;
@@ -133,7 +136,10 @@ ProcMesh meshFromHeightfield(const Heightfield &hf, const TerrainParams &p) {
       nrm[i] = nv;
       const float normH = clamp01(hf.at(ix, iy) * invH);
       const float flatness = clamp01(-nv.z); // NED up is -Z; flat -> nz≈-1
-      col[i] = meadowColor(normH, flatness);
+      col[i] = cover
+                   .sample(pos[i].x, pos[i].y, meadowColor(normH, flatness),
+                           normH, flatness)
+                   .color;
     }
   }
 

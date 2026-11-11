@@ -16,6 +16,8 @@
  */
 #include "SimRendererWidget.h"
 
+#include "procgen/PropStyle.h"
+
 #include <QCursor>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -185,11 +187,18 @@ void main() {
     float f3 = 1.0 - smoothstep(120.0, 800.0, dist);
     float v = (gn(p / 0.4) - 0.5) * 0.20 * f1 + (gn(p / 2.0) - 0.5) * 0.24 * f2 +
               (gn(p / 9.0) - 0.5) * 0.28 * f3 + (gn(p / 47.0) - 0.5) * 0.22;
-    base *= 1.0 + v;
+    // Macro tint: hundreds-of-metres warm/cool drift, no distance fade, so the
+    // far ground and the horizon plane vary too instead of reading as one colour.
+    float m1 = gn(p / 310.0 + 3.7) - 0.5, m2 = gn(p / 95.0 + 9.1) - 0.5;
+    vec3 macroTint = vec3(1.0 + 0.30 * m1 + 0.10 * m2, 1.0 + 0.10 * m1, 1.0 - 0.26 * m1 - 0.08 * m2);
+    base *= (1.0 + v) * macroTint;
+    // Survey grid: a calm hint, not a net. The fine lines fade out within ~30 m,
+    // the 10 m lines by ~250 m, and only the 100 m lines reach the horizon.
     float up = smoothstep(0.55, 0.85, -n.z);       // grid only on level ground
-    float g = 0.07 * gridLine(p, 1.0, 0.015) + 0.16 * gridLine(p, 10.0, 0.004) +
-              0.26 * gridLine(p, 100.0, 0.0015);
-    base = mix(base, vec3(0.93, 0.94, 0.90), clamp(g * up, 0.0, 0.5));
+    float g = 0.030 * gridLine(p, 1.0, 0.012) * (1.0 - smoothstep(6.0, 30.0, dist)) +
+              0.060 * gridLine(p, 10.0, 0.004) * (1.0 - smoothstep(60.0, 260.0, dist)) +
+              0.100 * gridLine(p, 100.0, 0.0015) * (1.0 - smoothstep(300.0, 900.0, dist));
+    base = mix(base, base * 0.55 + vec3(0.40, 0.41, 0.38), clamp(g * up, 0.0, 0.2));
   }
   if (u_bands > 0.5) {                              // survey pole: 1 m bands
     float k = floor((v_local.z + 0.5) * u_bands);
@@ -951,17 +960,23 @@ void SimRendererWidget::paintGL() {
     m.rotate(o.rotate.y(), 0, 1, 0);
     m.rotate(o.rotate.z(), 0, 0, 1);
     const Mesh *mesh = &unitBox_;
-    QVector3D col(0.40f, 0.45f, 0.55f);
     if (o.type == vsim::Obstacle::Sphere) {
       mesh = &unitSphere_;
       m.scale(o.size.x(), o.size.x(), o.size.x()); // radius = size.x
-      col = QVector3D(0.50f, 0.42f, 0.55f);
     } else if (o.type == vsim::Obstacle::Cylinder) {
       mesh = &unitCyl_;
       m.scale(o.size.x(), o.size.x(), o.size.z()); // radius, height
-      col = QVector3D(0.42f, 0.52f, 0.46f);
     } else {
       m.scale(o.size.x(), o.size.y(), o.size.z()); // box full extents
+    }
+    const procgen::PgVec3 pc =
+        procgen::propColor(o.style, o.type, o.pos.x(), o.pos.y());
+    QVector3D col(pc.x, pc.y, pc.z);
+    // A tree crown is a collision sphere, but drawn as lumpy blobs (leafy) or
+    // stacked tiers (conifer) inside it, so the silhouette is not a lollipop.
+    if (o.style == procgen::kPropCanopy && !(obsMode_ && oi == selObs_)) {
+      drawCrown(view, o, col);
+      continue;
     }
     if (obsMode_ && oi == selObs_)
       col = QVector3D(0.95f, 0.80f, 0.30f); // selected
@@ -1204,6 +1219,38 @@ void SimRendererWidget::drawLit(const Mesh &m, const QMatrix4x4 &view,
   progLit_.release();
 }
 
+// Tree crown: blobs of the crown colour packed inside the obstacle's sphere
+// (radius = size.x), so the collision shape bounds what is drawn.
+void SimRendererWidget::drawCrown(const QMatrix4x4 &view,
+                                  const vsim::Obstacle &o, const QVector3D &col) {
+  const float R = o.size.x();
+  const float px = o.pos.x(), py = o.pos.y();
+  auto blob = [&](float ox, float oy, float oz, float rh, float rv, float shade) {
+    QMatrix4x4 m;
+    m.translate(o.pos + QVector3D(ox, oy, oz)); // NED: up is -z
+    m.scale(rh, rh, rv);
+    drawLit(unitSphere_, view, m, col * shade, false, 0.0f);
+  };
+  if (procgen::propIsConifer(px, py)) {
+    blob(0, 0, 0.42f * R, 0.88f * R, 0.5f * R, 0.85f);
+    blob(0, 0, -0.04f * R, 0.64f * R, 0.5f * R, 1.0f);
+    blob(0, 0, -0.50f * R, 0.40f * R, 0.5f * R, 1.12f);
+    return;
+  }
+  blob(0, 0, -0.10f * R, 0.72f * R, 0.70f * R, 1.0f);
+  const float a0 = 6.2831853f * procgen::propRand(px, py, 7u);
+  for (int k = 0; k < 4; ++k) {
+    const float a = a0 + 1.5707963f * static_cast<float>(k) +
+                    0.5f * procgen::propRand(px, py, 20u + k);
+    const float rr = 0.40f + 0.12f * procgen::propRand(px, py, 30u + k);
+    const float lift = (procgen::propRand(px, py, 40u + k) - 0.5f) * 0.4f;
+    blob(std::cos(a) * (1.0f - rr) * R, std::sin(a) * (1.0f - rr) * R,
+         (0.10f - lift) * R, rr * R, rr * R * 0.9f,
+         0.88f + 0.2f * procgen::propRand(px, py, 50u + k));
+  }
+  blob(0, 0, -0.50f * R, 0.50f * R, 0.46f * R, 1.14f); // sunlit top
+}
+
 void SimRendererWidget::uploadDroneMesh() {
   meshDirty_ = false;
   hasMesh_ = !pendingPos_.empty();
@@ -1326,7 +1373,12 @@ void SimRendererWidget::uploadColoredMesh(Mesh &m,
 void SimRendererWidget::buildObstacleMeshes() {
   auto tri = [](std::vector<float> &v, const QVector3D &a, const QVector3D &b,
                 const QVector3D &c) {
-    const QVector3D n = QVector3D::crossProduct(b - a, c - a).normalized();
+    // Outward normal: the unit solids are centred on the origin, so the face
+    // normal must point away from it. (The box's winding is inward, which
+    // lit every face as facing away from the sun -- near-black boxes.)
+    QVector3D n = QVector3D::crossProduct(b - a, c - a).normalized();
+    if (QVector3D::dotProduct(n, a + b + c) < 0.0f)
+      n = -n;
     for (const QVector3D &p : {a, b, c})
       v.insert(v.end(), {p.x(), p.y(), p.z(), n.x(), n.y(), n.z()});
   };
