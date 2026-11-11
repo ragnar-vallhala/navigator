@@ -40,8 +40,9 @@ public:
     QStyledItemDelegate::initStyleOption(opt, ix);
     const int sev = ix.data(FaultsModel::SeverityRole).toInt();
     const bool acked = ix.data(FaultsModel::AckedRole).toBool();
+    const bool cleared = ix.data(FaultsModel::ClearedRole).toBool();
     QColor c = FaultsPanel::severityColor(sev);
-    if (acked)
+    if (acked || cleared)
       c = Theme::kTextDim;
     opt->palette.setColor(QPalette::Text, c);
     opt->palette.setColor(QPalette::HighlightedText, c);
@@ -54,7 +55,12 @@ public:
     const qint64 last = ix.data(FaultsModel::LastSeenRole).toLongLong();
     line += QStringLiteral("   ") +
             QDateTime::fromMSecsSinceEpoch(last).toString(QStringLiteral("HH:mm:ss"));
-    if (acked)
+    if (cleared)
+      line += QStringLiteral("   cleared %1")
+                  .arg(QDateTime::fromMSecsSinceEpoch(
+                           ix.data(FaultsModel::ClearedAtRole).toLongLong())
+                           .toString(QStringLiteral("HH:mm:ss")));
+    else if (acked)
       line += QStringLiteral("   (ack)");
     opt->text = line;
   }
@@ -102,6 +108,8 @@ void FaultsPanel::build() {
   m_ackBtn = new QPushButton(tr("Acknowledge"), this);
   m_ackBtn->setObjectName(QStringLiteral("faultsAck"));
   m_clearBtn = new QPushButton(tr("Clear"), this);
+  m_ackBtn->setToolTip(tr("Mark active faults acknowledged and dismiss "
+                          "faults the firmware has cleared"));
   m_clearBtn->setObjectName(QStringLiteral("faultsClear"));
   top->addWidget(m_ackBtn);
   top->addWidget(m_clearBtn);
@@ -141,12 +149,21 @@ void FaultsPanel::refresh() {
   const int unacked = m_model->unackedCount();
   m_view->setVisible(rows > 0);
   m_empty->setVisible(rows == 0);
-  m_ackBtn->setEnabled(unacked > 0);
-  m_clearBtn->setEnabled(rows > 0);
-  m_summary->setText(rows == 0 ? tr("No active faults")
-                               : tr("%1 active, %2 unacknowledged")
-                                     .arg(rows)
-                                     .arg(unacked));
+  const int cleared = m_model->clearedCount();
+  m_ackBtn->setEnabled(unacked > 0 || cleared > 0);
+  m_clearBtn->setEnabled(rows > 0 && !m_armed);
+  m_clearBtn->setToolTip(
+      m_armed ? tr("Disabled while armed: the firmware sends a fault once "
+                   "while armed, so clearing it now would hide it until "
+                   "landing")
+              : tr("Remove every row. A fault that is still raised comes "
+                   "back on the firmware's next resend"));
+  m_summary->setText(
+      rows == 0 ? tr("No active faults")
+                : tr("%1 active, %2 unacknowledged, %3 cleared")
+                      .arg(rows - cleared)
+                      .arg(unacked)
+                      .arg(cleared));
   m_summary->setStyleSheet(
       QStringLiteral("font-weight:bold; color:%1;").arg(Theme::hex(badgeColor())));
 }
@@ -158,10 +175,30 @@ QString FaultsPanel::badgeText() const {
 
 QString FaultsPanel::title() const {
   const QString b = badgeText();
-  return b.isEmpty() ? tr("Faults") : tr("Faults (%1)").arg(b);
+  const int c = m_model->clearedCount();
+  if (b.isEmpty() && c == 0)
+    return tr("Faults");
+  if (c == 0)
+    return tr("Faults (%1)").arg(b);
+  if (b.isEmpty())
+    return tr("Faults (%1 cleared)").arg(c);
+  return tr("Faults (%1, %2 cleared)").arg(b).arg(c);
+}
+
+bool FaultsPanel::needsAttention() const {
+  return m_model->unackedCount() > 0 || m_model->clearedCount() > 0;
+}
+
+void FaultsPanel::setArmed(bool armed) {
+  if (m_armed == armed)
+    return;
+  m_armed = armed;
+  refresh();
 }
 
 QColor FaultsPanel::badgeColor() const {
   const int w = m_model->worstUnackedSeverity();
-  return w < 0 ? Theme::kOk : severityColor(w);
+  if (w >= 0)
+    return severityColor(w);
+  return m_model->clearedCount() > 0 ? Theme::kWarn : Theme::kOk;
 }

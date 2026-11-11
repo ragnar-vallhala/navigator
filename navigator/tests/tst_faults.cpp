@@ -80,7 +80,7 @@ private slots:
     QCOMPARE(m.index(2).data(FaultsModel::IdRole).toInt(), 272);
   }
 
-  void seriousFaultStaysUntilFirmwareClears() {
+  void seriousFaultStaysListedUntilDismissed() {
     FaultsModel m;
     m.apply(ev(258, 3, true, "MAG_INIT_FAILED"));
     // Unrelated traffic and resends never drop it.
@@ -88,16 +88,94 @@ private slots:
     m.apply(ev(258, 3, true, "MAG_INIT_FAILED"));
     QCOMPARE(m.rowCount(), 2);
     QCOMPARE(m.unackedSeriousCount(), 1);
-    // A clear for a different id leaves it alone.
+    // A firmware clear for a different id leaves it alone.
     m.apply(ev(272, 4, false));
-    QCOMPARE(m.rowCount(), 1);
-    QCOMPARE(m.index(0).data(FaultsModel::IdRole).toInt(), 258);
-    // Its own clear removes it.
-    m.apply(ev(258, 3, false));
-    QCOMPARE(m.rowCount(), 0);
+    QCOMPARE(m.rowCount(), 2);
+    QVERIFY(!m.index(0).data(FaultsModel::ClearedRole).toBool());
+    QCOMPARE(m.unackedSeriousCount(), 1);
     // Clearing an id that is not listed is a no-op.
     m.apply(ev(999, 3, false));
+    QCOMPARE(m.rowCount(), 2);
+  }
+
+  void clearedUnackedFaultStaysListedUntilDismissed() {
+    FaultsModel m;
+    m.apply(ev(258, 3, true, "MAG_INIT_FAILED"), 1000);
+    m.apply(ev(272, 4, true), 1000);
+    m.apply(ev(258, 3, false), 2000); // brief fault, gone before anyone looked
+    QCOMPARE(m.rowCount(), 2);
+    const QModelIndex ix = m.index(0);
+    QVERIFY(ix.data(FaultsModel::ClearedRole).toBool());
+    QCOMPARE(ix.data(FaultsModel::ClearedAtRole).toLongLong(), 2000LL);
+    // A cleared row is not an active/unacked one for the badge counts.
+    QCOMPARE(m.unackedCount(), 1);
+    QCOMPARE(m.unackedSeriousCount(), 0);
+    QCOMPARE(m.clearedCount(), 1);
+    // A second clear frame does not move the cleared time.
+    m.apply(ev(258, 3, false), 9000);
+    QCOMPARE(ix.data(FaultsModel::ClearedAtRole).toLongLong(), 2000LL);
+    // Acknowledge dismisses the cleared row, the active one stays (acked).
+    m.acknowledgeAll();
+    QCOMPARE(m.rowCount(), 1);
+    QCOMPARE(m.index(0).data(FaultsModel::IdRole).toInt(), 272);
+    QVERIFY(m.index(0).data(FaultsModel::AckedRole).toBool());
+    QCOMPARE(m.clearedCount(), 0);
+  }
+
+  void clearDropsClearedRowToo() {
+    FaultsModel m;
+    m.apply(ev(258, 3, true));
+    m.apply(ev(258, 3, false));
+    QCOMPARE(m.rowCount(), 1);
+    m.clear();
     QCOMPARE(m.rowCount(), 0);
+    QCOMPARE(m.clearedCount(), 0);
+  }
+
+  void raiseAfterClearShowsRaisedAgain() {
+    FaultsModel m;
+    m.apply(ev(258, 3, true), 1000);
+    m.acknowledgeAll(); // acked while active
+    m.apply(ev(258, 3, false), 2000);
+    QCOMPARE(m.clearedCount(), 1);
+    m.apply(ev(258, 3, true), 3000);
+    QCOMPARE(m.rowCount(), 1);
+    const QModelIndex ix = m.index(0);
+    QVERIFY(!ix.data(FaultsModel::ClearedRole).toBool());
+    QCOMPARE(ix.data(FaultsModel::ClearedAtRole).toLongLong(), 0LL);
+    QCOMPARE(ix.data(FaultsModel::CountRole).toInt(), 2);
+    QCOMPARE(ix.data(FaultsModel::FirstSeenRole).toLongLong(), 1000LL);
+    QCOMPARE(ix.data(FaultsModel::LastSeenRole).toLongLong(), 3000LL);
+    // A new occurrence is unacknowledged and counts again.
+    QVERIFY(!ix.data(FaultsModel::AckedRole).toBool());
+    QCOMPARE(m.unackedCount(), 1);
+    QCOMPARE(m.clearedCount(), 0);
+  }
+
+  void worseSeverityResendReAlertsAckedFault() {
+    FaultsModel m;
+    m.apply(ev(272, 4, true));
+    m.acknowledgeAll();
+    QCOMPARE(m.unackedCount(), 0);
+    // Same severity: stays acknowledged.
+    m.apply(ev(272, 4, true));
+    QCOMPARE(m.unackedCount(), 0);
+    // Milder (higher number): stays acknowledged, severity is stored.
+    m.apply(ev(272, 5, true));
+    QCOMPARE(m.unackedCount(), 0);
+    QCOMPARE(m.index(0).data(FaultsModel::SeverityRole).toInt(), 5);
+    // Back to 4 is worse than the stored 5 -> unacknowledged again.
+    m.apply(ev(272, 4, true));
+    QCOMPARE(m.unackedCount(), 1);
+    m.acknowledgeAll();
+    // Worse still (2 = CRITICAL): unacknowledged, counted as serious.
+    QSignalSpy spy(&m, &FaultsModel::countsChanged);
+    m.apply(ev(272, 2, true));
+    QCOMPARE(m.index(0).data(FaultsModel::SeverityRole).toInt(), 2);
+    QVERIFY(!m.index(0).data(FaultsModel::AckedRole).toBool());
+    QCOMPARE(m.unackedCount(), 1);
+    QCOMPARE(m.unackedSeriousCount(), 1);
+    QVERIFY(spy.count() >= 1);
   }
 
   void acknowledgeKeepsRowAndSurvivesResend() {
@@ -173,12 +251,15 @@ private slots:
     // Empty wire text falls back to the faults.json text for a known id.
     QCOMPARE(got[2].text, QStringLiteral("IMU init failed"));
 
-    // Fed into the model, the three frames net out to one unknown-id row.
+    // Fed into the model: the IMU fault is kept as a cleared row, the unknown
+    // id is an active row.
     FaultsModel m;
     for (const FaultEvent &e : got)
       m.apply(e);
-    QCOMPARE(m.rowCount(), 1);
-    QCOMPARE(m.index(0).data(FaultsModel::IdRole).toInt(), 0x1234);
+    QCOMPARE(m.rowCount(), 2);
+    QVERIFY(m.index(0).data(FaultsModel::ClearedRole).toBool());
+    QCOMPARE(m.index(1).data(FaultsModel::IdRole).toInt(), 0x1234);
+    QCOMPARE(m.unackedCount(), 1);
   }
 
   void statustextStillReachesOnLog() {
@@ -214,6 +295,36 @@ private slots:
     QCOMPARE(p.model()->rowCount(), 2);
     QTest::mouseClick(clr, Qt::LeftButton);
     QCOMPARE(p.model()->rowCount(), 0);
+  }
+
+  void panelTitleWithClearedAndArmedGate() {
+    FaultsPanel p;
+    p.model()->apply(ev(256, 2, true));
+    p.model()->apply(ev(272, 4, true));
+    p.model()->apply(ev(272, 4, false));
+    QCOMPARE(p.badgeText(), QStringLiteral("1")); // cleared row not counted
+    QCOMPARE(p.title(), QStringLiteral("Faults (1, 1 cleared)"));
+    p.model()->acknowledgeAll();
+    QCOMPARE(p.title(), QStringLiteral("Faults"));
+    QVERIFY(!p.needsAttention());
+    p.model()->apply(ev(257, 2, true));
+    p.model()->apply(ev(257, 2, false));
+    p.model()->acknowledgeAll();
+    p.model()->apply(ev(300, 4, true));
+    p.model()->apply(ev(300, 4, false));
+    p.model()->acknowledgeAll(); // dismisses the cleared row
+    QVERIFY(!p.needsAttention());
+    p.model()->apply(ev(301, 4, true));
+    p.model()->apply(ev(301, 4, false));
+    QCOMPARE(p.title(), QStringLiteral("Faults (1 cleared)"));
+    QVERIFY(p.needsAttention());
+
+    auto *clr = p.findChild<QPushButton *>("faultsClear");
+    QVERIFY(clr->isEnabled());
+    p.setArmed(true);
+    QVERIFY(!clr->isEnabled());
+    p.setArmed(false);
+    QVERIFY(clr->isEnabled());
   }
 };
 

@@ -718,8 +718,8 @@ void MainWindow::buildUi() {
     const int i = m_bottomTabs->indexOf(m_faultsPanel);
     m_bottomTabs->setTabText(i, m_faultsPanel->title());
     m_bottomTabs->tabBar()->setTabTextColor(
-        i, m_faultsPanel->badgeText().isEmpty() ? QColor()
-                                                : m_faultsPanel->badgeColor());
+        i, m_faultsPanel->needsAttention() ? m_faultsPanel->badgeColor()
+                                           : QColor());
   });
   m_vSplitter->addWidget(m_bottomTabs);
   m_vSplitter->setStretchFactor(0, 3);
@@ -1500,6 +1500,8 @@ void MainWindow::setConnected(bool on) {
     m_toolbar->setArmEnabled(on);
   if (!on) {
     m_armed = false;
+    if (m_faultsPanel)
+      m_faultsPanel->setArmed(false);
     if (m_toolbar)
       m_toolbar->setArmState(false);
   }
@@ -1538,6 +1540,8 @@ void MainWindow::setConnected(bool on) {
     startTimeSync();
   } else {
     m_armed = false;
+    if (m_faultsPanel)
+      m_faultsPanel->setArmed(false);
     // The in-app sim has no transport, so a transport going down must not stop
     // the handshake the running sim is using.
     if (m_source.state() != SourceState::Sim)
@@ -1712,6 +1716,8 @@ void MainWindow::onUiTimer() {
     }
     if (s.armed != m_armed) {
       m_armed = s.armed;
+      if (m_faultsPanel)
+        m_faultsPanel->setArmed(m_armed);
       if (m_toolbar)
         m_toolbar->setArmState(m_armed);
       m_chime.play(m_armed ? ChimeAudio::Kind::Arm : ChimeAudio::Kind::Disarm);

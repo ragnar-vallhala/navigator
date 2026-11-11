@@ -40,12 +40,23 @@ public:
 
   FaultsModel *model() const { return m_model; }
 
-  // "" when nothing is unacknowledged, else the unacknowledged count ("3").
+  // "" when no active fault is unacknowledged, else that count ("3"). Cleared
+  // rows never count here.
   QString badgeText() const;
-  // Title for a tab / section header: "Faults" or "Faults (3)".
+  // Title for a tab / section header: "Faults", "Faults (3)" (active,
+  // unacknowledged), "Faults (3, 1 cleared)" or "Faults (1 cleared)" when the
+  // firmware has cleared faults nobody has dismissed yet.
   QString title() const;
-  // Colour for the worst unacknowledged severity (Theme::kOk when none).
+  // True when there is an unacknowledged active fault or an undismissed cleared
+  // one: the tab should be coloured.
+  bool needsAttention() const;
+  // Colour for the worst unacknowledged active severity; kWarn when only
+  // cleared rows remain; kOk when nothing is listed as pending.
   QColor badgeColor() const;
+  // Armed state of the vehicle: while armed, Clear is disabled (the firmware
+  // sends a fault once while armed, so clearing it in flight would hide it
+  // until landing). Acknowledge stays available.
+  void setArmed(bool armed);
 
   static QColor severityColor(int severity);
   static QString severityLabel(int severity);
@@ -63,4 +74,5 @@ private:
   QLabel *m_summary = nullptr;
   QPushButton *m_ackBtn = nullptr;
   QPushButton *m_clearBtn = nullptr;
+  bool m_armed = false;
 };
