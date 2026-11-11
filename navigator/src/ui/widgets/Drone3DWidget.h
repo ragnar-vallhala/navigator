@@ -18,7 +18,7 @@
 
 #include "../core/Types.h"
 #include <QMatrix4x4>
-#include <QOpenGLWidget>
+#include "GlPaintHost.h"
 #include <QVector3D>
 
 class QTimer;
@@ -27,7 +27,7 @@ class QTimer;
 // X-frame seen from a tilted top-down angle — two crossed arms, four motor pods
 // (front red, rear green), an accent "nose" heading marker and spinning props,
 // over a soft ground shadow. Banks/pitches/yaws with the live attitude.
-class Drone3DWidget : public QOpenGLWidget {
+class Drone3DWidget : public GlPaintHost {
   Q_OBJECT
 
 public:
@@ -36,7 +36,7 @@ public:
   void setAttitude(float roll, float pitch, float yaw);
 
 protected:
-  void paintEvent(QPaintEvent *event) override;
+  void paintScene(QPainter &p) override;
   void showEvent(QShowEvent *event) override;
   void hideEvent(QHideEvent *event) override;
 

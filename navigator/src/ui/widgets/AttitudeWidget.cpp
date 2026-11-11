@@ -46,7 +46,7 @@ float easeAngle(float cur, float target, float a) {
 }
 } // namespace
 
-AttitudeWidget::AttitudeWidget(QWidget *parent) : QOpenGLWidget(parent) {
+AttitudeWidget::AttitudeWidget(QWidget *parent) : GlPaintHost(parent) {
   setMinimumSize(260, 260);
   // Smoothing/repaint clock: ease the displayed attitude toward the latest
   // target and repaint at ~30 Hz, decoupled from the (bursty) packet rate.
@@ -80,26 +80,16 @@ void AttitudeWidget::setAttitude(float roll, float pitch, float yaw) {
 }
 
 void AttitudeWidget::showEvent(QShowEvent *event) {
-  QOpenGLWidget::showEvent(event);
+  GlPaintHost::showEvent(event);
   m_smoothTimer->start();
 }
 
 void AttitudeWidget::hideEvent(QHideEvent *event) {
-  QOpenGLWidget::hideEvent(event);
+  GlPaintHost::hideEvent(event);
   m_smoothTimer->stop(); // don't burn CPU / GL while hidden
 }
 
-void AttitudeWidget::initializeGL() {
-  initializeOpenGLFunctions();
-  glClearColor(0.08f, 0.09f, 0.12f, 1.0f);
-}
-
-void AttitudeWidget::resizeGL(int w, int h) { glViewport(0, 0, w, h); }
-
-void AttitudeWidget::paintGL() {
-  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-  QPainter p(this);
+void AttitudeWidget::paintScene(QPainter &p) {
   p.setRenderHint(QPainter::Antialiasing);
 
   const int W = width(), H = height();

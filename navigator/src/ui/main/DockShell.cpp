@@ -136,7 +136,7 @@ bool DockShell::hasPanel(const QString &id) const {
   return m_widgets.contains(id);
 }
 
-void DockShell::start() {
+void DockShell::start(bool applyLayout) {
   if (m_wm)
     return;
   m_wm = new WorkspaceManager(m_host, std::make_unique<ws::AdsBackend>(m_host),
@@ -148,15 +148,23 @@ void DockShell::start() {
       reg.add(p.id, p.title, [w] { return w; });
   }
   m_wm->registerPanels(reg);
-  // The attitude panel holds two QOpenGLWidgets (2D HUD, 3D airframe). Under
-  // ADS 5.1.1 on Qt 6.4 a QOpenGLWidget that moves to another top-level window
-  // re-initialises and the main window stops repainting (shown by the
-  // workspace mock, see tools/workspace_mock/README.md). Both are painted with
-  // QPainter and are not worth a QOpenGLWindow rewrite (it would change the
-  // legacy window too), so this panel is pinned to the main window: it can be
-  // hidden, shown, resized and split next to, not floated or dragged out.
-  // The simulator 3D view is already a QOpenGLWindow in a window container, so
-  // the simulator panel is free to float.
+  // A Panels-menu open is a "shown" too (MRU switcher in the window).
+  for (const QString &id : m_wm->backend()->panelIds())
+    if (QAction *a = m_wm->backend()->viewAction(id))
+      connect(a, &QAction::triggered, this, [this, id](bool on) {
+        if (on)
+          emit panelShown(id);
+      });
+  // The attitude panel's 2D HUD and 3D airframe draw on a QOpenGLWindow in a
+  // window container (GlPaintHost), not a QOpenGLWidget: a QOpenGLWidget
+  // re-initialises its GL context on every dock re-parent under ADS 5.1.1 /
+  // Qt 6.4 and the window can stop repainting (workspace mock README,
+  // tst_workspace_gl). With the container, one context lives for the widget's
+  // life across workspace switches (tst_workspace_gl: initializeGL count 1).
+  // The panel is still pinned to the main window (can be hidden, shown, split
+  // next to; not floated), which is the conservative choice until floating a
+  // window container out of the main window is checked on real GPUs. The
+  // simulator view uses the same container approach and floats freely.
   for (const char *id : kFixedPanels)
     m_wm->backend()->setPanelFixed(QString::fromLatin1(id), true);
   m_wm->setBuiltins(builtins());
@@ -170,7 +178,8 @@ void DockShell::start() {
                                   "applied")
                                    .arg(n, why));
           });
-  m_wm->load(m_wm->defaultName());
+  if (applyLayout)
+    m_wm->load(m_wm->defaultName());
 }
 
 void DockShell::addMenus(QMenuBar *bar, QAction *before) {
@@ -247,6 +256,12 @@ bool DockShell::showPanel(const QString &id) {
   if (!m_wm || !m_widgets.contains(id))
     return false;
   m_wm->backend()->showPanel(id);
+  // Focus it too, so a floated panel comes to the front and takes the keyboard.
+  if (QWidget *w = m_widgets.value(id)) {
+    if (QWidget *top = w->window())
+      top->activateWindow();
+    w->setFocus();
+  }
   emit panelShown(id);
   return true;
 }

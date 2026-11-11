@@ -19,6 +19,8 @@
 // QT_QPA_PLATFORM=xcb on an Xvfb (LIBGL_ALWAYS_SOFTWARE=1); on "offscreen"
 // (ctest's default) it skips, because QOpenGLWidget crashes there.
 #include "AdsBackend.h"
+#include "AttitudeWidget.h"
+#include "Drone3DWidget.h"
 #include "GlPanel.h"
 #include "WorkspaceManager.h"
 
@@ -142,6 +144,51 @@ private slots:
     qInstallMessageHandler(g_prev);
     qInfo("GL presentation warnings (%s): %d", window ? "window container" : "QOpenGLWidget", g_glWarnings);
     warnings = g_glWarnings;
+  }
+
+  // The attitude panel of the real window: the real AttitudeWidget and
+  // Drone3DWidget inside docks. Workspace switches, a reset and a restore (what
+  // a startup does) rebuild the dock manager; each widget must keep its one GL
+  // context (initializeGL once, no context destroyed).
+  void realAttitudeWidgetsKeepGlContext() {
+    QMainWindow win;
+    win.resize(1000, 700);
+    auto *wm = new WorkspaceManager(&win, std::make_unique<AdsBackend>(&win), &win);
+    auto *att = new AttitudeWidget;
+    auto *d3 = new Drone3DWidget;
+    PanelRegistry r;
+    r.add("att", "Att", [att]() -> QWidget * { return att; });
+    r.add("d3", "3D", [d3]() -> QWidget * { return d3; });
+    for (const char *id : {"a", "b"})
+      r.add(id, QString(id).toUpper(), [id] { return new QLabel(id); });
+    wm->registerPanels(r);
+    using N = LayoutNode;
+    wm->setBuiltins({{"One", {N::split(Qt::Horizontal, {N::tabs({"att", "d3"}), N::tabs({"a"})})}},
+                     {"Two", {N::split(Qt::Vertical, {N::tabs({"b"}), N::tabs({"d3", "att"}, "att")})}}});
+    wm->setScreenProvider([] { return QList<QRect>{QRect(0, 0, 1600, 900)}; });
+    win.show();
+    wm->load("One");
+    QTest::qWait(400);
+    // d3 is the hidden tab at first: show it so both contexts exist.
+    wm->backend()->showPanel("d3");
+    QTest::qWait(300);
+    wm->backend()->showPanel("att");
+    QTest::qWait(300);
+    QCOMPARE(att->glInitCount(), 1);
+    QCOMPARE(d3->glInitCount(), 1);
+    for (int i = 0; i < 4; ++i) {
+      wm->load(i % 2 ? "One" : "Two");
+      QTest::qWait(150);
+    }
+    wm->resetLayout();
+    wm->persistLast();
+    wm->restoreLast();
+    wm->backend()->showPanel("d3");
+    QTest::qWait(300);
+    wm->backend()->showPanel("att");
+    QTest::qWait(300);
+    QCOMPARE(att->glInitCount(), 1);
+    QCOMPARE(d3->glInitCount(), 1);
   }
 
   // The supported combination: ADS + QOpenGLWindow in a window container.

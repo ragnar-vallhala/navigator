@@ -560,7 +560,13 @@ void MainWindow::setupDockHost() {
 #endif
   m_dock->addPanel(dockpanel::kSettings, m_settingsWidget);
   m_homeWidget->hide();
-  m_dock->start();
+  // The layout is applied once, by restoreLast() after the window is up.
+  m_dock->start(false);
+  connect(m_dock, &DockShell::panelShown, this, [this](const QString &id) {
+    const int idx = dockPageIndex(id);
+    if (idx >= 0)
+      m_viewHistory.visit(idx);
+  });
   m_dock->addMenus(menuBar(), m_windowMenuAction);
 #endif
 }
@@ -919,7 +925,16 @@ void MainWindow::buildMenuBar() {
         "window.dockable", "&Dockable layout (restart needed)", "Window",
         QKeySequence(), CmdContext::Always, [] {});
     dockToggle->setCheckable(true);
-    dockToggle->setChecked(DockShell::persistedRequested());
+    // Show what is in effect: the env var forces it on whatever the setting says.
+    const bool forced = DockShell::envRequested();
+    dockToggle->setChecked(DockShell::enabled());
+    if (forced) {
+      dockToggle->setEnabled(false);
+      dockToggle->setToolTip(
+          tr("Forced on by the NAVIGATOR_DOCKING environment variable"));
+    } else {
+      dockToggle->setToolTip(tr("Takes effect the next time Navigator starts"));
+    }
     connect(dockToggle, &QAction::toggled, this, [this](bool on) {
       DockShell::setPersisted(on);
       Notify::info(this, on ? tr("Dockable layout on: restart Navigator")
@@ -2048,10 +2063,12 @@ void MainWindow::saveUiState() {
   QSettings s;
   s.setValue(kGeomKey, saveGeometry());
   s.setValue(kWinStateKey, saveState());
-  if (m_topSplitter)
-    s.setValue(kTopSplitKey, m_topSplitter->saveState());
-  if (m_vSplitter)
-    s.setValue(kVSplitKey, m_vSplitter->saveState());
+  if (!m_dock) { // the docked layout is saved by the dock host instead
+    if (m_topSplitter)
+      s.setValue(kTopSplitKey, m_topSplitter->saveState());
+    if (m_vSplitter)
+      s.setValue(kVSplitKey, m_vSplitter->saveState());
+  }
   if (m_stackedWidget && !m_dock)
     s.setValue(kPageKey, m_stackedWidget->currentIndex());
   persistPortBaud();
@@ -2083,14 +2100,13 @@ void MainWindow::restoreUiState() {
   // Startup page (Settings ▸ Units & Display): the dashboard/simulator choices
   // win outright; "Last viewed" restores the saved page index. (Docked: the
   // layout and the startup page are applied once the window is up.)
-  if (m_dock) {
-  } else if (m_startupPage == 1) {
+  if (!m_dock && m_startupPage == 1) {
     showHome();
 #ifdef NAVIGATOR_HAS_SITL
-  } else if (m_startupPage == 2) {
+  } else if (!m_dock && m_startupPage == 2) {
     showSimulator();
 #endif
-  } else if (m_stackedWidget && s.contains(kPageKey)) {
+  } else if (!m_dock && m_stackedWidget && s.contains(kPageKey)) {
     const int idx = s.value(kPageKey).toInt();
     if (idx >= 0 && idx < m_stackedWidget->count())
       m_stackedWidget->setCurrentIndex(idx);

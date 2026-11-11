@@ -43,7 +43,8 @@ namespace ws {
 class WorkspaceManager : public QObject {
   Q_OBJECT
 public:
-  static constexpr int kFormat = 1;
+  // 2: the real window's panel set (ids differ from the mock's format-1 layouts).
+  static constexpr int kFormat = 2;
 
   struct Builtin {
     QString name;

@@ -46,7 +46,8 @@ public:
   };
   // Every panel, in registration order (the MRU/recent-views index too).
   static const std::vector<PanelInfo> &panelInfos();
-  // Panels pinned to the main window (they hold a QOpenGLWidget).
+  // Panels pinned to the main window (GL views in window containers; not
+  // checked yet for floating out of the main window on real GPUs).
   static const std::vector<const char *> kFixedPanels;
   // Fly (the default), Tune, Debug link, Sim.
   static std::vector<ws::WorkspaceManager::Builtin> builtins();
@@ -69,7 +70,9 @@ public:
   bool hasPanel(const QString &id) const;
   // Create the workspace manager over the panels added so far and apply the
   // default layout. Menus: call addMenus() once (before or after).
-  void start();
+  // `applyLayout` false: leave building to a later restoreLast(), so a startup
+  // applies the saved layout once (not default, then saved).
+  void start(bool applyLayout = true);
   // Workspaces and Panels menus, inserted before `before` (null = appended).
   void addMenus(QMenuBar *bar, QAction *before);
 

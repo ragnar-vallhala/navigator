@@ -31,7 +31,7 @@
 namespace ws {
 
 namespace {
-constexpr int kStateVersion = 1;
+constexpr int kStateVersion = 2;
 }
 
 AdsBackend::AdsBackend(QMainWindow *host) : m_host(host) {
@@ -65,7 +65,7 @@ AdsBackend::~AdsBackend() {
     delete p.widget.data();
 }
 
-QString AdsBackend::tag() const { return QStringLiteral("ads-v1"); }
+QString AdsBackend::tag() const { return QStringLiteral("ads-v2"); }
 
 AdsBackend::Panel *AdsBackend::find(const QString &id) {
   for (Panel &p : m_panels)
@@ -154,7 +154,6 @@ void AdsBackend::rebuild() {
     applyFixed(p);
     if (p.widget)
       dw->setWidget(p.widget, ads::CDockWidget::ForceNoScrollArea);
-    p.dock = dw;
     // Keep the menu action in step with the panel's visibility.
     QAction *act = m_actions.value(p.id);
     if (act) {

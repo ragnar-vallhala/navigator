@@ -179,6 +179,34 @@ private slots:
     QVERIFY(!b->viewAction("settings")->isChecked());
   }
 
+  // The Panels menu opening a panel counts as a show (MRU list in the window).
+  void panelsMenuOpenEmitsPanelShown() {
+    Fixture f;
+    auto *b = f.shell->workspaces()->backend();
+    QSignalSpy spy(f.shell, &DockShell::panelShown);
+    b->viewAction("settings")->trigger(); // opens
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).toString(), QString("settings"));
+    b->viewAction("settings")->trigger(); // closes: not a show
+    QCOMPARE(spy.count(), 1);
+  }
+
+  // start(false) builds nothing; the one restoreLast() then applies the layout
+  // (startup: the saved layout once, not default and then saved).
+  void startWithoutLayoutThenRestoreLastBuildsOnce() {
+    QMainWindow win;
+    DockShell shell(&win);
+    for (const QString &id : allIds())
+      shell.addPanel(id, new QLabel(id));
+    shell.start(false);
+    QVERIFY(!shell.workspaces()->backend()->panelState("logs").visible);
+    shell.workspaces()->persistLast(); // nothing built: must not save junk
+    win.show();
+    shell.restoreLast(); // nothing saved: the default
+    QCOMPARE(shell.workspaces()->currentName(), shell.workspaces()->defaultName());
+    QVERIFY(shell.workspaces()->backend()->panelState("view3d").visible);
+  }
+
   void attitudePanelCannotFloat() {
     Fixture f;
     auto *b = f.shell->workspaces()->backend();

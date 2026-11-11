@@ -17,8 +17,7 @@
 #pragma once
 
 #include "Types.h"
-#include <QOpenGLFunctions>
-#include <QOpenGLWidget>
+#include "GlPaintHost.h"
 
 class QTimer;
 
@@ -28,7 +27,7 @@ class QTimer;
  * Displays a sky/ground split rotated by roll with a pitch offset,
  * compass heading (yaw) in a bottom strip, and wing level markers.
  */
-class AttitudeWidget : public QOpenGLWidget, protected QOpenGLFunctions {
+class AttitudeWidget : public GlPaintHost {
   Q_OBJECT
 
 public:
@@ -42,9 +41,7 @@ public slots:
   void setAttitude(float roll, float pitch, float yaw);
 
 protected:
-  void initializeGL() override;
-  void resizeGL(int w, int h) override;
-  void paintGL() override;
+  void paintScene(QPainter &p) override;
   void showEvent(QShowEvent *event) override;
   void hideEvent(QHideEvent *event) override;
 

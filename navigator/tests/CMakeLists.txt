@@ -373,9 +373,12 @@ endif()
 # QOpenGLWidget inside the dock layer: skips on "offscreen" (see the file).
 if(TARGET navigator_workspace)
     navigator_test(tst_workspace_gl tst_workspace_gl.cpp
-        ${CMAKE_SOURCE_DIR}/tools/workspace_mock/GlPanel.h)
+        ${CMAKE_SOURCE_DIR}/tools/workspace_mock/GlPanel.h
+        ${SRC}/ui/widgets/AttitudeWidget.cpp
+        ${SRC}/ui/widgets/Drone3DWidget.cpp)
     target_include_directories(tst_workspace_gl PRIVATE
-        ${CMAKE_SOURCE_DIR}/tools/workspace_mock)
+        ${CMAKE_SOURCE_DIR}/tools/workspace_mock
+        ${SRC}/ui/widgets ${SRC}/core)
     target_link_libraries(tst_workspace_gl PRIVATE navigator_workspace
         Qt6::OpenGLWidgets)
 endif()

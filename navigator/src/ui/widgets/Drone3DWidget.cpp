@@ -75,7 +75,7 @@ float easeAngle(float cur, float target, float a) {
 
 } // namespace
 
-Drone3DWidget::Drone3DWidget(QWidget *parent) : QOpenGLWidget(parent) {
+Drone3DWidget::Drone3DWidget(QWidget *parent) : GlPaintHost(parent) {
   setMinimumSize(260, 260);
   // Gentle prop spin so the airframe reads as "live", as in the mockup.
   m_spinTimer = new QTimer(this);
@@ -111,17 +111,16 @@ void Drone3DWidget::setAttitude(float roll, float pitch, float yaw) {
 }
 
 void Drone3DWidget::showEvent(QShowEvent *event) {
-  QOpenGLWidget::showEvent(event);
+  GlPaintHost::showEvent(event);
   m_spinTimer->start();
 }
 
 void Drone3DWidget::hideEvent(QHideEvent *event) {
-  QOpenGLWidget::hideEvent(event);
+  GlPaintHost::hideEvent(event);
   m_spinTimer->stop(); // don't burn CPU while the 3D view is hidden
 }
 
-void Drone3DWidget::paintEvent(QPaintEvent *) {
-  QPainter p(this);
+void Drone3DWidget::paintScene(QPainter &p) {
   p.setRenderHint(QPainter::Antialiasing);
 
   const int w = width();
