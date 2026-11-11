@@ -112,6 +112,11 @@ public:
    * tuned gains to the in-process firmware (which persists them to 0:pid.bin). */
   bool sitlCoreStarted() const { return m_sitlStarted; }
 
+  /* The 3D view as an image (SimRendererWidget::grabFrame, built on
+   * QOpenGLWindow::grabFramebuffer; a native GL window cannot be grabbed with
+   * QWidget::grab). Includes the HUD. */
+  QImage grabSimView();
+
 signals:
   void backToHomeRequested();
 
@@ -137,10 +142,6 @@ signals:
    * the in-process sim firmware (which persists them to 0:pid.bin). The
    * autotuner never writes to firmware on its own. */
   void applyPidGainsRequested(const QVector<PidSetCmd> &cmds);
-
-protected:
-  // Keeps the HUD overlay sized to the viewport (watches m_renderer resize).
-  bool eventFilter(QObject *obj, QEvent *ev) override;
 
 public slots:
   // Drains the coalesced UART2 RX buffer on the GUI thread and re-emits it as
@@ -425,14 +426,18 @@ private:
   // Open/close the RC UART device via the bridge, claiming/releasing the port
   // through PortArbiter so the board telemetry and the sim never collide.
   void setRcUartConnected(bool on);
-  vsim::SimRendererWidget *m_renderer = nullptr;
-  SimHudWidget *m_hud = nullptr;   // FPV telemetry overlay on the viewport
+  vsim::SimRendererWidget *m_renderer = nullptr; // QOpenGLWindow (native)
+  QWidget *m_rendererBox = nullptr; // its window container, in the layout
+  QWidget *m_pipRail = nullptr;     // instrument panes beside the view
+  static constexpr int kPipRailW = 220;
+  void syncPipRail();
+  SimHudWidget *m_hud = nullptr;   // FPV telemetry HUD, painted by m_renderer
   HorizonHud *m_horizon = nullptr; // compact attitude indicator (Horizon PiP)
   vsim::SimRendererWidget *m_downRenderer = nullptr; // Down-Cam PiP renderer
-  QWidget *m_horizonPip = nullptr; // draggable PipOverlay hosting m_horizon
-  QWidget *m_downPip = nullptr; // draggable PipOverlay hosting m_downRenderer
+  QWidget *m_horizonPip = nullptr; // pane hosting m_horizon
+  QWidget *m_downPip = nullptr; // pane hosting m_downRenderer
   ContourMinimapWidget *m_minimap = nullptr; // top-down contour minimap
-  QWidget *m_minimapPip = nullptr;           // draggable PipOverlay hosting it
+  QWidget *m_minimapPip = nullptr;           // pane hosting it
   class QTimer *m_minimapTimer = nullptr;    // re-centres the minimap (~8 Hz)
   PropAudio m_propAudio;                     // rpm-driven propeller sound
   QCheckBox *m_propAudioChk =

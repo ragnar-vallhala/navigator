@@ -35,7 +35,9 @@
 #include <QOpenGLExtraFunctions>
 #include <QOpenGLShaderProgram>
 #include <QOpenGLVertexArrayObject>
-#include <QOpenGLWidget>
+#include <QImage>
+#include <QOpenGLWindow>
+#include <QPointer>
 #include <QPoint>
 
 #include <array>
@@ -49,12 +51,55 @@ namespace vsim {
 // drone in NED world coordinates directly (camera "up" vector is
 // (0,0,-1)), so the world axes you see line up with what the IMU /
 // firmware actually sees.
-class SimRendererWidget : public QOpenGLWidget,
+//
+// This is a QOpenGLWindow, not a QOpenGLWidget: host it with
+// QWidget::createWindowContainer(renderer, parent). A QOpenGLWidget renders
+// into the top-level's backing store, which breaks presentation of the main
+// window when its panel floats under the docking system; a window container
+// gives the view its own native surface and context. Consequences for
+// callers: overlay widgets cannot be stacked over it (a native window is
+// always on top), so the HUD is painted by the renderer itself (setHudWidget)
+// and picture-in-picture panes sit beside it; input arrives at the window.
+class SimRendererWidget : public QOpenGLWindow,
                           protected QOpenGLExtraFunctions {
   Q_OBJECT
 public:
-  explicit SimRendererWidget(QWidget *parent = nullptr);
+  explicit SimRendererWidget(QWindow *parent = nullptr);
   ~SimRendererWidget() override;
+
+  // Overlay painted over the 3D frame by the renderer (QPainter on the GL
+  // window): `w` is never shown; each frame it is rendered at the window's size
+  // into an image that is composited on top. Not owned. Used for the FPV
+  // telemetry HUD, which used to be a child widget over the view.
+  // The widget's `changed()` signal (if it has one) marks the cached image
+  // stale; without it the HUD is re-rendered every frame.
+  void setHudWidget(QWidget *w);
+  void setHudVisible(bool on);
+  // The HUD image is cached and re-rendered only when the HUD says it changed,
+  // the window size or pixel ratio changed, or it was just shown. Off = render
+  // every frame (what it used to do); for measuring.
+  void setHudCache(bool on) { hudCache_ = on; }
+  int hudRenderCount() const { return hudRenders_; }
+  qint64 hudPaintNs() const { return hudNs_; } // total time inside paintHud
+  void resetHudStats() { hudRenders_ = 0; hudNs_ = 0; }
+public slots:
+  void invalidateHud(); // the HUD content changed: re-render before next paint
+public:
+
+  // Chunk read-back on a context reset uses glGetBufferSubData, which GLES
+  // lacks; there (or when forced here, for tests) a CPU copy of each chunk is
+  // kept instead. Set before chunks are loaded.
+  void setForceChunkCpuCopy(bool on) { forceChunkCpu_ = on; }
+  // Read-backs done so far by any renderer (a teardown must do none).
+  static int chunkReadBacks();
+
+  // A screenshot of the view, HUD included: schedules a frame, waits (a nested
+  // event loop, at most `timeoutMs`) until it has been presented, then reads it
+  // back with QOpenGLWindow::grabFramebuffer. grabFramebuffer alone only reads
+  // whatever the framebuffer holds, which after a swap need not be the latest
+  // frame. Null image if the window is not exposed. This replaces
+  // QWidget::grab(), which cannot capture a native GL window.
+  QImage grabFrame(int timeoutMs = 2000);
 
 public slots:
   void setSnapshot(const vsim::SimSnapshot &s);
@@ -242,24 +287,73 @@ signals:
                       QVector3D rotate);
   void obstacleSelected(int index);
 
+public:
+  // ---- GL context lifetime (see initResources / releaseGL) ----
+  // Number of GL objects (buffers, VAOs, programs, textures, FBOs) this view
+  // currently holds. Zero before the first init and after the context is torn
+  // down; used by tests to prove nothing leaks across a context recreation.
+  int liveGlObjects() const;
+  // How many times initResources() has built the GL side (1 per context).
+  int glInitCount() const { return glInitCount_; }
+  int contextGoneCount() const { return goneCount_; } // aboutToBeDestroyed seen
+  bool contextWasCurrentWhenGone() const { return goneCurrent_; }
+  // Drops every GL object and builds them all again in the CURRENT context,
+  // exactly what a context recreation does; for tests and tools that want the
+  // re-init path without moving a window.
+  void resetGlResources();
+  // Count GL errors (glGetError) at the end of every frame into glErrorCount().
+  void setGlErrorCheck(bool on) { glErrorCheck_ = on; }
+  int glErrorCount() const { return glErrors_; }
+
 protected:
   void initializeGL() override;
   void resizeGL(int w, int h) override;
   void paintGL() override;
 
+  // Input arrives at the native window (the container forwards focus to it).
   void mousePressEvent(QMouseEvent *e) override;
   void mouseMoveEvent(QMouseEvent *e) override;
   void wheelEvent(QWheelEvent *e) override;
   void keyPressEvent(QKeyEvent *e) override;
 
 private:
+  // Builds every program and static mesh. Idempotent: safe to run again on a
+  // new context (it first drops whatever a previous context left behind).
+  void initResources();
+  // Frees every GL object with the context current. With readBack, re-queues
+  // what must be re-uploaded into a context that follows (chunks are read back
+  // from the GPU, or taken from their CPU copy on GLES); without it (teardown:
+  // destructor, init after the old context was lost) nothing is read, only
+  // released. Callers: onContextGone (true: the renderer survives and the data
+  // is still needed), resetGlResources (true: same), initResources (false:
+  // stale handles), destructor (false: nothing will use the data).
+  void releaseGLResources(bool readBack);
+  void onContextGone(); // aboutToBeDestroyed slot: makeCurrent + release, reading back
+  bool chunkCpuMode() const; // keep CPU copies of chunks (GLES / forced)
+  void eraseChunk(qint64 key); // release + erase (a Mesh dtor frees no GL)
+  void eraseAllChunks();
+#ifdef VAYU_SIM_GRASS
+  void eraseFlora(qint64 key);
+  void eraseAllFlora();
+#endif
   // -- GL helpers --
   struct Mesh {
     QOpenGLVertexArrayObject vao;
     QOpenGLBuffer vbo{QOpenGLBuffer::VertexBuffer};
     int vertex_count = 0;
     GLenum primitive = GL_TRIANGLES;
+    // Frees the GL objects (context must be current) and returns the mesh to
+    // its never-uploaded state, so a later build/upload recreates them.
+    void release() {
+      vbo.destroy();
+      vao.destroy();
+      vertex_count = 0;
+    }
+    int liveObjects() const {
+      return (vao.isCreated() ? 1 : 0) + (vbo.isCreated() ? 1 : 0);
+    }
   };
+  template <class F> void forEachMesh(F &&f);
 
   void buildGroundGrid();
   void buildObstacleMeshes(); // unit box / sphere / cylinder (pos+normal)
@@ -320,6 +414,8 @@ private:
   void drawMesh(const Mesh &m, const QMatrix4x4 &model, const QVector3D &color);
   // Draws a pos+normal mesh through the lit program. view and model are
   // kept separate so normals transform by mat3(model) in world space.
+  void resetGlState();  // known GL state at the start of a frame (QPainter dirties it)
+  void paintHud();      // composites the HUD widget over the finished frame
   void drawLit(const Mesh &m, const QMatrix4x4 &view, const QMatrix4x4 &model,
                const QVector3D &color, bool terrain = false, float bands = 0.0f);
 
@@ -337,13 +433,13 @@ private:
   bool freeFlyMove(int key, bool fast); // WASD/QE → move camPos_; true if used
 
   // Flat shader: vec3 position + uniform color + MVP (grid/axes/markers).
-  QOpenGLShaderProgram prog_;
+  std::unique_ptr<QOpenGLShaderProgram> prog_;
   int u_mvp_ = -1;
   int u_color_ = -1;
 
   // Lit shader: position + normal, directional Lambert + ambient, plus aerial
   // perspective (distance fog into the sky) and an ACES tonemap.
-  QOpenGLShaderProgram progLit_;
+  std::unique_ptr<QOpenGLShaderProgram> progLit_;
   int ul_mvp_ = -1;
   int ul_model_ = -1;
   int ul_nmat_ = -1;
@@ -368,7 +464,7 @@ private:
 
   // Shadow map: a directional depth buffer rendered from the sun's view each
   // frame (terrain casters); lit terrain + grass sample it to drop into shade.
-  QOpenGLShaderProgram progDepth_; // depth-only, light-space
+  std::unique_ptr<QOpenGLShaderProgram> progDepth_; // depth-only, light-space
   int ud_lightmvp_ = -1;
   unsigned int shadowFbo_ = 0;
   unsigned int shadowTex_ = 0;
@@ -379,11 +475,35 @@ private:
   int fbW_ = 1, fbH_ = 1;    // saved framebuffer size (viewport restore)
 
   // Sky shader: attribute-less fullscreen triangle, view-ray gradient + glow.
-  QOpenGLShaderProgram progSky_;
+  std::unique_ptr<QOpenGLShaderProgram> progSky_;
   int us_invvp_ = -1;
   int us_sundir_ = -1;
   int us_time_ = -1;
   QOpenGLVertexArrayObject skyVao_;
+
+  QPointer<QWidget> hud_; // painted over the frame (see setHudWidget)
+  bool hudVisible_ = false;
+  bool hudCache_ = true;
+  bool hudDirty_ = true;
+  bool hudHasSignal_ = false;
+  QImage hudImg_;
+  QSize hudSize_;
+  qreal hudDpr_ = 0;
+  int hudRenders_ = 0;
+  qint64 hudNs_ = 0;
+  bool forceChunkCpu_ = false;
+  // CPU copies of the loaded chunks, kept only where VBO read-back is not
+  // available (GLES) or forced.
+  std::map<qint64, std::vector<float>> chunkCpu_;
+
+  // GL context lifetime bookkeeping.
+  bool glLive_ = false; // resources exist in the current context
+  QOpenGLContext *glCtx_ = nullptr;
+  int glInitCount_ = 0;
+  int goneCount_ = 0;
+  bool goneCurrent_ = false;
+  bool glErrorCheck_ = false;
+  int glErrors_ = 0;
 
   // Animation clock (advances per paint); drives the sky glow AND, when built,
   // the grass wind — kept general so it survives with grass compiled out.
@@ -391,7 +511,7 @@ private:
 
 #ifdef VAYU_SIM_GRASS
   // Flora shader: instanced grass/flower blades, wind + distance fade + fog.
-  QOpenGLShaderProgram progFlora_;
+  std::unique_ptr<QOpenGLShaderProgram> progFlora_;
   int uf_vp_ = -1, uf_campos_ = -1, uf_time_ = -1;
   int uf_fadestart_ = -1, uf_fadeend_ = -1, uf_sundir_ = -1;
   int uf_fogdensity_ = -1, uf_fogstart_ = -1;
@@ -466,6 +586,8 @@ private:
   Mesh droneMesh_;
   bool hasMesh_ = false;
   bool meshDirty_ = false;
+  // CPU copies, kept for the life of the view: a new GL context re-uploads
+  // from them (meshDirty_ is raised again by releaseGLResources).
   std::vector<QVector3D> pendingPos_;
   std::vector<QVector3D> pendingNrm_;
 
@@ -473,6 +595,7 @@ private:
   Mesh worldMesh_;
   bool hasWorldMesh_ = false;
   bool worldMeshDirty_ = false;
+  // CPU copies, kept (see pendingPos_) so a new context can re-upload them.
   std::vector<QVector3D> pendingWorldPos_;
   std::vector<QVector3D> pendingWorldNrm_;
   std::vector<QVector3D> pendingWorldCol_; // per-vertex RGB (may be empty)
@@ -505,6 +628,7 @@ private:
     int count;
     float cx, cy, half;
   };
+  std::map<qint64, PendingFlora> floraCpu_; // as chunkCpu_, for flora
   std::vector<PendingFlora> pendingFloraUploads_;
   std::vector<qint64> pendingFloraRemovals_;
   bool floraDirty_ = false;

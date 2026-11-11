@@ -41,6 +41,12 @@ public:
   void setFlightMode(const QString &m); // "STABILISE (RC)" / "ACRO (GCS)"
   void setImu(const float acc[3], const float gyr[3]);
 
+signals:
+  // Emitted whenever what the HUD would draw has changed. The HUD is rendered
+  // off screen by the 3D view, so update() (a no-op while hidden) is not
+  // enough to tell the view it must re-render it.
+  void changed();
+
 protected:
   void paintEvent(QPaintEvent *e) override;
 
