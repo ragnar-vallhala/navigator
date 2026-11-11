@@ -34,7 +34,7 @@ on:
   push:
     branches: [main, stable]
   pull_request:
-    branches: [main, stable]
+    branches: [main, stable, feat/workspaces] # TEMPORARY: remove before merge
 
 concurrency:
   group: ci-${{ github.ref }}
