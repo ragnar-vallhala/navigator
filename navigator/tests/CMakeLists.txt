@@ -348,3 +348,12 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
       TIMEOUT 120)
 endif()
+
+# ---- FAULT_STATUS: faults model, router decode, panel badge ---------------
+navigator_test(tst_faults
+    tst_faults.cpp
+    ${SRC}/core/FaultsModel.cpp
+    ${SRC}/protocol/NavlinkRouter.cpp
+    ${SRC}/ui/widgets/FaultsPanel.cpp)
+target_include_directories(tst_faults PRIVATE ${SRC}/ui/widgets)
+target_link_libraries(tst_faults PRIVATE navlink_codec)

@@ -38,6 +38,7 @@ TelemetryEngine::TelemetryEngine(QObject *parent)
   qRegisterMetaType<EstPerfData>("EstPerfData");
   qRegisterMetaType<CalibrationUpdate>("CalibrationUpdate");
   qRegisterMetaType<PerfReport>("PerfReport");
+  qRegisterMetaType<FaultEvent>("FaultEvent");
 
   m_elapsed.start();
 

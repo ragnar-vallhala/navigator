@@ -22,6 +22,7 @@
 #include <QMainWindow>
 #include <QSplitter>
 #include <QStackedWidget>
+#include <QTabWidget>
 #include <QThread>
 #include <QTimer>
 
@@ -43,6 +44,7 @@
 #include "TimeSyncEstimator.h" // NTP clock-sync filter for the time-sync handshake
 #include "ImuPanel.h"
 #include "ITelemetrySource.h" // replay feeds the engine via bytesReceived
+#include "FaultsPanel.h"
 #include "LogPanel.h"
 #include "MainStatusBar.h"
 #include "MainToolbar.h"
@@ -183,6 +185,8 @@ private:
   battery::Estimator m_battery;
   AttitudeWidget *m_attitude = nullptr;
   LogPanel *m_logPanel = nullptr;
+  FaultsPanel *m_faultsPanel = nullptr;
+  QTabWidget *m_bottomTabs = nullptr;
   PacketAnalyzerWidget *m_analyzerWidget = nullptr;
   RcChannelsWidget *m_rcWidget = nullptr;
   SettingsWidget *m_settingsWidget = nullptr;
