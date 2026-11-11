@@ -195,9 +195,11 @@ bool WorkspaceManager::load(const QString &name) {
                       : s.state.isEmpty()           ? tr("empty")
                                                     : QString();
   if (bad.isEmpty()) {
-    if (m_host && !s.geometry.isEmpty())
-      m_host->restoreGeometry(s.geometry);
     if (m_backend->restoreState(s.state)) {
+      // Only move/resize the window once the layout is known good, so a
+      // corrupt state does not leave it displaced before the fallback.
+      if (m_host && !s.geometry.isEmpty())
+        m_host->restoreGeometry(s.geometry);
       setCurrent(name);
       clampToScreens();
       return true;
@@ -277,9 +279,10 @@ bool WorkspaceManager::restoreLast() {
   else if (s.state.isEmpty())
     why = tr("empty");
   if (why.isEmpty()) {
-    if (m_host && !s.geometry.isEmpty())
-      m_host->restoreGeometry(s.geometry);
     if (m_backend->restoreState(s.state)) {
+      // Geometry only after the state loaded (see load()).
+      if (m_host && !s.geometry.isEmpty())
+        m_host->restoreGeometry(s.geometry);
       // Keep the name only if it still exists, so the menu tick is honest.
       setCurrent(exists(s.name) ? s.name : QString());
       clampToScreens();
