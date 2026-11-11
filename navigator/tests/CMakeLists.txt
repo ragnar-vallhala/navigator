@@ -349,6 +349,23 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
       TIMEOUT 120)
 endif()
 
+# ---- Workspace manager (docking layer behind the workspace mock) -----------
+# Needs Qt Advanced Docking System; skipped, like the mock, when it is absent.
+if(TARGET navigator_workspace)
+    navigator_test(tst_workspace_manager tst_workspace_manager.cpp)
+    target_link_libraries(tst_workspace_manager PRIVATE navigator_workspace)
+endif()
+
+# QOpenGLWidget inside the dock layer: skips on "offscreen" (see the file).
+if(TARGET navigator_workspace)
+    navigator_test(tst_workspace_gl tst_workspace_gl.cpp
+        ${CMAKE_SOURCE_DIR}/tools/workspace_mock/GlPanel.h)
+    target_include_directories(tst_workspace_gl PRIVATE
+        ${CMAKE_SOURCE_DIR}/tools/workspace_mock)
+    target_link_libraries(tst_workspace_gl PRIVATE navigator_workspace
+        Qt6::OpenGLWidgets)
+endif()
+
 # ---- FAULT_STATUS: faults model, router decode, panel badge ---------------
 navigator_test(tst_faults
     tst_faults.cpp
