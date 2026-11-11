@@ -21,6 +21,7 @@
 
 #include <QFile>
 #include <QLibrary>
+#include <QProcess>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -96,6 +97,90 @@ private slots:
     QTemporaryDir dir;
     const QString r = SitlModule::loadFailureReason(dir.path(), QString());
     QVERIFY2(r.contains("directory"), qPrintable(r));
+  }
+
+  // (a) Real case: libmod.so links against libdep.so.1, then libdep is removed.
+  void missingDependencyKeepsDependencyName() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString cc = QStandardPaths::findExecutable("cc");
+    if (cc.isEmpty())
+      QSKIP("no C compiler available");
+    const QString dsrc = dir.filePath("dep.c"), msrc = dir.filePath("mod.c");
+    for (const auto &[f, body] :
+         {std::pair<QString, QByteArray>{dsrc, "int dep_fn(void){return 1;}\n"},
+          {msrc, "int dep_fn(void);\nint mod_fn(void){return dep_fn();}\n"}}) {
+      QFile w(f);
+      QVERIFY(w.open(QIODevice::WriteOnly));
+      w.write(body);
+    }
+    const QString dep = dir.filePath("libuniquedep.so.1");
+    const QString mod = dir.filePath("libvayu_sitl.so");
+    auto run = [&](const QStringList &a) {
+      QProcess pr;
+      pr.start(cc, a);
+      return pr.waitForFinished(60000) && pr.exitCode() == 0;
+    };
+    if (!run({"-shared", "-fPIC", "-Wl,-soname,libuniquedep.so.1", "-o", dep,
+              dsrc}) ||
+        !run({"-shared", "-fPIC", "-o", mod, msrc, dep}))
+      QSKIP("could not build the fake module");
+    QVERIFY(QFile::remove(dep));
+    QLibrary lib(mod);
+    QVERIFY(!lib.load());
+    const QString r = SitlModule::loadFailureReason(mod, lib.errorString());
+    QVERIFY2(r.contains("libuniquedep.so.1"), qPrintable(r));
+    QVERIFY2(r.contains("cannot open shared object file"), qPrintable(r));
+    QVERIFY(r.startsWith(mod));
+  }
+
+  // (a') the exact loader string, for hosts without a compiler.
+  void missingDependencyLoaderStringIsQuoted() {
+    QTemporaryDir dir;
+    const QString p = dir.filePath("libvayu_sitl.so");
+    QFile f(p);
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.write("x");
+    f.close();
+    const QString err = "Cannot load library " + p +
+                        ": (libdep.so.1: cannot open shared object file: No "
+                        "such file or directory)";
+    const QString r = SitlModule::loadFailureReason(p, err);
+    QVERIFY2(r.contains("libdep.so.1"), qPrintable(r));
+  }
+
+  // (b) the module file itself absent: short message, no loader text.
+  void absentModuleStaysShort() {
+    QTemporaryDir dir;
+    const QString p = dir.filePath("libvayu_sitl.so");
+    const QString r = SitlModule::loadFailureReason(
+        p, "Cannot load library " + p +
+               ": cannot open shared object file: No such file or directory");
+    QCOMPARE(r, p + " (not found)");
+  }
+
+  // (b') file exists but the loader's last attempt says the candidate itself
+  // cannot be opened (QLibrary name-probing): still not shown.
+  void selfNoSuchFileFromProbingIsHidden() {
+    QTemporaryDir dir;
+    const QString p = dir.filePath("libvayu_sitl.so");
+    QFile f(p);
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.close();
+    const QString r = SitlModule::loadFailureReason(
+        p, p + ": cannot open shared object file: No such file or directory");
+    QVERIFY2(r.contains("exists but could not be loaded"), qPrintable(r));
+  }
+
+  // (c) other loader text about the candidate is quoted unchanged.
+  void otherLoaderTextUnchanged() {
+    QTemporaryDir dir;
+    const QString p = dir.filePath("libvayu_sitl.so");
+    QFile f(p);
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.close();
+    const QString err = "Cannot load library " + p + ": (file too short)";
+    QCOMPARE(SitlModule::loadFailureReason(p, err), p + ": " + err);
   }
 };
 
