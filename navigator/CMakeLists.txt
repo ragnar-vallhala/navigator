@@ -219,6 +219,11 @@ set(GCS_SITL_SOURCES
     src/autotune/SysId.cpp
     src/autotune/AutotuneWorker.cpp
     src/ui/widgets/SimulatorWidget.cpp
+    src/ui/widgets/SimViewPanel.cpp
+    src/ui/widgets/SimVehiclePanel.cpp
+    src/ui/widgets/SimWorldPanel.cpp
+    src/ui/widgets/SimControlsPanel.cpp
+    src/ui/widgets/SimAutotunePanel.cpp
     src/ui/widgets/GeometryEditorWidget.cpp
     src/ui/widgets/WorldEditorWidget.cpp
     src/ui/widgets/ContourMinimapWidget.cpp
@@ -256,6 +261,12 @@ set(GCS_SITL_HEADERS
     src/autotune/SysId.h
     src/autotune/AutotuneWorker.h
     src/ui/widgets/SimulatorWidget.h
+    src/ui/widgets/SimPanelsCommon.h
+    src/ui/widgets/SimViewPanel.h
+    src/ui/widgets/SimVehiclePanel.h
+    src/ui/widgets/SimWorldPanel.h
+    src/ui/widgets/SimControlsPanel.h
+    src/ui/widgets/SimAutotunePanel.h
     src/ui/widgets/PendingCommand.h
     src/ui/widgets/CommandRetrier.h
     src/ui/widgets/PanelWidgets.h
