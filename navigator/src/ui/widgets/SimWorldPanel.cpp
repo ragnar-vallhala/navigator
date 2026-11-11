@@ -31,6 +31,9 @@ void SimulatorWidget::buildWorldPage(ui::MinWidthScrollArea *scroll) {
   pv->setSpacing(6);
 
   m_worldEditor = new WorldEditorWidget(page);
+  m_worldEditor->setToolTip(
+      tr("Changing the world while the simulator is running respawns the "
+         "vehicle on the home pad of the new ground."));
   connect(m_worldEditor, &WorldEditorWidget::worldApplied, this, [this] {
     if (m_sim)
       m_sim->sendWorld(m_worldEditor->config());
@@ -75,6 +78,11 @@ void SimulatorWidget::buildWorldPage(ui::MinWidthScrollArea *scroll) {
   connect(m_worldEditor, &WorldEditorWidget::worldMeshChanged, this, [this] {
     loadWorldMeshToRenderer();
     placeVehicleOnWorld(); // re-place the vehicle on the new ground
+    if (m_sim && !m_attached && !m_worldRespawnNoted) {
+      m_worldRespawnNoted = true; // once per run
+      appendLog("world",
+                tr("World changed: vehicle respawned on the home pad"));
+    }
     persistWorld(m_worldEditor->config());
   });
   pv->addWidget(m_worldEditor);

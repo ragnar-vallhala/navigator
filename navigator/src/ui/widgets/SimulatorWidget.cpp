@@ -1987,6 +1987,7 @@ void SimulatorWidget::startInAppSim() {
     appendLog("sim", tr("noise seed %1").arg(m_runSeed));
   }
   m_spawnResetPending = false;
+  m_worldRespawnNoted = false;
   m_sim = new vsim::SimWorker(this);
   m_sim->setTelemetrySink(&uart2_to_widget_trampoline, this);
   connect(m_sim, &vsim::SimWorker::stoppedCleanly, this,
