@@ -1533,7 +1533,8 @@ void SimulatorWidget::sendWorldMeshToSim(vsim::LoadedMesh m, bool liftAfter,
   req.coverage = coverage;
   // The pads drawn on a procedural arena are solid, as they are on the endless
   // terrain; without them the engine only has the ground under the deck and the
-  // vehicle sinks through the pad it was spawned on.
+  // vehicle sinks through the pad it was spawned on. The call is unconditional:
+  // imported worlds have no pads (no terrain height sampler), so it adds nothing.
   appendHelipadCollision(req.extra);
   enqueueShip(std::move(req));
 }
