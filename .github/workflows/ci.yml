@@ -204,13 +204,24 @@ jobs:
       - name: Configure + build the mock and its tests
         run: |
           cmake -S navigator -B navigator/build-ws -G Ninja \
-                -DNAVIGATOR_SITL=OFF -DNAVIGATOR_FETCH_ADS=ON
+                -DNAVIGATOR_SITL=OFF -DNAVIGATOR_FETCH_ADS=ON \
+                -DCMAKE_BUILD_TYPE=RelWithDebInfo
           cmake --build navigator/build-ws -j"$(nproc)" \
                 --target workspace_mock tst_workspace_manager tst_workspace_gl
       - name: tst_workspace_manager (no GL, offscreen)
         env:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir navigator/build-ws --output-on-failure -R tst_workspace_manager
+      - name: tst_workspace_manager backtrace (only when it failed)
+        # The runner's Qt (6.x, newer than a developer machine's) can crash
+        # where the local one does not; print where, instead of just SEGFAULT.
+        if: failure()
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          sudo apt-get install -y gdb
+          gdb -batch -ex run -ex bt -ex "info threads" \
+              --args navigator/build-ws/tests/tst_workspace_manager || true
       - name: tst_workspace_gl (xcb on Xvfb, software GL)
         # The GL test needs a real platform plugin and skips itself under
         # offscreen. This step has not been run on a GitHub runner yet (only on
