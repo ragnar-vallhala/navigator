@@ -115,6 +115,7 @@ class SimulatorWidget : public QWidget {
   friend class SimControlsPanel;
   friend class SimAutotunePanel;
   friend class PerfHarness; // env-gated profiling harness (app/PerfHarness)
+  friend class SimulatorWidgetTestAccess; // tests/tst_world_change_floor.cpp
 
 public:
   explicit SimulatorWidget(QWidget *parent = nullptr);
@@ -291,6 +292,9 @@ private:
   // Start owes a spawn reset, but only once the collision under the spawn has
   // shipped (otherwise the drone is placed over terrain the engine lacks).
   bool spawnResetWaitsForCollision() const;
+  // After the world changed: respawn on the home pad of the new ground (sim
+  // running: like Reset, once the collision is in) or park the view there.
+  void placeVehicleOnWorld();
   void startShipJob(WorldShipReq req);
   void onShipFinished(const WorldShipResult &r, int gen, const QString &path,
                       const QString &tmp);

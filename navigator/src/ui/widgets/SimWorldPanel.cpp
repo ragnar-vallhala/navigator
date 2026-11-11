@@ -74,6 +74,7 @@ void SimulatorWidget::buildWorldPage(ui::MinWidthScrollArea *scroll) {
   // Imported world mesh (visual): (re)load + render + persist on any change.
   connect(m_worldEditor, &WorldEditorWidget::worldMeshChanged, this, [this] {
     loadWorldMeshToRenderer();
+    placeVehicleOnWorld(); // re-place the vehicle on the new ground
     persistWorld(m_worldEditor->config());
   });
   pv->addWidget(m_worldEditor);

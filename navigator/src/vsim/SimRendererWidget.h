@@ -235,6 +235,8 @@ public:
   // when roaming (sim stopped), otherwise the drone. Lets endless terrain follow
   // both WASD navigation and actual flight.
   QVector3D streamCenter() const { return freeFly_ ? camPos_ : snap_.pos_w; }
+  // Where the vehicle is drawn (the last snapshot), whatever the camera does.
+  QVector3D vehiclePos() const { return snap_.pos_w; }
   // NED heading (radians, 0 = north) the minimap should orient by: the free-fly
   // look direction when roaming, otherwise the drone's body heading.
   float viewHeadingRad() const;
