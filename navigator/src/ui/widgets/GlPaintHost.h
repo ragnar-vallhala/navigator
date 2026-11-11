@@ -40,8 +40,17 @@ public:
     l->setContentsMargins(0, 0, 0, 0);
     l->addWidget(m_box);
   }
-  // Shadows QWidget::update(): repaint the window that holds the pixels.
-  void update() { m_win->update(); }
+  ~GlPaintHost() override {
+    // Delete the container (and with it the window) first, so a paint during
+    // teardown cannot call the pure-virtual paintScene() of a half-destroyed
+    // object.
+    delete m_box;
+    m_box = nullptr;
+  }
+  // Repaint the window that holds the pixels. (Named apart from
+  // QWidget::update(), which this used to shadow; subclasses call it
+  // unqualified.)
+  void updateScene() { m_win->update(); }
   // initializeGL() calls of the hosted window (1 for the widget's life).
   int glInitCount() const { return m_win->inits; }
 

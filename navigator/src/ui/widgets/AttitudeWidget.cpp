@@ -120,7 +120,7 @@ AttitudeDockedWidget::AttitudeDockedWidget(QWidget *parent)
   m_smoothTimer->setInterval(33); // ~30 fps
   connect(m_smoothTimer, &QTimer::timeout, this, [this] {
     m_scene.tick();
-    update();
+    updateScene();
   });
 }
 
@@ -130,7 +130,7 @@ void AttitudeDockedWidget::setAttitude(const AttitudeData &att) {
 
 void AttitudeDockedWidget::setAttitude(float roll, float pitch, float yaw) {
   if (m_scene.setTarget(roll, pitch, yaw))
-    update();
+    updateScene();
 }
 
 void AttitudeDockedWidget::showEvent(QShowEvent *event) {
