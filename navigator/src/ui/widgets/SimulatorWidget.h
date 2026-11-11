@@ -297,7 +297,8 @@ private:
   // Released anyway after kHoldTimeoutMs so a stuck ship cannot hang a reset.
   void placeVehicle(float x, float y, float z, uint32_t seed = 0);
   bool collisionCovers(float x, float y) const;
-  void releaseHeldPose(const char *why);
+  // announce: also tell the user in the log (a timeout), not only qInfo.
+  void releaseHeldPose(const char *why, bool announce);
   struct HeldPose {
     float x = 0, y = 0, z = 0;
     uint32_t seed = 0;
@@ -313,7 +314,7 @@ private:
   bool m_shipped = false; // the engine holds a blob shipped by the streamer
   std::optional<QRectF> m_shippedCover; // its window (none: whole world)
   static constexpr int kHoldTimeoutMs = 10000;
-  int m_testShipDelayMs = 0; // test seam: make the collision build slow
+  int m_testShipDelayMs = 0; // TEST ONLY: make the collision build slow
   // Start owes a spawn reset, but only once the collision under the spawn has
   // shipped (otherwise the drone is placed over terrain the engine lacks).
   bool spawnResetWaitsForCollision() const;

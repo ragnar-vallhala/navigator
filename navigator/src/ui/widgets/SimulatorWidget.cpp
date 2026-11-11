@@ -17,7 +17,6 @@
 #include "SimulatorWidget.h"
 #include <QThread>
 #include <cmath>
-#include <cstring>
 #include "SimPanelsCommon.h"
 #include "SimAutotunePanel.h"
 #include "SimControlsPanel.h"
@@ -1441,13 +1440,15 @@ void SimulatorWidget::placeVehicle(float x, float y, float z, uint32_t seed) {
     m_holdTimer = new QTimer(this);
     m_holdTimer->setSingleShot(true);
     connect(m_holdTimer, &QTimer::timeout, this,
-            [this] { releaseHeldPose("timed out waiting for the collision"); });
+            [this] {
+              releaseHeldPose("timed out waiting for the collision", true);
+            });
   }
   m_holdTimer->start(kHoldTimeoutMs);
   onStreamTick(); // steer the streamer to the target now, not in <=100 ms
 }
 
-void SimulatorWidget::releaseHeldPose(const char *why) {
+void SimulatorWidget::releaseHeldPose(const char *why, bool announce) {
   if (!m_heldPose)
     return;
   const HeldPose p = *m_heldPose;
@@ -1457,7 +1458,7 @@ void SimulatorWidget::releaseHeldPose(const char *why) {
   if (!m_sim)
     return;
   qInfo("vehicle pose released (%s)", why);
-  if (std::strcmp(why, "collision shipped") != 0)
+  if (announce)
     appendLog("world", tr("vehicle placed %1").arg(QString::fromLatin1(why)));
   m_sim->sendResetPose(p.x, p.y, p.z, p.seed);
 }
@@ -1719,9 +1720,8 @@ void SimulatorWidget::onShipFinished(const WorldShipResult &r, int gen,
                    m_shipRunningCover->contains(m_lastDronePos.x(),
                                                 m_lastDronePos.y())))
         liftDroneToSurface();
-      if (m_heldPose && collisionCovers(m_heldPose->x, m_heldPose->y) &&
-          !m_shipPending)
-        releaseHeldPose("collision shipped");
+      if (m_heldPose && collisionCovers(m_heldPose->x, m_heldPose->y))
+        releaseHeldPose("collision shipped", false);
     }
   } else {
     QFile::remove(tmp); // stale, sim gone, or failed
