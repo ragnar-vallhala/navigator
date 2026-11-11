@@ -58,6 +58,7 @@
 #endif
 
 class QToolBar;
+class DockShell;
 class QAction;
 class QMenu;
 
@@ -117,6 +118,14 @@ private slots:
   void onExportLogToggle();
 
 private:
+  // Page hosting. Legacy: the QStackedWidget. Dock host on (DockShell::enabled):
+  // every page is a dock panel and these go through the dock host instead, so
+  // each existing showXxx() slot works in both modes.
+  void addPage(QWidget *w);
+  void showPage(QWidget *w, const char *panelId);
+  void showPageIndex(int idx); // recent-views index (stack or panel order)
+  int dockPageIndex(const QString &id) const;
+  void setupDockHost();
   void buildUi();
   void buildMenuBar();
   void installShortcuts();
@@ -183,7 +192,7 @@ private:
   bool m_haveBaroRef = false;
   // BATTERY → gauge/field: pack-or-not, latched cell count, percent.
   battery::Estimator m_battery;
-  AttitudeWidget *m_attitude = nullptr;
+  AttitudeSink *m_attitude = nullptr;
   LogPanel *m_logPanel = nullptr;
   FaultsPanel *m_faultsPanel = nullptr;
   QTabWidget *m_bottomTabs = nullptr;
@@ -200,8 +209,11 @@ private:
 #endif
   QStackedWidget *m_stackedWidget = nullptr;
   QStackedWidget *m_attStack = nullptr;
-  Drone3DWidget *m_drone3d = nullptr;
+  AttitudeSink *m_drone3d = nullptr;
   QWidget *m_homeWidget = nullptr;
+  QWidget *m_attPanel = nullptr; // AttitudePanel (panel id view3d)
+  DockShell *m_dock = nullptr;   // non-null only when the dock host is on
+  QAction *m_windowMenuAction = nullptr; // Workspaces/Panels go before it
 
   // Splitters retained as members so their state can be saved/restored.
   QSplitter *m_topSplitter = nullptr;

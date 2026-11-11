@@ -32,6 +32,7 @@ struct PanelState {
   bool known = false;
   bool visible = false;  // placed and open
   bool floating = false; // in a window of its own
+  bool fixed = false;    // pinned to the main window (see setPanelFixed)
   QStringList tabGroup;  // ids of the open panels sharing its tab group
   QRect floatGeometry;   // only meaningful when floating
 };
@@ -52,6 +53,12 @@ public:
   virtual void addPanel(const QString &id, const QString &title,
                         QWidget *w) = 0;
   virtual QStringList panelIds() const = 0;
+  // A fixed panel can be shown, hidden and tabbed or split next to, but never
+  // floated or dragged out of the main window. For a panel whose widget cannot
+  // survive being moved between top-level windows (a QOpenGLWidget under
+  // ADS 5.1.1 on Qt 6.4: it re-initialises and the main window stops
+  // repainting). Set it before the first layout; it holds across rebuilds.
+  virtual void setPanelFixed(const QString &id, bool fixed) = 0;
 
   // Replace the whole layout.
   virtual void applySpec(const LayoutSpec &spec) = 0;

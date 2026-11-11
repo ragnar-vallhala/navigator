@@ -22,7 +22,8 @@
 #include <QPushButton>
 #include <QVBoxLayout>
 
-AttitudePanel::AttitudePanel(QWidget *parent) : QGroupBox("Attitude", parent) {
+AttitudePanel::AttitudePanel(QWidget *parent, bool docked)
+    : QGroupBox("Attitude", parent), m_docked(docked) {
   m_body = new QVBoxLayout(this);
 
   // Header: 2D / 3D segmented toggle at the top right (mockup .tt).
@@ -66,10 +67,25 @@ AttitudePanel::AttitudePanel(QWidget *parent) : QGroupBox("Attitude", parent) {
   m_body->addWidget(m_statusLabel);
 
   m_stack = new QStackedWidget(this);
-  m_attitude = new AttitudeWidget(m_stack);
-  m_drone3d = new Drone3DWidget(m_stack);
-  m_stack->addWidget(m_attitude);
-  m_stack->addWidget(m_drone3d);
+  QWidget *attW = nullptr;
+  QWidget *d3W = nullptr;
+  if (docked) {
+    auto *a = new AttitudeDockedWidget(m_stack);
+    auto *d = new Drone3DDockedWidget(m_stack);
+    m_attitude = a;
+    m_drone3d = d;
+    attW = a;
+    d3W = d;
+  } else {
+    auto *a = new AttitudeWidget(m_stack);
+    auto *d = new Drone3DWidget(m_stack);
+    m_attitude = a;
+    m_drone3d = d;
+    attW = a;
+    d3W = d;
+  }
+  m_stack->addWidget(attW);
+  m_stack->addWidget(d3W);
   m_body->addWidget(m_stack, 1);
 
   // Flight-mode pill: STABILISE / ACRO + source (RC switch or GCS override),

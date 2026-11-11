@@ -34,10 +34,14 @@ class AttitudePanel : public QGroupBox {
   Q_OBJECT
 
 public:
-  explicit AttitudePanel(QWidget *parent = nullptr);
+  // `docked`: build the views for the dock host (QOpenGLWindow containers that
+  // keep their GL context while the panel is re-parented). Default: the
+  // QOpenGLWidget views the window has always used.
+  explicit AttitudePanel(QWidget *parent = nullptr, bool docked = false);
 
-  AttitudeWidget *attitude() const { return m_attitude; }
-  Drone3DWidget *drone3d() const { return m_drone3d; }
+  AttitudeSink *attitude() const { return m_attitude; }
+  AttitudeSink *drone3d() const { return m_drone3d; }
+  bool docked() const { return m_docked; }
   QStackedWidget *stack() const { return m_stack; }
   QLabel *statusLabel() const { return m_statusLabel; }
   QLabel *flightModeLabel() const { return m_flightModeLabel; }
@@ -51,8 +55,9 @@ signals:
 private:
   QVBoxLayout *m_body = nullptr;
   QStackedWidget *m_stack = nullptr;
-  AttitudeWidget *m_attitude = nullptr;
-  Drone3DWidget *m_drone3d = nullptr;
+  bool m_docked = false;
+  AttitudeSink *m_attitude = nullptr;
+  AttitudeSink *m_drone3d = nullptr;
   QLabel *m_statusLabel = nullptr;
   QLabel *m_flightModeLabel = nullptr;
 };

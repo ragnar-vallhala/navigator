@@ -15,6 +15,10 @@
  * limitations under the License.
  */
 #include "MainWindow.h"
+#include "DockPanelIds.h"
+#ifdef NAVIGATOR_HAS_DOCKING
+#include "DockShell.h"
+#endif
 #include "../core/FaultsModel.h"
 #include "../core/Notify.h"
 #include "../core/SettingsManager.h"
@@ -111,7 +115,19 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   m_elapsed.start();
 
   m_stackedWidget = new QStackedWidget(this);
-  setCentralWidget(m_stackedWidget);
+#ifdef NAVIGATOR_HAS_DOCKING
+  // Dock host switch (env NAVIGATOR_DOCKING / Window > Dockable layout): the
+  // pages become dock panels and the stack is not used. Off = legacy window.
+  if (DockShell::enabled()) {
+    m_dock = new DockShell(this);
+    connect(m_dock, &DockShell::layoutProblem, this,
+            [this](const QString &t) { Notify::warn(this, t); });
+  }
+#endif
+  if (m_dock)
+    m_stackedWidget->hide(); // never shown; pages go to the dock host
+  else
+    setCentralWidget(m_stackedWidget);
 
   // Command layer: built before the menu bar / shortcuts so both draw their
   // QActions from it (Phase-1 1g / FR-UX-19).
@@ -214,7 +230,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
           });
 
   m_rcWidget = new RcChannelsWidget(this);
-  m_stackedWidget->addWidget(m_rcWidget);
+  addPage(m_rcWidget);
 
   connect(m_rcWidget, &RcChannelsWidget::backToHomeRequested, this,
           &MainWindow::showHome);
@@ -231,7 +247,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   // Build Packet Analyzer
   m_analyzerWidget = new PacketAnalyzerWidget(this);
   m_analyzerWidget->setProtocol(m_engine->protocol());
-  m_stackedWidget->addWidget(m_analyzerWidget);
+  addPage(m_analyzerWidget);
 
   // Wire Protocol and Serial to Analyzer
   connect(m_engine->protocol(), &DroneProtocol::packetReceived,
@@ -247,7 +263,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
   // Build Settings
   m_settingsWidget = new SettingsWidget(this);
-  m_stackedWidget->addWidget(m_settingsWidget);
+  addPage(m_settingsWidget);
   connect(m_settingsWidget, &SettingsWidget::backToHomeRequested, this,
           &MainWindow::showHome);
   // Settings are edited in a staged form; Apply commits the whole set and
@@ -286,7 +302,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   // Build Calibration
   m_calibrationWidget = new CalibrationWidget(this);
   m_calibrationWidget->setProtocol(m_engine->protocol());
-  m_stackedWidget->addWidget(m_calibrationWidget);
+  addPage(m_calibrationWidget);
   connect(m_calibrationWidget, &CalibrationWidget::backToHomeRequested, this,
           &MainWindow::showHome);
   connect(m_calibrationWidget, &CalibrationWidget::commandRequested,
@@ -297,21 +313,21 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
   // Build Motor Status
   m_motorWidget = new MotorStatusWidget(this);
-  m_stackedWidget->addWidget(m_motorWidget);
+  addPage(m_motorWidget);
   connect(m_motorWidget, &MotorStatusWidget::backToHomeRequested, this,
           &MainWindow::showHome);
 
   // Build Control Loop Plot
   m_controlLoopWidget = new ControlLoopPlot(this);
   m_controlLoopWidget->setProtocol(m_engine->protocol());
-  m_stackedWidget->addWidget(m_controlLoopWidget);
+  addPage(m_controlLoopWidget);
   connect(m_controlLoopWidget, &ControlLoopPlot::backToHomeRequested, this,
           &MainWindow::showHome);
 
   // Build Gyro Notch tuning
   m_gyroNotchWidget = new GyroNotchWidget(this);
   m_gyroNotchWidget->setProtocol(m_engine->protocol());
-  m_stackedWidget->addWidget(m_gyroNotchWidget);
+  addPage(m_gyroNotchWidget);
   connect(m_gyroNotchWidget, &GyroNotchWidget::backToHomeRequested, this,
           &MainWindow::showHome);
   connect(m_gyroNotchWidget, &GyroNotchWidget::commandRequested,
@@ -322,7 +338,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
   // Build Kernel Observability (vaios perf telemetry)
   m_perfWidget = new PerfWidget(this);
-  m_stackedWidget->addWidget(m_perfWidget);
+  addPage(m_perfWidget);
   connect(m_perfWidget, &PerfWidget::backToHomeRequested, this,
           &MainWindow::showHome);
   connect(m_engine->protocol(), &DroneProtocol::perfReceived, m_perfWidget,
@@ -339,7 +355,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   // CMake guard around vayu_sitl_core. When omitted, the Simulator menu
   // entry below is suppressed and Ctrl+8 has no target.
   m_simulatorWidget = new SimulatorWidget(this);
-  m_stackedWidget->addWidget(m_simulatorWidget);
+  addPage(m_simulatorWidget);
   connect(m_simulatorWidget, &SimulatorWidget::backToHomeRequested, this,
           &MainWindow::showHome);
   // Pipe the firmware's UART2 byte stream into the same DroneProtocol
@@ -442,14 +458,15 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   // Recent-views (MRU) switcher (FR-UX-21). Record every page
   // change centrally and build the index->label map the overlay displays.
   buildViewTitles();
-  connect(m_stackedWidget, &QStackedWidget::currentChanged, this,
-          [this](int idx) {
-            if (idx >= 0)
-              m_viewHistory.visit(idx);
-          });
+  if (!m_dock) // docked: showPage() records the visit instead
+    connect(m_stackedWidget, &QStackedWidget::currentChanged, this,
+            [this](int idx) {
+              if (idx >= 0)
+                m_viewHistory.visit(idx);
+            });
   m_recentOverlay = new RecentViewsOverlay(this);
   connect(m_recentOverlay, &RecentViewsOverlay::activated, this,
-          [this](int idx) { m_stackedWidget->setCurrentIndex(idx); });
+          [this](int idx) { showPageIndex(idx); });
 
   // Replay transport bar (FR-LOG-05), docked at the bottom, shown only in
   // replay. Exit returns to the live session.
@@ -472,6 +489,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   // overrides to the shared QActions.
   m_shortcuts = new ShortcutsManager(m_cmds, this);
   m_shortcuts->load();
+
+  // Docked mode: hand every page to the dock host (after all are built).
+  setupDockHost();
 
   // Restore window geometry, splitter sizes, last page, port/baud.
   // Must run after every widget the state references has been built.
@@ -500,11 +520,62 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   }
 
   // If restoreUiState didn't put us on a page (first run), default to home.
-  if (m_stackedWidget->currentWidget() == nullptr)
+  if (!m_dock && m_stackedWidget->currentWidget() == nullptr)
     showHome();
+#ifdef NAVIGATOR_HAS_DOCKING
+  if (m_dock) {
+    // Once the window is up: the last layout (the default Fly one if none), then
+    // the explicit startup page, if any.
+    QTimer::singleShot(0, this, [this] {
+      m_dock->restoreLast();
+      if (m_startupPage == 1)
+        showHome();
+#ifdef NAVIGATOR_HAS_SITL
+      else if (m_startupPage == 2)
+        showSimulator();
+#endif
+    });
+  }
+#endif
+}
+
+void MainWindow::setupDockHost() {
+#ifdef NAVIGATOR_HAS_DOCKING
+  if (!m_dock)
+    return;
+  // `numbers` stays inside view3d for now; the rest of the home page is the
+  // three panels the splitters held. The empty home page itself is never shown.
+  m_dock->addPanel(dockpanel::kView3d, m_attPanel);
+  m_dock->addPanel(dockpanel::kImu, m_imuPanel);
+  m_dock->addPanel(dockpanel::kLogs, m_bottomTabs);
+  m_dock->addPanel(dockpanel::kRc, m_rcWidget);
+  m_dock->addPanel(dockpanel::kPackets, m_analyzerWidget);
+  m_dock->addPanel(dockpanel::kCalibration, m_calibrationWidget);
+  m_dock->addPanel(dockpanel::kMotors, m_motorWidget);
+  m_dock->addPanel(dockpanel::kControlLoop, m_controlLoopWidget);
+  m_dock->addPanel(dockpanel::kGyroNotch, m_gyroNotchWidget);
+  m_dock->addPanel(dockpanel::kPerf, m_perfWidget);
+#ifdef NAVIGATOR_HAS_SITL
+  m_dock->addPanel(dockpanel::kSim, m_simulatorWidget); // the whole page
+#endif
+  m_dock->addPanel(dockpanel::kSettings, m_settingsWidget);
+  m_homeWidget->hide();
+  // The layout is applied once, by restoreLast() after the window is up.
+  m_dock->start(false);
+  connect(m_dock, &DockShell::panelShown, this, [this](const QString &id) {
+    const int idx = dockPageIndex(id);
+    if (idx >= 0)
+      m_viewHistory.visit(idx);
+  });
+  m_dock->addMenus(menuBar(), m_windowMenuAction);
+#endif
 }
 
 void MainWindow::closeEvent(QCloseEvent *event) {
+#ifdef NAVIGATOR_HAS_DOCKING
+  if (m_dock)
+    m_dock->persistLast();
+#endif
   saveUiState();
 
   // Tear down the worker thread before the engine (and its transports/recorder)
@@ -522,37 +593,23 @@ void MainWindow::closeEvent(QCloseEvent *event) {
 // Navigation
 // ---------------------------------------------------------------------------
 
-void MainWindow::showHome() { m_stackedWidget->setCurrentWidget(m_homeWidget); }
+void MainWindow::showHome() { showPage(m_homeWidget, dockpanel::kView3d); }
 
-void MainWindow::showPacketAnalyzer() {
-  m_stackedWidget->setCurrentWidget(m_analyzerWidget);
-}
+void MainWindow::showPacketAnalyzer() { showPage(m_analyzerWidget, dockpanel::kPackets); }
 
-void MainWindow::showRcMonitor() {
-  m_stackedWidget->setCurrentWidget(m_rcWidget);
-}
+void MainWindow::showRcMonitor() { showPage(m_rcWidget, dockpanel::kRc); }
 
-void MainWindow::showSettings() {
-  m_stackedWidget->setCurrentWidget(m_settingsWidget);
-}
+void MainWindow::showSettings() { showPage(m_settingsWidget, dockpanel::kSettings); }
 
-void MainWindow::showCalibration() {
-  m_stackedWidget->setCurrentWidget(m_calibrationWidget);
-}
+void MainWindow::showCalibration() { showPage(m_calibrationWidget, dockpanel::kCalibration); }
 
-void MainWindow::showMotorStatus() {
-  m_stackedWidget->setCurrentWidget(m_motorWidget);
-}
+void MainWindow::showMotorStatus() { showPage(m_motorWidget, dockpanel::kMotors); }
 
-void MainWindow::showGyroNotch() {
-  m_stackedWidget->setCurrentWidget(m_gyroNotchWidget);
-}
+void MainWindow::showGyroNotch() { showPage(m_gyroNotchWidget, dockpanel::kGyroNotch); }
 
-void MainWindow::showControlLoopPlot() {
-  m_stackedWidget->setCurrentWidget(m_controlLoopWidget);
-}
+void MainWindow::showControlLoopPlot() { showPage(m_controlLoopWidget, dockpanel::kControlLoop); }
 
-void MainWindow::showPerf() { m_stackedWidget->setCurrentWidget(m_perfWidget); }
+void MainWindow::showPerf() { showPage(m_perfWidget, dockpanel::kPerf); }
 
 void MainWindow::sendTaskNameRequest(int taskId) {
   if (taskId < 0 || taskId > 255)
@@ -568,7 +625,56 @@ void MainWindow::sendTaskNameRequest(int taskId) {
 void MainWindow::showSimulator() {
 #ifdef NAVIGATOR_HAS_SITL
   if (m_simulatorWidget)
-    m_stackedWidget->setCurrentWidget(m_simulatorWidget);
+    showPage(m_simulatorWidget, dockpanel::kSim);
+#endif
+}
+
+// ---- page hosting: the legacy stack, or the dock host when it is on ----
+
+void MainWindow::addPage(QWidget *w) {
+  if (!m_dock)
+    m_stackedWidget->addWidget(w);
+}
+
+void MainWindow::showPage(QWidget *w, const char *panelId) {
+  if (!m_dock) {
+    m_stackedWidget->setCurrentWidget(w);
+    return;
+  }
+#ifdef NAVIGATOR_HAS_DOCKING
+  if (m_dock->showPanel(QString::fromLatin1(panelId))) {
+    const int idx = dockPageIndex(QString::fromLatin1(panelId));
+    if (idx >= 0)
+      m_viewHistory.visit(idx);
+  }
+#else
+  Q_UNUSED(panelId);
+#endif
+}
+
+int MainWindow::dockPageIndex(const QString &id) const {
+#ifdef NAVIGATOR_HAS_DOCKING
+  const auto &infos = DockShell::panelInfos();
+  for (size_t i = 0; i < infos.size(); ++i)
+    if (infos[i].id == id)
+      return int(i);
+#else
+  Q_UNUSED(id);
+#endif
+  return -1;
+}
+
+void MainWindow::showPageIndex(int idx) {
+  if (!m_dock) {
+    m_stackedWidget->setCurrentIndex(idx);
+    return;
+  }
+#ifdef NAVIGATOR_HAS_DOCKING
+  const auto &infos = DockShell::panelInfos();
+  if (idx >= 0 && size_t(idx) < infos.size()) {
+    m_dock->showPanel(infos[size_t(idx)].id);
+    m_viewHistory.visit(idx);
+  }
 #endif
 }
 
@@ -591,7 +697,8 @@ void MainWindow::buildUi() {
   auto *topSplitter = m_topSplitter;
 
   // ---- Attitude group (view3d) with the roll/pitch/yaw numbers inside ----
-  auto *attPanel = new AttitudePanel(m_homeWidget);
+  auto *attPanel = new AttitudePanel(m_homeWidget, m_dock != nullptr);
+  m_attPanel = attPanel;
   m_statusLabel = attPanel->statusLabel();
   m_attStack = attPanel->stack();
   m_attitude = attPanel->attitude();
@@ -630,7 +737,7 @@ void MainWindow::buildUi() {
   m_vSplitter->setStretchFactor(1, 1);
 
   rootVBox->addWidget(m_vSplitter);
-  m_stackedWidget->addWidget(m_homeWidget);
+  addPage(m_homeWidget);
 
   // Status bar widgets are owned by MainStatusBar, constructed in the
   // ctor after the home page is built.
@@ -811,6 +918,35 @@ void MainWindow::buildMenuBar() {
   windowMenu->addAction(m_cmds->add(
       "window.resetLayout", "&Reset Layout", "Window", QKeySequence(),
       CmdContext::Always, [this] { resetLayout(); }));
+#ifdef NAVIGATOR_HAS_DOCKING
+  // The switch for the dock host. Read once at start, hence the restart.
+  {
+    QAction *dockToggle = m_cmds->add(
+        "window.dockable", "&Dockable layout (restart needed)", "Window",
+        QKeySequence(), CmdContext::Always, [] {});
+    dockToggle->setCheckable(true);
+    // Show what is in effect: the env var forces it on whatever the setting says.
+    const bool forced = DockShell::envRequested();
+    dockToggle->setChecked(DockShell::enabled());
+    if (forced) {
+      dockToggle->setEnabled(false);
+      dockToggle->setToolTip(
+          tr("Experimental. Forced on by the NAVIGATOR_DOCKING environment "
+             "variable"));
+    } else {
+      dockToggle->setToolTip(
+          tr("Experimental: dockable panels and workspaces. Takes effect the "
+             "next time Navigator starts"));
+    }
+    connect(dockToggle, &QAction::toggled, this, [this](bool on) {
+      DockShell::setPersisted(on);
+      Notify::info(this, on ? tr("Dockable layout on: restart Navigator")
+                            : tr("Dockable layout off: restart Navigator"));
+    });
+    windowMenu->addAction(dockToggle);
+  }
+#endif
+  m_windowMenuAction = windowMenu->menuAction();
 
   // ---- Help ----
   QMenu *helpMenu = menu->addMenu("&Help");
@@ -838,6 +974,13 @@ void MainWindow::buildMenuBar() {
 }
 
 void MainWindow::resetLayout() {
+#ifdef NAVIGATOR_HAS_DOCKING
+  if (m_dock) { // the current workspace back to its built-in form
+    m_dock->resetLayout();
+    Notify::info(this, tr("Layout reset"));
+    return;
+  }
+#endif
   // Restore the dashboard splitters to their default proportions (attitude:imu
   // = 1:2, panels:log = 3:1) and return to the dashboard. Mirrors the mockup's
   // Window ▸ Reset Layout.
@@ -1879,6 +2022,14 @@ void MainWindow::installShortcuts() {
 
 void MainWindow::buildViewTitles() {
   m_viewTitles.clear();
+#ifdef NAVIGATOR_HAS_DOCKING
+  if (m_dock) { // index = position in DockShell::panelInfos()
+    const auto &infos = DockShell::panelInfos();
+    for (size_t i = 0; i < infos.size(); ++i)
+      m_viewTitles[int(i)] = infos[i].title;
+    return;
+  }
+#endif
   auto put = [this](QWidget *w, const QString &name) {
     if (!w)
       return;
@@ -1915,11 +2066,13 @@ void MainWindow::saveUiState() {
   QSettings s;
   s.setValue(kGeomKey, saveGeometry());
   s.setValue(kWinStateKey, saveState());
-  if (m_topSplitter)
-    s.setValue(kTopSplitKey, m_topSplitter->saveState());
-  if (m_vSplitter)
-    s.setValue(kVSplitKey, m_vSplitter->saveState());
-  if (m_stackedWidget)
+  if (!m_dock) { // the docked layout is saved by the dock host instead
+    if (m_topSplitter)
+      s.setValue(kTopSplitKey, m_topSplitter->saveState());
+    if (m_vSplitter)
+      s.setValue(kVSplitKey, m_vSplitter->saveState());
+  }
+  if (m_stackedWidget && !m_dock)
     s.setValue(kPageKey, m_stackedWidget->currentIndex());
   persistPortBaud();
 }
@@ -1948,14 +2101,15 @@ void MainWindow::restoreUiState() {
   }
 
   // Startup page (Settings ▸ Units & Display): the dashboard/simulator choices
-  // win outright; "Last viewed" restores the saved page index.
-  if (m_startupPage == 1) {
+  // win outright; "Last viewed" restores the saved page index. (Docked: the
+  // layout and the startup page are applied once the window is up.)
+  if (!m_dock && m_startupPage == 1) {
     showHome();
 #ifdef NAVIGATOR_HAS_SITL
-  } else if (m_startupPage == 2) {
+  } else if (!m_dock && m_startupPage == 2) {
     showSimulator();
 #endif
-  } else if (m_stackedWidget && s.contains(kPageKey)) {
+  } else if (!m_dock && m_stackedWidget && s.contains(kPageKey)) {
     const int idx = s.value(kPageKey).toInt();
     if (idx >= 0 && idx < m_stackedWidget->count())
       m_stackedWidget->setCurrentIndex(idx);

@@ -236,7 +236,7 @@ private slots:
     QTest::addColumn<QByteArray>("state");
     QTest::addColumn<int>("format");
     QTest::addColumn<QString>("backend");
-    const QString ok = "ads-v1";
+    const QString ok = "ads-v2";
     QTest::newRow("garbage") << QByteArray("not a layout at all") << 1 << ok;
     QTest::newRow("binary noise")
         << QByteArray("\x00\xff\x01\x02\x03\x04\x80\x7f", 8) << 1 << ok;
@@ -288,6 +288,24 @@ private slots:
     QVERIFY(g.wm->saveCurrentAs("After"));
     QVERIFY(g.wm->load("After"));
     QVERIFY(g.wm->backend()->panelState("c").floating);
+  }
+
+  // A perfectly valid layout saved as format 1 (what the mock wrote with its own
+  // panel ids) must be refused: the format number was bumped for the real window.
+  void validLayoutOfOlderFormatIsRefused() {
+    Fixture f;
+    f.wm->load("Fly");
+    f.wm->saveCurrentAs("Good");
+    const QString grp = "workspaces/user/" + QString::fromLatin1(QByteArray("Good").toHex());
+    QSettings q;
+    QCOMPARE(q.value(grp + "/format").toInt(), WorkspaceManager::kFormat);
+    QVERIFY(WorkspaceManager::kFormat > 1);
+    q.setValue(grp + "/format", 1);
+    q.sync();
+    f.wm->load("Sim");
+    QSignalSpy failed(f.wm, &WorkspaceManager::loadFailed);
+    QVERIFY(!f.wm->load("Good"));
+    QCOMPARE(failed.count(), 1);
   }
 
   void oldWindowStateKeysAreIgnored() {

@@ -44,6 +44,7 @@ public:
   QString tag() const override;
   void addPanel(const QString &id, const QString &title, QWidget *w) override;
   QStringList panelIds() const override;
+  void setPanelFixed(const QString &id, bool fixed) override;
   void applySpec(const LayoutSpec &spec) override;
   QByteArray saveState() const override;
   bool restoreState(const QByteArray &state) override;
@@ -59,10 +60,13 @@ public:
 private:
   struct Panel {
     QString id, title;
+    bool fixed = false;
     QPointer<QWidget> widget;
     QPointer<ads::CDockWidget> dock; // a child of m_dm: dies with it
   };
   void rebuild();
+  void applyFixed(Panel &p);
+  void syncActions();
   Panel *find(const QString &id);
   const Panel *find(const QString &id) const;
   ads::CDockAreaWidget *place(const LayoutNode &n, ads::CDockAreaWidget *anchor,

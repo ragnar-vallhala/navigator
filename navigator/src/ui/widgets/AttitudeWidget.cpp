@@ -46,6 +46,26 @@ float easeAngle(float cur, float target, float a) {
 }
 } // namespace
 
+bool AttitudeScene::setTarget(float roll, float pitch, float yaw) {
+  m_targetRoll = roll;
+  m_targetPitch = pitch;
+  m_targetYaw = yaw;
+  if (!m_haveTarget) {
+    m_haveTarget = true;
+    m_roll = roll;
+    m_pitch = pitch;
+    m_yaw = yaw;
+    return true;
+  }
+  return false;
+}
+
+void AttitudeScene::tick() {
+  m_roll = easeAngle(m_roll, m_targetRoll, kSmooth);
+  m_pitch = easeAngle(m_pitch, m_targetPitch, kSmooth);
+  m_yaw = easeAngle(m_yaw, m_targetYaw, kSmooth);
+}
+
 AttitudeWidget::AttitudeWidget(QWidget *parent) : QOpenGLWidget(parent) {
   setMinimumSize(260, 260);
   // Smoothing/repaint clock: ease the displayed attitude toward the latest
@@ -53,9 +73,7 @@ AttitudeWidget::AttitudeWidget(QWidget *parent) : QOpenGLWidget(parent) {
   m_smoothTimer = new QTimer(this);
   m_smoothTimer->setInterval(33); // ~30 fps
   connect(m_smoothTimer, &QTimer::timeout, this, [this] {
-    m_roll = easeAngle(m_roll, m_targetRoll, kSmooth);
-    m_pitch = easeAngle(m_pitch, m_targetPitch, kSmooth);
-    m_yaw = easeAngle(m_yaw, m_targetYaw, kSmooth);
+    m_scene.tick();
     update();
   });
 }
@@ -67,16 +85,8 @@ void AttitudeWidget::setAttitude(const AttitudeData &att) {
 void AttitudeWidget::setAttitude(float roll, float pitch, float yaw) {
   // Set the target only; the smoothing timer eases the displayed angles toward
   // it. Snap on the first sample so we don't sweep up from zero on connect.
-  m_targetRoll = roll;
-  m_targetPitch = pitch;
-  m_targetYaw = yaw;
-  if (!m_haveTarget) {
-    m_haveTarget = true;
-    m_roll = roll;
-    m_pitch = pitch;
-    m_yaw = yaw;
+  if (m_scene.setTarget(roll, pitch, yaw))
     update();
-  }
 }
 
 void AttitudeWidget::showEvent(QShowEvent *event) {
@@ -100,9 +110,46 @@ void AttitudeWidget::paintGL() {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   QPainter p(this);
+  m_scene.paint(p, width(), height());
+}
+
+AttitudeDockedWidget::AttitudeDockedWidget(QWidget *parent)
+    : GlPaintHost(parent) {
+  setMinimumSize(260, 260);
+  m_smoothTimer = new QTimer(this);
+  m_smoothTimer->setInterval(33); // ~30 fps
+  connect(m_smoothTimer, &QTimer::timeout, this, [this] {
+    m_scene.tick();
+    update();
+  });
+}
+
+void AttitudeDockedWidget::setAttitude(const AttitudeData &att) {
+  setAttitude(att.roll, att.pitch, att.yaw);
+}
+
+void AttitudeDockedWidget::setAttitude(float roll, float pitch, float yaw) {
+  if (m_scene.setTarget(roll, pitch, yaw))
+    update();
+}
+
+void AttitudeDockedWidget::showEvent(QShowEvent *event) {
+  GlPaintHost::showEvent(event);
+  m_smoothTimer->start();
+}
+
+void AttitudeDockedWidget::hideEvent(QHideEvent *event) {
+  GlPaintHost::hideEvent(event);
+  m_smoothTimer->stop();
+}
+
+void AttitudeDockedWidget::paintScene(QPainter &p) {
+  m_scene.paint(p, width(), height());
+}
+
+void AttitudeScene::paint(QPainter &p, int W, int H) {
   p.setRenderHint(QPainter::Antialiasing);
 
-  const int W = width(), H = height();
   const int tapeH = 26;                         // bottom heading-tape strip
   const QRectF adi(2, 2, W - 4, H - tapeH - 4); // horizon viewport
   const QRectF tape(2, H - tapeH, W - 4, tapeH - 2);
@@ -127,7 +174,7 @@ void AttitudeWidget::paintGL() {
 }
 
 // ---------------------------------------------------------------------------
-void AttitudeWidget::drawHorizon(QPainter &p, const QRectF &adi) {
+void AttitudeScene::drawHorizon(QPainter &p, const QRectF &adi) {
   const double pixPerDeg = adi.height() * 0.012; // ~ ±40° spans the viewport
   const double pitchOffset = m_pitch * pixPerDeg;
   const double cx = adi.center().x(), cy = adi.center().y();
@@ -152,7 +199,7 @@ void AttitudeWidget::drawHorizon(QPainter &p, const QRectF &adi) {
   p.restore();
 }
 
-void AttitudeWidget::drawPitchLadder(QPainter &p, const QRectF &adi) {
+void AttitudeScene::drawPitchLadder(QPainter &p, const QRectF &adi) {
   const double pixPerDeg = adi.height() * 0.012;
   const double pitchOffset = m_pitch * pixPerDeg;
 
@@ -178,7 +225,7 @@ void AttitudeWidget::drawPitchLadder(QPainter &p, const QRectF &adi) {
   p.restore();
 }
 
-void AttitudeWidget::drawRollArc(QPainter &p, const QRectF &adi) {
+void AttitudeScene::drawRollArc(QPainter &p, const QRectF &adi) {
   const double cx = adi.center().x();
   const double cy = adi.center().y();
   const double r = adi.width() * 0.42;
@@ -207,7 +254,7 @@ void AttitudeWidget::drawRollArc(QPainter &p, const QRectF &adi) {
   p.restore();
 }
 
-void AttitudeWidget::drawAircraftRef(QPainter &p, const QRectF &adi) {
+void AttitudeScene::drawAircraftRef(QPainter &p, const QRectF &adi) {
   const double cx = adi.center().x(), cy = adi.center().y();
   p.setPen(QPen(QColor(0xFF, 0xC8, 0x00), 3, Qt::SolidLine, Qt::RoundCap));
   p.drawLine(QPointF(cx - 58, cy), QPointF(cx - 22, cy));
@@ -219,7 +266,7 @@ void AttitudeWidget::drawAircraftRef(QPainter &p, const QRectF &adi) {
   p.drawEllipse(QPointF(cx, cy), 4, 4);
 }
 
-void AttitudeWidget::drawHeadingTape(QPainter &p, const QRectF &tape) {
+void AttitudeScene::drawHeadingTape(QPainter &p, const QRectF &tape) {
   p.save();
   p.setClipRect(tape);
   p.fillRect(tape, QColor(0x16, 0x1A, 0x22));
