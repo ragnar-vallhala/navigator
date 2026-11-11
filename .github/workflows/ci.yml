@@ -91,7 +91,8 @@ jobs:
           # developer machine does, rather than a variant nobody runs.
           sudo apt-get install -y cmake clang-tidy-18 jq \
             qt6-base-dev qt6-base-dev-tools qt6-serialport-dev \
-            libgl1-mesa-dev libassimp-dev libpulse-dev python3-numpy
+            libgl1-mesa-dev libassimp-dev libpulse-dev python3-numpy \
+            xvfb libgl1-mesa-dri
       - name: Fetch the firmware SITL SDK
         env:
           # The firmware version this GCS is built and tested against. Bumping
@@ -165,6 +166,25 @@ jobs:
         run: |
           cp vayu-sitl-sdk/lib/libvayu_sitl.so navigator/build-tidy/
           ctest --test-dir navigator/build-tidy --output-on-failure
+      - name: GL context test (xcb on Xvfb, software GL)
+        # tst_sim_gl_context needs a real GL platform and skips itself on
+        # offscreen, which is what the ctest step above forces on every case --
+        # so there ctest only ever reports it Passed having run nothing. Run it
+        # here directly: xcb on a virtual X server with GLX, Mesa llvmpipe. It
+        # needs only the SDK headers (compile time), not the engine module.
+        # A failing binary fails the step; a skip would exit 0, so the totals
+        # line is also required to show passes and no skips.
+        env:
+          QT_QPA_PLATFORM: xcb
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          set -euo pipefail
+          t=navigator/build-tidy/tests/tst_sim_gl_context
+          test -x "$t" || { echo "$t was not built"; exit 1; }
+          xvfb-run -a -s "-screen 0 1280x800x24 +extension GLX" "$t" 2>&1 \
+            | tee gl-context.log
+          grep -qE '^Totals: [1-9][0-9]* passed, 0 failed, 0 skipped' gl-context.log \
+            || { echo "::error::tst_sim_gl_context did not pass cleanly (skipped or no passes)"; exit 1; }
       - name: clang-tidy (Navigator)
         # AUTOMOC generates the tst_*.moc the tests include, so this needs a
         # real build, not just a configure. With SITL on, the database covers
