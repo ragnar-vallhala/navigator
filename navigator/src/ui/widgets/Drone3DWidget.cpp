@@ -142,7 +142,7 @@ Drone3DDockedWidget::Drone3DDockedWidget(QWidget *parent)
   m_spinTimer->setInterval(33); // ~30 fps
   connect(m_spinTimer, &QTimer::timeout, this, [this] {
     m_scene.tick();
-    update();
+    updateScene();
   });
 }
 

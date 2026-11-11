@@ -420,6 +420,7 @@ private:
   bool m_shipRunningLift = false;
   std::optional<QRectF> m_shipRunningCover;
   std::optional<WorldShipReq> m_shipPending;
+  bool m_worldRespawnNoted = false; // in-flight respawn already logged
   bool m_spawnResetPending = false; // Start's reset, held for the collision
   uint32_t m_runSeed = 1;           // noise seed for this run's resets
 

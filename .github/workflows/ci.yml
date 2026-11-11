@@ -112,7 +112,9 @@ jobs:
           apt_retry install -y cmake clang-tidy-18 jq \
             qt6-base-dev qt6-base-dev-tools qt6-serialport-dev \
             libgl1-mesa-dev libassimp-dev libpulse-dev python3-numpy \
-            xvfb libgl1-mesa-dri
+            xvfb libgl1-mesa-dri libxkbcommon-x11-0 libxcb-icccm4 \
+            libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 \
+            libxcb-xkb1
       - name: Fetch the firmware SITL SDK
         env:
           # The firmware version this GCS is built and tested against. Bumping
@@ -205,6 +207,97 @@ jobs:
             | tee gl-context.log
           grep -qE '^Totals: [1-9][0-9]* passed, 0 failed, 0 skipped' gl-context.log \
             || { echo "::error::tst_sim_gl_context did not pass cleanly (skipped or no passes)"; exit 1; }
+      - name: tst_world_change_floor (xcb on Xvfb, software GL, real engine)
+        # The test skips under the offscreen platform ctest forces (it owns GL
+        # views) and its Running cases also skip without the engine module, so
+        # the ctest step above only ever reports it Passed having run nothing.
+        # This job is the one with the engine module (copied beside the test
+        # binaries above), so it is run here: each test function in its own
+        # process under its own timeout + xvfb-run (as tst_workspace_gl does:
+        # one hang must not eat the others), with a private engine VFS dir,
+        # FIFO suffix and settings per case. A QtTest skip exits 0, so a case
+        # whose Totals line does not show "0 failed, 0 skipped" FAILS the step, and the
+        # number of cases is required to be at least 3.
+        # Software GL on a shared runner is slow: the Running case is
+        # wall-clock paced (about a minute on a laptop), hence the 240 s cap.
+        timeout-minutes: 20
+        env:
+          QT_QPA_PLATFORM: xcb
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          build=${BUILD_DIR:-navigator/build-tidy}
+          module=${ENGINE_MODULE:-$PWD/vayu-sitl-sdk/lib/libvayu_sitl.so}
+          bin=$build/tests/tst_world_change_floor
+          # A minimum, not an exact number: cases get added to the test (the
+          # list itself comes from the binary), but one cannot silently vanish.
+          expect_min=3
+          test -x "$bin" || { echo "$bin was not built"; exit 1; }
+          test -f "$module" || { echo "engine module $module missing"; exit 1; }
+          failed=0
+          # A crash must show where: keep core files and print a backtrace for
+          # a case that dies on a signal (after all assertions passed, a crash
+          # at exit gives no other hint). Diagnostic only; the exit code is
+          # still what fails the step.
+          sudo timeout -k 10 300 apt-get -o DPkg::Lock::Timeout=120 install -y gdb \
+            || echo "gdb not installed: crashes will have no backtrace"
+          sudo rm -f /tmp/core-* || true
+          sudo sysctl -w kernel.core_pattern='/tmp/core-%e.%p' || true
+          ulimit -c unlimited
+          # The case list comes from the binary (offscreen only to list them).
+          fns=$(QT_QPA_PLATFORM=offscreen "$bin" -functions | sed 's/()$//' \
+                  | grep -v -E '^(initTestCase|cleanupTestCase|.*_data)$')
+          n=$(echo "$fns" | grep -c .)
+          echo "tst_world_change_floor: $n cases: $(echo $fns)"
+          if [ "$n" -lt "$expect_min" ]; then
+            echo "RESULT: expected at least $expect_min cases, found $n"; exit 1
+          fi
+          i=0
+          for fn in $fns; do
+            i=$((i + 1))
+            echo "::group::tst_world_change_floor $fn"
+            start=$SECONDS
+            rc=0
+            log=$(mktemp)
+            priv=$(mktemp -d)
+            VAYU_VFS_DIR="$priv/vfs" VSIM_FIFO_SUFFIX="ci$$_$i" \
+              VAYU_SITL_MODULE="$module" XDG_CONFIG_HOME="$priv/cfg" \
+              XDG_DATA_HOME="$priv/data" \
+              timeout -k 10 240 xvfb-run -a -s "-screen 0 1280x800x24 +extension GLX" \
+              "$bin" "$fn" -v2 >"$log" 2>&1 || rc=$?
+            # (not `| tee`: under pipefail the `|| true` that follows would
+            # replace the exit status with true's, hiding a failing case)
+            cat "$log"
+            secs=$((SECONDS - start))
+            echo "::endgroup::"
+            case $rc in
+              0) res=PASS ;;
+              124|137) res=TIMEOUT; failed=1 ;;
+              *) res="FAIL(rc=$rc)"; failed=1 ;;
+            esac
+            if [ "$rc" -gt 128 ] && [ "$rc" -ne 137 ] && command -v gdb >/dev/null; then
+              core=$(ls -t /tmp/core-* 2>/dev/null | head -1 || true)
+              if [ -n "$core" ]; then
+                echo "::group::backtrace of $fn (rc=$rc, $core)"
+                sudo chmod a+r "$core" || true
+                gdb -batch -ex bt -ex "info threads" -ex "thread apply all bt" \
+                    "$bin" "$core" 2>&1 | tail -150 || true
+                echo "::endgroup::"
+                sudo rm -f /tmp/core-* || true
+              else
+                echo "no core file found for $fn (rc=$rc)"
+              fi
+            fi
+            # A QtTest skip exits 0 and looks like a pass: require 0 skipped.
+            totals=$(grep -E '^Totals:' "$log" | tail -1 || true)
+            if [ "$res" = PASS ]; then
+              case "$totals" in
+                *" 0 failed, 0 skipped"*) ;;
+                *) res="FAILED-SKIPPED-OR-NO-TOTALS"; failed=1 ;;
+              esac
+            fi
+            echo "RESULT $fn: $res (${secs}s) ${totals:-}"
+          done
+          exit $failed
       - name: clang-tidy (Navigator)
         # AUTOMOC generates the tst_*.moc the tests include, so this needs a
         # real build, not just a configure. With SITL on, the database covers
@@ -316,8 +409,8 @@ jobs:
             rc=0
             log=$(mktemp)
             timeout -k 10 100 xvfb-run -a -s "-screen 0 1280x800x24 +extension GLX" \
-              "$bin" "$fn" -v2 2>&1 | tee "$log" || true
-            rc=${PIPESTATUS[0]}
+              "$bin" "$fn" -v2 >"$log" 2>&1 || rc=$?
+            cat "$log"
             secs=$((SECONDS - start))
             echo "::endgroup::"
             case $rc in
@@ -327,10 +420,10 @@ jobs:
             esac
             # A QtTest skip exits 0 and looks like a pass: require 0 skipped.
             if [ "$res" = PASS ]; then
-              totals=$(grep -E '^Totals:' "$log" | tail -1)
+              totals=$(grep -E '^Totals:' "$log" | tail -1 || true)
               case "$totals" in
-                *" 0 skipped"*) ;;
-                *) res="SKIPPED-OR-NO-TOTALS ($totals)"; failed=1 ;;
+                *" 0 failed, 0 skipped"*) ;;
+                *) res="FAILED-SKIPPED-OR-NO-TOTALS ($totals)"; failed=1 ;;
               esac
             fi
             echo "RESULT $fn: $res (${secs}s) ${totals:-}"

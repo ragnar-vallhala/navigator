@@ -2029,6 +2029,7 @@ void SimulatorWidget::startInAppSim() {
     appendLog("sim", tr("noise seed %1").arg(m_runSeed));
   }
   m_spawnResetPending = false;
+  m_worldRespawnNoted = false;
   m_heldPose.reset();
   m_shipped = false; // a fresh engine holds no blob
   m_shippedCover.reset();
