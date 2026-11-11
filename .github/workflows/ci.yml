@@ -255,20 +255,31 @@ jobs:
         # function is its own process under its own timeout and xvfb-run, so one
         # hang cannot eat the others. (QTEST_FUNCTION_TIMEOUT is no help: its
         # watchdog calls qFatal and aborts the whole process, so it would end
-        # the remaining functions too.) 2 cases x 100 s max < timeout-minutes.
-        timeout-minutes: 8
+        # the remaining functions too.) 4 cases x 100 s max < timeout-minutes.
+        timeout-minutes: 12
         env:
           QT_QPA_PLATFORM: xcb
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: |
           bin=navigator/build-ws/tests/tst_workspace_gl
           failed=0
-          for fn in windowContainerKeepsRendering openGlWidgetStopsPresenting; do
+          # The case list comes from the binary, so a new case cannot be left
+          # out of CI by forgetting to add it here (the list used to be fixed
+          # and two newer cases never ran).
+          fns=$(QT_QPA_PLATFORM=offscreen "$bin" -functions | sed 's/()$//')
+          n=$(echo "$fns" | grep -c .)
+          echo "tst_workspace_gl: $n cases: $(echo $fns)"
+          if [ "$n" -lt 4 ]; then
+            echo "RESULT: expected at least 4 cases, found $n"; exit 1
+          fi
+          for fn in $fns; do
             echo "::group::tst_workspace_gl $fn"
             start=$SECONDS
             rc=0
+            log=$(mktemp)
             timeout -k 10 100 xvfb-run -a -s "-screen 0 1280x800x24 +extension GLX" \
-              "$bin" "$fn" -v2 || rc=$?
+              "$bin" "$fn" -v2 2>&1 | tee "$log" || true
+            rc=${PIPESTATUS[0]}
             secs=$((SECONDS - start))
             echo "::endgroup::"
             case $rc in
@@ -276,7 +287,15 @@ jobs:
               124|137) res=TIMEOUT; failed=1 ;;
               *) res="FAIL(rc=$rc)"; failed=1 ;;
             esac
-            echo "RESULT $fn: $res (${secs}s)"
+            # A QtTest skip exits 0 and looks like a pass: require 0 skipped.
+            if [ "$res" = PASS ]; then
+              totals=$(grep -E '^Totals:' "$log" | tail -1)
+              case "$totals" in
+                *" 0 skipped"*) ;;
+                *) res="SKIPPED-OR-NO-TOTALS ($totals)"; failed=1 ;;
+              esac
+            fi
+            echo "RESULT $fn: $res (${secs}s) ${totals:-}"
           done
           exit $failed
 
