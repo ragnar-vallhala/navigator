@@ -232,15 +232,34 @@ jobs:
         # job until it has; drop continue-on-error once it has been green.
         continue-on-error: true
         # Run directly (no ctest TIMEOUT), the first run on a runner hung for
-        # 30+ minutes. Bound it, and use -v2 so the log shows the last test
-        # function reached when it stops.
-        timeout-minutes: 4
+        # 30+ minutes, and the next one hung one case for 145 s. Each test
+        # function is its own process under its own timeout and xvfb-run, so one
+        # hang cannot eat the others. (QTEST_FUNCTION_TIMEOUT is no help: its
+        # watchdog calls qFatal and aborts the whole process, so it would end
+        # the remaining functions too.) 2 cases x 100 s max < timeout-minutes.
+        timeout-minutes: 8
         env:
           QT_QPA_PLATFORM: xcb
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: |
-          timeout -k 10 150 xvfb-run -a -s "-screen 0 1280x800x24 +extension GLX" \
-            navigator/build-ws/tests/tst_workspace_gl -v2
+          bin=navigator/build-ws/tests/tst_workspace_gl
+          failed=0
+          for fn in windowContainerKeepsRendering openGlWidgetStopsPresenting; do
+            echo "::group::tst_workspace_gl $fn"
+            start=$SECONDS
+            rc=0
+            timeout -k 10 100 xvfb-run -a -s "-screen 0 1280x800x24 +extension GLX" \
+              "$bin" "$fn" -v2 || rc=$?
+            secs=$((SECONDS - start))
+            echo "::endgroup::"
+            case $rc in
+              0) res=PASS ;;
+              124|137) res=TIMEOUT; failed=1 ;;
+              *) res="FAIL(rc=$rc)"; failed=1 ;;
+            esac
+            echo "RESULT $fn: $res (${secs}s)"
+          done
+          exit $failed
 
   # The GCS-only Windows build (NAVIGATOR_SITL=OFF: the SITL bridge needs a
   # POSIX host) on MSYS2 UCRT64, the toolchain tools/windows/deploy-navigator-

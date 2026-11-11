@@ -22,6 +22,7 @@
 #include "GlPanel.h"
 #include "WorkspaceManager.h"
 
+#include <QElapsedTimer>
 #include <QGuiApplication>
 #include <QLabel>
 #include <QMainWindow>
@@ -77,21 +78,32 @@ struct Fixture {
     win.show();
     wm->load("One");
   }
-  // Let the animation run; true if frames advanced and pixels are real.
+  // Poll until the frame counter has advanced by kMinFrames or the deadline
+  // passes. Slow (software GL on a loaded runner) is not a failure; only no
+  // progress inside the generous deadline (a stall) is. The elapsed time, frames
+  // and fps are always logged so a CI log shows how fast the machine was.
+  static constexpr int kMinFrames = 3;
+  static constexpr int kDeadlineMs = 8000;
+  static constexpr int kStepMs = 20;
   bool renders(const char *what) {
     const int before = frames();
-    QTest::qWait(400);
+    QElapsedTimer clock;
+    clock.start();
+    while (frames() < before + kMinFrames && clock.elapsed() < kDeadlineMs)
+      QTest::qWait(kStepMs);
+    const qint64 ms = clock.elapsed();
+    const int advanced = frames() - before;
     const QImage img = grab();
-    const bool moved = frames() > before + 3;
+    const bool moved = advanced >= kMinFrames;
     const bool real = !img.isNull() && img.width() > 10 && img.pixelColor(img.width() / 2, img.height() - 8) != QColor(0, 0, 0);
     int tops = 0; // visible top-level windows other than the main one
     for (QWidget *w : QApplication::topLevelWidgets())
       if (w != &win && w->isVisible())
         ++tops;
-    qInfo("%-18s frames %d -> %d  init %d  ctx-destroyed %d  %dx%d  in-main-window %d  extra-top-levels %d  %s",
-          what, before, frames(), inits(), destroyed(),
+    qInfo("%-18s %lld ms, %d frames, %.1f fps  frames %d -> %d  init %d  ctx-destroyed %d  %dx%d  in-main-window %d  extra-top-levels %d  %s",
+          what, static_cast<long long>(ms), advanced, ms > 0 ? advanced * 1000.0 / static_cast<double>(ms) : 0.0, before, frames(), inits(), destroyed(),
           img.width(), img.height(), gl->window() == &win, tops,
-          (moved && real) ? "OK" : "NOT RENDERING");
+          (moved && real) ? "OK" : (moved ? "BLANK PIXELS" : "STALLED"));
     return moved && real;
   }
 };
