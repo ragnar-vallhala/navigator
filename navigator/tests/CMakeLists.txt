@@ -395,3 +395,30 @@ navigator_test(tst_faults
     ${SRC}/ui/widgets/FaultsPanel.cpp)
 target_include_directories(tst_faults PRIVATE ${SRC}/ui/widgets)
 target_link_libraries(tst_faults PRIVATE navlink_codec)
+
+# ---- World change leaves the vehicle on the ground (SITL builds only) -------
+# Drives the real SimulatorWidget (the Navigator sources minus main.cpp, built
+# a second time here: the widget is not in a library) through World-tab changes,
+# sim Stopped and Running, and checks the vehicle sits on the new terrain.
+# Skips on "offscreen" (it owns GL views) and, for the Running part, without an
+# engine module; run it under QT_QPA_PLATFORM=xcb on an Xvfb.
+if(TARGET Navigator AND NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
+  get_target_property(_nav_srcs Navigator SOURCES)
+  set(_wf_srcs "")
+  foreach(_s ${_nav_srcs})
+    if(NOT _s MATCHES "(^|/)app/main\\.cpp$")
+      list(APPEND _wf_srcs "${CMAKE_SOURCE_DIR}/${_s}")
+    endif()
+  endforeach()
+  navigator_test(tst_world_change_floor tst_world_change_floor.cpp ${_wf_srcs})
+  get_target_property(_nav_inc Navigator INCLUDE_DIRECTORIES)
+  get_target_property(_nav_def Navigator COMPILE_DEFINITIONS)
+  get_target_property(_nav_lib Navigator LINK_LIBRARIES)
+  target_include_directories(tst_world_change_floor PRIVATE ${_nav_inc}
+      ${CMAKE_SOURCE_DIR}/src/ui/widgets ${CMAKE_SOURCE_DIR}/src/vsim)
+  target_compile_definitions(tst_world_change_floor PRIVATE ${_nav_def})
+  target_link_libraries(tst_world_change_floor PRIVATE ${_nav_lib})
+  set_tests_properties(tst_world_change_floor PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
+      TIMEOUT 300)
+endif()

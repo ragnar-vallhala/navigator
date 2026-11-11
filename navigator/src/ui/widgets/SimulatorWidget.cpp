@@ -334,6 +334,7 @@ void SimulatorWidget::buildUi() {
   if (m_downRenderer)
     m_downRenderer->setObstacles(m_worldEditor->config().obstacles);
   loadWorldMeshToRenderer();
+  placeVehicleOnWorld(); // the restored world's ground, not z = 0
 
   setMode(0); // start in Vehicle (sim stopped)
 }
@@ -1433,6 +1434,41 @@ void SimulatorWidget::sendSpawnReset() {
   }
 }
 
+void SimulatorWidget::placeVehicleOnWorld() {
+  if (m_attached)
+    return; // an external sim owns the pose
+  if (m_sim) {
+    // Running: what Reset does, held until the new collision is in the engine
+    // (the same hold Start uses), so the body is never placed over ground the
+    // engine does not have yet.
+    if (spawnResetWaitsForCollision())
+      m_spawnResetPending = true;
+    else
+      sendSpawnReset();
+    return;
+  }
+  // Stopped: nothing is simulated, so park the vehicle the 3D view draws (and
+  // the camera follows) level, at rest, on the home pad of the new ground. It
+  // used to stay where the old world had it, usually inside the new terrain.
+  vsim::SimSnapshot s;
+  const float padTop = landingSurfaceZ(m_homePad.x(), m_homePad.y());
+  s.pos_w = QVector3D(m_homePad.x(), m_homePad.y(), padTop - 0.1f);
+  m_lastDronePos = s.pos_w;
+  m_lastDroneVel = QVector3D();
+  if (m_renderer) {
+    m_renderer->setSnapshot(s);
+    if (m_renderer->freeFly()) {
+      // The free-roam camera (World tab, sim stopped) sat wherever the old
+      // world left it, i.e. inside the new terrain: seat it by the vehicle
+      // again (setFreeFly seeds it at the orbit eye on the rising edge).
+      m_renderer->setFreeFly(false);
+      m_renderer->setFreeFly(true);
+    }
+  }
+  if (m_downRenderer)
+    m_downRenderer->setSnapshot(s);
+}
+
 bool SimulatorWidget::spawnResetWaitsForCollision() const {
   return m_shipWatcher || m_shipPending || m_collisionPending;
 }
@@ -1461,7 +1497,8 @@ void SimulatorWidget::liftDroneToSurface() {
   const float dropClearance = 1.5f;
   m_sim->sendResetPose(x, y, surfaceZ - dropClearance);
   appendLog("world",
-            tr("re-dropped drone above terrain (surface %.1f m)").arg(h));
+            tr("re-dropped drone above terrain (surface %1 m)")
+                .arg(h, 0, 'f', 1));
 }
 
 namespace {
