@@ -90,10 +90,13 @@ jobs:
         run: |
           apt_retry() { # bounded attempts: a hung mirror must not eat the job
             for a in 1 2 3; do
-              sudo timeout -k 10 480 apt-get -o Acquire::Retries=3 \
+              sudo timeout -k 10 300 apt-get -o Acquire::Retries=3 \
                 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
-                "$@" && return 0
-              echo "apt-get $1 failed or timed out (attempt $a), retrying"; sleep 10
+                -o DPkg::Lock::Timeout=120 "$@" && return 0
+              echo "apt-get $1 failed or timed out (attempt $a), retrying"
+              # a killed install leaves dpkg interrupted
+              sudo dpkg --configure -a || true
+              sleep 10
             done
             return 1
           }
@@ -229,10 +232,13 @@ jobs:
         run: |
           apt_retry() { # bounded attempts: a hung mirror must not eat the job
             for a in 1 2 3; do
-              sudo timeout -k 10 480 apt-get -o Acquire::Retries=3 \
+              sudo timeout -k 10 300 apt-get -o Acquire::Retries=3 \
                 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
-                "$@" && return 0
-              echo "apt-get $1 failed or timed out (attempt $a), retrying"; sleep 10
+                -o DPkg::Lock::Timeout=120 "$@" && return 0
+              echo "apt-get $1 failed or timed out (attempt $a), retrying"
+              # a killed install leaves dpkg interrupted
+              sudo dpkg --configure -a || true
+              sleep 10
             done
             return 1
           }
