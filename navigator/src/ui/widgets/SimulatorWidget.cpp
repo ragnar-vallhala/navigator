@@ -920,6 +920,11 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
     m_chunkStreamer.configure(sc);
     m_floraParams = w.flora; // user-tuned grass density / slope / height
     m_floraParams.seed = static_cast<uint32_t>(w.proceduralSeed);
+    // The pads set up above sampled the PREVIOUS field (none on a fresh
+    // launch: height 0), so the home pad was at z = 0 whatever the ground is.
+    // Re-seat them on the field just configured.
+    m_lastHelipadCenter = QVector3D(0, 0, 0);
+    recomputeHelipads(0.0f, 0.0f);
 
 #ifdef VAYU_SIM_GRASS
     // Prefer GPU-generated grass when the context supports compute (GL 4.3+):
@@ -1526,6 +1531,11 @@ void SimulatorWidget::sendWorldMeshToSim(vsim::LoadedMesh m, bool liftAfter,
   req.doubleSided = w.worldMeshDoubleSided;
   req.lift = liftAfter;
   req.coverage = coverage;
+  // The pads drawn on a procedural arena are solid, as they are on the endless
+  // terrain; without them the engine only has the ground under the deck and the
+  // vehicle sinks through the pad it was spawned on. The call is unconditional:
+  // imported worlds have no pads (no terrain height sampler), so it adds nothing.
+  appendHelipadCollision(req.extra);
   enqueueShip(std::move(req));
 }
 
@@ -1590,11 +1600,11 @@ void SimulatorWidget::startShipJob(WorldShipReq req) {
               verts.push_back(p.y);
               verts.push_back(p.z);
             }
-          for (const QVector3D &p : extra) {
-            verts.push_back(p.x());
-            verts.push_back(p.y());
-            verts.push_back(p.z());
-          }
+        }
+        for (const QVector3D &p : extra) {
+          verts.push_back(p.x());
+          verts.push_back(p.y());
+          verts.push_back(p.z());
         }
         const uint32_t nverts = static_cast<uint32_t>(verts.size() / 3);
         std::vector<uint8_t> blob =

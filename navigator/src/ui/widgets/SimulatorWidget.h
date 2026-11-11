@@ -268,8 +268,9 @@ private:
   void sendWorldMeshToSim(vsim::LoadedMesh m, bool liftAfter = false,
                           std::optional<QRectF> coverage = std::nullopt);
   struct WorldShipReq {
-    // Either a finished soup (finite worlds) or the cached terrain chunks plus
-    // a small extra soup (helipads); the worker flattens either to float[3n].
+    // Either a finished soup (finite worlds) or the cached terrain chunks, plus
+    // a small extra soup (helipads) in both cases; the worker flattens to
+    // float[3n].
     std::shared_ptr<const vsim::LoadedMesh> mesh;
     std::vector<std::shared_ptr<const vsim::procgen::ProcMesh>> chunks;
     std::vector<QVector3D> extra;
