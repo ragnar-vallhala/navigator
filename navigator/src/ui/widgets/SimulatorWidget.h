@@ -17,6 +17,7 @@
 #pragma once
 
 #include "StartGate.h"
+#include "CustomVehicleWarning.h"
 
 #include "CommandRetrier.h"
 #include "vsim/SimWorker.h"
@@ -184,6 +185,11 @@ public:
   // idempotent; stopAutotune requests cancel (completes via onTuneDone).
   void stopInAppSim();
   void stopAutotune();
+
+  // MainWindow calls this after it actually sent the proposed gains (live FC
+  // or running sim). A refused Apply (no link, sim stopped, replay) does not,
+  // so the Custom-vehicle notice stays.
+  void notifyPidGainsSent();
 
   // Keep Start disabled until the app is restarted, showing `reason` as its
   // tooltip and in the status line. For after "Reset Firmware Settings": the
@@ -537,6 +543,9 @@ private:
   bool m_attached = false;         // true while mirroring an external sim
   QCheckBox *m_fpvCheck = nullptr; // onboard FPV (only meaningful running)
   QLabel *m_simStatusLabel = nullptr;
+  QLabel *m_customWarnLabel = nullptr; // Custom + untuned notice (non-modal)
+  CustomTuneState m_customTune;
+  void updateCustomWarning(bool atStart);
   QLabel *m_simPoseLabel = nullptr;
 
   // ---- live readouts derived from snapshot ----
