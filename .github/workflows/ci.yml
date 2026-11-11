@@ -231,12 +231,16 @@ jobs:
         # It has not been green on a GitHub runner yet, so it does not fail the
         # job until it has; drop continue-on-error once it has been green.
         continue-on-error: true
+        # Run directly (no ctest TIMEOUT), the first run on a runner hung for
+        # 30+ minutes. Bound it, and use -v2 so the log shows the last test
+        # function reached when it stops.
+        timeout-minutes: 4
         env:
           QT_QPA_PLATFORM: xcb
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: |
-          xvfb-run -a -s "-screen 0 1280x800x24 +extension GLX" \
-            navigator/build-ws/tests/tst_workspace_gl
+          timeout -k 10 150 xvfb-run -a -s "-screen 0 1280x800x24 +extension GLX" \
+            navigator/build-ws/tests/tst_workspace_gl -v2
 
   # The GCS-only Windows build (NAVIGATOR_SITL=OFF: the SITL bridge needs a
   # POSIX host) on MSYS2 UCRT64, the toolchain tools/windows/deploy-navigator-
