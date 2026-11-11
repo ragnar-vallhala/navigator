@@ -69,6 +69,11 @@ class QComboBox;
 class QSpinBox;
 class QPlainTextEdit;
 class QProcess;
+class SimViewPanel;
+class SimVehiclePanel;
+class SimWorldPanel;
+class SimControlsPanel;
+class SimAutotunePanel;
 
 namespace vsim {
 struct LoadedMesh;
@@ -101,6 +106,15 @@ struct BuiltChunk {
 
 class SimulatorWidget : public QWidget {
   Q_OBJECT
+  // The simulator panels (sim.view, sim.vehicle, sim.world, sim.controls,
+  // sim.autotune) build their widget trees through the private builders below:
+  // the controls they create are this widget's m_* state.
+  friend class SimViewPanel;
+  friend class SimVehiclePanel;
+  friend class SimWorldPanel;
+  friend class SimControlsPanel;
+  friend class SimAutotunePanel;
+
 public:
   explicit SimulatorWidget(QWidget *parent = nullptr);
   ~SimulatorWidget() override;
@@ -203,6 +217,11 @@ private:
   void applyStartBlock();
 
   void buildUi();
+  // Panel builders (defined next to their panel class, Sim*Panel.cpp).
+  void buildViewPanel(QWidget *viewHost);
+  void buildVehiclePage(ui::MinWidthScrollArea *scroll);
+  void buildWorldPage(ui::MinWidthScrollArea *scroll);
+  void buildSimControls(QWidget *host);
   void appendLog(const QString &tag, const QString &text);
 
   void startInAppSim();
