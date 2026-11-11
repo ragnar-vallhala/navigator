@@ -1449,12 +1449,18 @@ void SimulatorWidget::liftDroneToSurface() {
   // has sunk into the terrain. A drone resting on or flying above the surface is
   // left alone (no yanking a landed or airborne drone).
   const float buriedEps = 0.3f;
-  if (m_lastDronePos.z() <= surfaceZ + buriedEps)
+  if (m_lastDronePos.z() <= surfaceZ + buriedEps) {
+    qInfo("lift skipped: drone z=%.2f is not below the surface z=%.2f",
+          static_cast<double>(m_lastDronePos.z()),
+          static_cast<double>(surfaceZ));
     return;
+  }
 
   // Re-drop level + stationary a clear margin above the surface, so it falls and
   // settles instead of spawning embedded in a slope (which wedges it tilted).
   const float dropClearance = 1.5f;
+  qInfo("lift: re-dropping drone from z=%.2f to surface z=%.2f",
+        static_cast<double>(m_lastDronePos.z()), static_cast<double>(surfaceZ));
   m_sim->sendResetPose(x, y, surfaceZ - dropClearance);
   appendLog("world",
             tr("re-dropped drone above terrain (surface %1 m)")
