@@ -144,10 +144,11 @@ private slots:
     for (int k = 0; k < 2; ++k) {
       const Spot &s = k == 0 ? bare : grassy;
       // Tile placed so texel (n/2, n/2) is centred exactly on the spot.
-      const float tm = sz / float(n), o = (float(n / 2) + 0.5f) * tm;
+      const int mid = n / 2;
+      const float tm = sz / float(n), o = (float(mid) + 0.5f) * tm;
       const std::vector<uint8_t> m =
           GpuGrass::buildMask(fp, s.x - o, s.y - o, sz, n);
-      const int c = m[size_t(n / 2) * size_t(n) + size_t(n / 2)];
+      const int c = m[size_t(mid) * size_t(n) + size_t(mid)];
       if (k == 0)
         QCOMPARE(c, 0);
       else
