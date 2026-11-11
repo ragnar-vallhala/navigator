@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 #include "MainWindow.h"
+#include "../core/FaultsModel.h"
 #include "../core/Notify.h"
 #include "../core/SettingsManager.h"
 #include "../protocol/CommandCodec.h"
@@ -189,6 +190,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   // inside the engine and surfaced via snapshot() at the render rate — onUiTimer.
   DroneProtocol *proto = m_engine->protocol();
   connect(proto, &DroneProtocol::logReceived, this, &MainWindow::onLogReceived);
+  connect(proto, &DroneProtocol::faultReceived, this,
+          [this](const FaultEvent &f) { m_faultsPanel->model()->apply(f); });
   connect(proto, &DroneProtocol::unknownPacket, this,
           [this](const QByteArray &raw) {
             onLogReceived(QString("[raw] ") + QString::fromLatin1(raw));
@@ -703,7 +706,23 @@ void MainWindow::buildUi() {
   m_vSplitter = new QSplitter(Qt::Vertical, m_homeWidget);
   m_vSplitter->setObjectName("HomeVSplitter");
   m_vSplitter->addWidget(topSplitter);
-  m_vSplitter->addWidget(m_logPanel);
+  // Log and Faults share the bottom slot as tabs: the faults list is persistent
+  // but low-traffic, so it must not cost the log any height; the tab title
+  // carries the unacknowledged count so a raised fault is visible from Log.
+  m_faultsPanel = new FaultsPanel(m_homeWidget);
+  m_bottomTabs = new QTabWidget(m_homeWidget);
+  m_bottomTabs->setObjectName("HomeBottomTabs");
+  m_bottomTabs->setMinimumHeight(180);
+  m_bottomTabs->addTab(m_logPanel, tr("Log"));
+  m_bottomTabs->addTab(m_faultsPanel, m_faultsPanel->title());
+  connect(m_faultsPanel, &FaultsPanel::countsChanged, this, [this] {
+    const int i = m_bottomTabs->indexOf(m_faultsPanel);
+    m_bottomTabs->setTabText(i, m_faultsPanel->title());
+    m_bottomTabs->tabBar()->setTabTextColor(
+        i, m_faultsPanel->needsAttention() ? m_faultsPanel->badgeColor()
+                                           : QColor());
+  });
+  m_vSplitter->addWidget(m_bottomTabs);
   m_vSplitter->setStretchFactor(0, 3);
   m_vSplitter->setStretchFactor(1, 1);
 
@@ -1482,6 +1501,8 @@ void MainWindow::setConnected(bool on) {
     m_toolbar->setArmEnabled(on);
   if (!on) {
     m_armed = false;
+    if (m_faultsPanel)
+      m_faultsPanel->setArmed(false);
     if (m_toolbar)
       m_toolbar->setArmState(false);
   }
@@ -1520,6 +1541,8 @@ void MainWindow::setConnected(bool on) {
     startTimeSync();
   } else {
     m_armed = false;
+    if (m_faultsPanel)
+      m_faultsPanel->setArmed(false);
     // The in-app sim has no transport, so a transport going down must not stop
     // the handshake the running sim is using.
     if (m_source.state() != SourceState::Sim)
@@ -1694,6 +1717,8 @@ void MainWindow::onUiTimer() {
     }
     if (s.armed != m_armed) {
       m_armed = s.armed;
+      if (m_faultsPanel)
+        m_faultsPanel->setArmed(m_armed);
       if (m_toolbar)
         m_toolbar->setArmState(m_armed);
       m_chime.play(m_armed ? ChimeAudio::Kind::Arm : ChimeAudio::Kind::Disarm);

@@ -60,6 +60,7 @@ DroneProtocol::DroneProtocol(QObject *parent) : QObject(parent) {
     emit heartbeatReceived(ts, dev);
   };
   m_v2Router.onLog = [this](const QString &line) { emit logReceived(line); };
+  m_v2Router.onFault = [this](const FaultEvent &f) { emit faultReceived(f); };
   m_v2Router.onCalibration = [this](const CalibrationUpdate &u) {
     emit calibrationUpdateReceived(u);
   };
