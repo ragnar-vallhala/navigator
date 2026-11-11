@@ -146,8 +146,10 @@ SitlModule::SitlModule() {
     // vsim::SimWorker-named thread inside the module, during exit). A second
     // dlopen with RTLD_NODELETE marks the object undeletable; the handle is
     // intentionally never closed.
-    (void)::dlopen(QFile::encodeName(lib.fileName()).constData(),
-                   RTLD_NOW | RTLD_NODELETE);
+    if (!::dlopen(QFile::encodeName(lib.fileName()).constData(),
+                  RTLD_NOW | RTLD_NODELETE))
+      qWarning("[sitl] could not pin the engine module in memory: %s",
+               ::dlerror());
 #endif
     api_ = api;
     path_ = QFileInfo(lib.fileName()).absoluteFilePath();
