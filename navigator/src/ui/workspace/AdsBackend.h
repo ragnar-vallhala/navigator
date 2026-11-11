@@ -66,6 +66,7 @@ private:
   };
   void rebuild();
   void applyFixed(Panel &p);
+  void syncActions();
   Panel *find(const QString &id);
   const Panel *find(const QString &id) const;
   ads::CDockAreaWidget *place(const LayoutNode &n, ads::CDockAreaWidget *anchor,

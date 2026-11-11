@@ -81,3 +81,18 @@ Use a real X server or a private Xvfb (`Xvfb :93 -screen 0 1280x800x24
 `tst_workspace_gl` skips itself under `offscreen`. One of its cases is an
 expected failure (a `QOpenGLWidget` under ADS): it passes while the problem
 exists and fails when it is fixed, as a prompt to remove the workaround.
+
+## The same layer in the real window
+
+`src/ui/main/DockShell` hosts every Navigator page as a panel on this layer
+(ids `view3d imu logs rc packets calibration motors control_loop gyro_notch perf
+sim settings`; workspaces Fly, Tune, Debug link, Sim). It is off by default.
+Switch it on with `NAVIGATOR_DOCKING=1` in the environment, or with
+Window > Dockable layout (restart needed); the window then has Workspaces and
+Panels menus, and View / Ctrl+1..9 show and focus a panel.
+
+GL decision: the attitude panel (`view3d`) holds two `QOpenGLWidget`s, which
+cannot move between windows under ADS 5.1.1 on Qt 6.4, so that panel is pinned
+to the main window (`DockBackend::setPanelFixed`): it can be hidden, shown and
+split next to, but not floated. The simulator's 3D view is already a
+`QOpenGLWindow` in a window container, so the `sim` panel floats freely.

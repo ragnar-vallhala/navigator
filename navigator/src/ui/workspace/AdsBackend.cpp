@@ -105,6 +105,16 @@ void AdsBackend::setPanelFixed(const QString &id, bool fixed) {
   applyFixed(*p);
 }
 
+// ADS's viewToggled does not fire for every open/close a layout change makes, so
+// bring the Panels-menu checks in line with what is really open.
+void AdsBackend::syncActions() {
+  for (Panel &p : m_panels) {
+    QAction *a = m_actions.value(p.id);
+    if (a)
+      a->setChecked(p.dock && p.dock->dockAreaWidget() && !p.dock->isClosed());
+  }
+}
+
 void AdsBackend::applyFixed(Panel &p) {
   if (!p.dock)
     return;
@@ -258,6 +268,7 @@ void AdsBackend::applySpec(const LayoutSpec &spec) {
       }
     }
   }
+  syncActions();
 }
 
 QByteArray AdsBackend::saveState() const {
@@ -271,6 +282,7 @@ bool AdsBackend::restoreState(const QByteArray &state) {
   const bool ok = m_dm->restoreState(state, kStateVersion);
   if (!ok)
     rebuild(); // empty, usable layout; the caller applies a default
+  syncActions();
   return ok;
 }
 
@@ -304,12 +316,14 @@ void AdsBackend::showPanel(const QString &id) {
     p->dock->toggleView(true);
   p->dock->setAsCurrentTab();
   p->dock->raise();
+  syncActions();
 }
 
 void AdsBackend::hidePanel(const QString &id) {
   Panel *p = find(id);
   if (p && p->dock && p->dock->dockAreaWidget() && !p->dock->isClosed())
     p->dock->closeDockWidget();
+  syncActions();
 }
 
 void AdsBackend::floatPanel(const QString &id) {

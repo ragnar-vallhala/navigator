@@ -165,6 +165,20 @@ private slots:
     QVERIFY(b->panelState("rc").visible);
   }
 
+  void panelsMenuActionsFollowVisibility() {
+    Fixture f;
+    auto *b = f.shell->workspaces()->backend();
+    QVERIFY(b->viewAction("logs")->isChecked());
+    QVERIFY(!b->viewAction("settings")->isChecked());
+    f.shell->showPanel("settings");
+    QVERIFY(b->viewAction("settings")->isChecked());
+    b->viewAction("logs")->trigger(); // unchecks: hides
+    QVERIFY(!b->panelState("logs").visible);
+    QVERIFY(f.shell->workspaces()->load("Tune"));
+    QVERIFY(b->viewAction("logs")->isChecked());
+    QVERIFY(!b->viewAction("settings")->isChecked());
+  }
+
   void attitudePanelCannotFloat() {
     Fixture f;
     auto *b = f.shell->workspaces()->backend();
