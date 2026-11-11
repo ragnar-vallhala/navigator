@@ -169,9 +169,12 @@ vsim::WorldConfig worldFromJson(const QJsonObject &root) {
   }
   const QJsonObject pg = root.value("procedural").toObject();
   w.proceduralBiome = pg.value("biome").toString(w.proceduralBiome);
-  // The finite "meadow" arena is gone: old saves stream as the endless biome.
-  if (w.proceduralBiome.compare(QStringLiteral("meadow"),
-                                Qt::CaseInsensitive) == 0)
+  // The finite "meadow" arena is gone: old saves stream as the endless biome
+  // and keep the meadow ground cover (palette set below, 0 = not chosen).
+  const bool legacyMeadow = w.proceduralBiome.compare(
+                                QStringLiteral("meadow"),
+                                Qt::CaseInsensitive) == 0;
+  if (legacyMeadow)
     w.proceduralBiome = QStringLiteral("endless");
   w.proceduralSeed = static_cast<quint32>(
       pg.value("seed").toDouble(static_cast<double>(w.proceduralSeed)));
@@ -184,6 +187,8 @@ vsim::WorldConfig worldFromJson(const QJsonObject &root) {
   w.worldPreset = pg.value("preset").toString(w.worldPreset);
   w.field.shape = pg.value("shape").toInt(w.field.shape);
   w.field.palette = pg.value("palette").toInt(w.field.palette);
+  if (legacyMeadow && w.field.palette == 0)
+    w.field.palette = vsim::procgen::kPalMeadow;
   w.field.mountainBias =
       pg.value("mountain_bias").toDouble(w.field.mountainBias);
   w.field.flatRadiusM = pg.value("flat_radius_m").toDouble(w.field.flatRadiusM);

@@ -347,8 +347,9 @@ bool isFieldBiome(const std::string &b) {
 bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
   if (id == "meadow") {
     out = PresetData{};
-    out.biome = "endless"; // the streamed default terrain
+    out.biome = "endless"; // streamed like every world
     out.field.seed = seed;
+    out.field.palette = kPalMeadow; // keeps the meadow ground/flora look
     out.flora.seed = seed;
     return true;
   }

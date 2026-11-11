@@ -119,10 +119,22 @@ private slots:
         w, QStringLiteral("{\"biome\":\"meadow\",\"seed\":21,"
                           "\"size_m\":300,\"resolution\":192}")));
     QCOMPARE(w.proceduralBiome, QString("endless"));
+    QCOMPARE(w.field.palette, int(vsim::procgen::kPalMeadow)); // keeps its look
     QCOMPARE(w.proceduralSeed, quint32(21));
     QVERIFY(vsim::isStreamedBiome(w.proceduralBiome));
     we.setConfig(w);
     QCOMPARE(we.procBiome_->currentData().toString(), QString("endless"));
+  }
+
+  void meadowPresetKeepsMeadowLook() {
+    vsim::WorldConfig w;
+    QVERIFY(vsim::applyWorldPreset(w, "meadow", 9));
+    QVERIFY(vsim::isStreamedBiome(w.proceduralBiome));
+    QCOMPARE(w.field.palette, int(vsim::procgen::kPalMeadow));
+    QCOMPARE(w.field.seed, quint32(9));
+    QCOMPARE(w.flora.seed, quint32(9));
+    // Not the Endless look: a different palette from the bare endless default.
+    QVERIFY(w.field.palette != vsim::procgen::FieldParams{}.palette);
   }
 
   void everyPresetStreams() {
