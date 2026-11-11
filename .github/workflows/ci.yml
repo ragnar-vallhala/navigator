@@ -234,6 +234,15 @@ jobs:
           test -x "$bin" || { echo "$bin was not built"; exit 1; }
           test -f "$module" || { echo "engine module $module missing"; exit 1; }
           failed=0
+          # A crash must show where: keep core files and print a backtrace for
+          # a case that dies on a signal (after all assertions passed, a crash
+          # at exit gives no other hint). Diagnostic only; the exit code is
+          # still what fails the step.
+          sudo timeout -k 10 300 apt-get -o DPkg::Lock::Timeout=120 install -y gdb \
+            || echo "gdb not installed: crashes will have no backtrace"
+          sudo rm -f /tmp/core-* || true
+          sudo sysctl -w kernel.core_pattern='/tmp/core-%e.%p' || true
+          ulimit -c unlimited
           # The case list comes from the binary (offscreen only to list them).
           fns=$(QT_QPA_PLATFORM=offscreen "$bin" -functions | sed 's/()$//' \
                   | grep -v -E '^(initTestCase|cleanupTestCase|.*_data)$')
@@ -265,6 +274,19 @@ jobs:
               124|137) res=TIMEOUT; failed=1 ;;
               *) res="FAIL(rc=$rc)"; failed=1 ;;
             esac
+            if [ "$rc" -gt 128 ] && [ "$rc" -ne 137 ] && command -v gdb >/dev/null; then
+              core=$(ls -t /tmp/core-* 2>/dev/null | head -1 || true)
+              if [ -n "$core" ]; then
+                echo "::group::backtrace of $fn (rc=$rc, $core)"
+                sudo chmod a+r "$core" || true
+                gdb -batch -ex bt -ex "info threads" -ex "thread apply all bt" \
+                    "$bin" "$core" 2>&1 | tail -150 || true
+                echo "::endgroup::"
+                sudo rm -f /tmp/core-* || true
+              else
+                echo "no core file found for $fn (rc=$rc)"
+              fi
+            fi
             # A QtTest skip exits 0 and looks like a pass: require 0 skipped.
             totals=$(grep -E '^Totals:' "$log" | tail -1 || true)
             if [ "$res" = PASS ]; then
