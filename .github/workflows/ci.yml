@@ -96,6 +96,11 @@ jobs:
               echo "apt-get $1 failed or timed out (attempt $a), retrying"
               # a killed install leaves dpkg interrupted
               sudo dpkg --configure -a || true
+              # the runner could not resolve the default Ubuntu mirror
+              # hostnames (DNS): retry through a different mirror
+              sudo sed -i -E 's#(mirror\+file:/etc/apt/apt-mirrors\.txt|https?://(azure\.archive|security|archive)\.ubuntu\.com/ubuntu/?)#http://mirrors.edge.kernel.org/ubuntu/#g' \
+                /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list \
+                /etc/apt/sources.list 2>/dev/null || true
               sleep 10
             done
             return 1
@@ -238,6 +243,11 @@ jobs:
               echo "apt-get $1 failed or timed out (attempt $a), retrying"
               # a killed install leaves dpkg interrupted
               sudo dpkg --configure -a || true
+              # the runner could not resolve the default Ubuntu mirror
+              # hostnames (DNS): retry through a different mirror
+              sudo sed -i -E 's#(mirror\+file:/etc/apt/apt-mirrors\.txt|https?://(azure\.archive|security|archive)\.ubuntu\.com/ubuntu/?)#http://mirrors.edge.kernel.org/ubuntu/#g' \
+                /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list \
+                /etc/apt/sources.list 2>/dev/null || true
               sleep 10
             done
             return 1
