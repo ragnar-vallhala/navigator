@@ -18,10 +18,15 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QLibrary>
 #include "VfsDir.h"
 #include <QProcessEnvironment>
+
+#ifdef Q_OS_UNIX
+#include <dlfcn.h>
+#endif
 
 // QLibrary rather than dlopen/LoadLibrary behind an #ifdef: Qt is already a
 // dependency, and it resolves the platform's own naming (libvayu_sitl.so,
@@ -134,6 +139,18 @@ SitlModule::SitlModule() {
     // Deliberately left loaded for the process lifetime. boot() starts vaios
     // tasks that never stop, so unloading the code underneath them would
     // crash; there is nothing to gain by trying.
+#ifdef Q_OS_UNIX
+    // "Left loaded" has to be enforced, not assumed: Qt may dlclose a library
+    // nobody holds a QLibrary for when the process winds down, and that unmaps
+    // the engine's text under its still-running tasks (SIGSEGV in a
+    // vsim::SimWorker-named thread inside the module, during exit). A second
+    // dlopen with RTLD_NODELETE marks the object undeletable; the handle is
+    // intentionally never closed.
+    if (!::dlopen(QFile::encodeName(lib.fileName()).constData(),
+                  RTLD_NOW | RTLD_NODELETE))
+      qWarning("[sitl] could not pin the engine module in memory: %s",
+               ::dlerror());
+#endif
     api_ = api;
     path_ = QFileInfo(lib.fileName()).absoluteFilePath();
     buildId_ = api->build_id ? QString::fromUtf8(api->build_id)
