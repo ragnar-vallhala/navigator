@@ -71,9 +71,20 @@ QString SitlModule::loadFailureReason(const QString &candidate,
   // errorString() reports only the LAST attempt, so it can say "No such file"
   // about a name nobody passed. Quote it only when it is about this very path
   // and is not that misleading text; otherwise say what is known.
-  const bool usable = !libraryError.isEmpty() &&
-                      libraryError.contains(candidate) &&
-                      !libraryError.contains(QStringLiteral("No such file"));
+  // Exception: a missing DEPENDENCY is reported by the loader as
+  // "<candidate>: (libdep.so.1: cannot open shared object file: No such file
+  // or directory)". That also contains "No such file", but it names the
+  // dependency the user must install, so keep it. When the file that cannot be
+  // opened is the candidate itself ("<candidate>: cannot open shared object
+  // file"), the module really is absent and the short text stays.
+  const bool aboutCandidate = libraryError.contains(candidate);
+  const bool missingDependency =
+      libraryError.contains(QStringLiteral("cannot open shared object file")) &&
+      !libraryError.contains(candidate + QStringLiteral(": cannot open"));
+  const bool usable =
+      !libraryError.isEmpty() && aboutCandidate &&
+      (missingDependency ||
+       !libraryError.contains(QStringLiteral("No such file")));
   return QStringLiteral("%1: %2")
       .arg(candidate,
            usable ? libraryError

@@ -246,6 +246,27 @@ void thunkStatustext(void *ctx, const navlink_frame_hdr_t *,
   r->onLog(QString::fromLatin1(m->text, static_cast<int>(n)));
 }
 
+void thunkFaultStatus(void *ctx, const navlink_frame_hdr_t *,
+                      const navlink_fault_status_t *m) {
+  auto *r = static_cast<NavlinkRouter *>(ctx);
+  if (!r->onFault)
+    return;
+  size_t n = 0;
+  while (n < sizeof(m->text) && m->text[n] != '\0')
+    n++;
+  FaultEvent e;
+  e.id = m->id;
+  e.severity = m->severity;
+  e.active = m->active != 0;
+  e.text = QString::fromLatin1(m->text, static_cast<int>(n));
+  if (const navlink_fault_info_t *info = navlink_fault_info(m->id)) {
+    e.name = QString::fromLatin1(info->name);
+    if (e.text.isEmpty())
+      e.text = QString::fromLatin1(info->text);
+  }
+  r->onFault(e);
+}
+
 void thunkCalibration(void *ctx, const navlink_frame_hdr_t *,
                       const navlink_calibration_status_t *m) {
   auto *r = static_cast<NavlinkRouter *>(ctx);
@@ -394,6 +415,7 @@ NavlinkRouter::NavlinkRouter() : d_(new Impl) {
   d_->handlers.on_heartbeat = thunkHeartbeat;
   d_->handlers.on_system_health = thunkSystemHealth;
   d_->handlers.on_statustext = thunkStatustext;
+  d_->handlers.on_fault_status = thunkFaultStatus;
   d_->handlers.on_calibration_status = thunkCalibration;
   d_->handlers.on_perf_global = thunkPerfGlobal;
   d_->handlers.on_perf_task = thunkPerfTask;

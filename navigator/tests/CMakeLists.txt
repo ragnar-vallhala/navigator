@@ -365,3 +365,12 @@ if(TARGET navigator_workspace)
     target_link_libraries(tst_workspace_gl PRIVATE navigator_workspace
         Qt6::OpenGLWidgets)
 endif()
+
+# ---- FAULT_STATUS: faults model, router decode, panel badge ---------------
+navigator_test(tst_faults
+    tst_faults.cpp
+    ${SRC}/core/FaultsModel.cpp
+    ${SRC}/protocol/NavlinkRouter.cpp
+    ${SRC}/ui/widgets/FaultsPanel.cpp)
+target_include_directories(tst_faults PRIVATE ${SRC}/ui/widgets)
+target_link_libraries(tst_faults PRIVATE navlink_codec)
