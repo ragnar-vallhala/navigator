@@ -838,9 +838,12 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
     rawHeightAt = heightAt; // imported / no world: null
   m_terrainHeightAt = heightAt; // null for imported / no world
   m_terrainRawHeightAt = rawHeightAt;
-  // Scatter helipad pads (and the home pad at origin) for the new world.
-  m_lastHelipadCenter = QVector3D(0, 0, 0);
-  recomputeHelipads(0.0f, 0.0f);
+  // Imported / no world: no pads. A streamed world seats its pads once, below,
+  // after the streamer's field exists (the sampler above reads it lazily).
+  if (!endless) {
+    m_lastHelipadCenter = QVector3D(0, 0, 0);
+    recomputeHelipads(0.0f, 0.0f);
+  }
   if (m_minimap) {
     m_minimap->setSampler(rawHeightAt); // ~12k samples: must stay cheap
     if (heightAt) {
@@ -901,10 +904,6 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
     sc.field = w.field; // user-tuned terrain shape + colour bands
     sc.field.seed = static_cast<uint32_t>(w.proceduralSeed);
     m_chunkStreamer.configure(sc);
-    // The pads above were placed before the field existed (heights 0): redo
-    // them on the live field so none floats or sinks at world load.
-    m_lastHelipadCenter = QVector3D(0, 0, 0);
-    recomputeHelipads(0.0f, 0.0f);
     m_floraParams = w.flora; // user-tuned grass density / slope / height
     m_floraParams.seed = static_cast<uint32_t>(w.proceduralSeed);
     // The pads set up above sampled the PREVIOUS field (none on a fresh
@@ -1487,11 +1486,6 @@ void SimulatorWidget::sendWorldMeshToSim(vsim::LoadedMesh m, bool liftAfter,
   req.doubleSided = w.worldMeshDoubleSided;
   req.lift = liftAfter;
   req.coverage = coverage;
-  // The pads drawn on a procedural arena are solid, as they are on the endless
-  // terrain; without them the engine only has the ground under the deck and the
-  // vehicle sinks through the pad it was spawned on. The call is unconditional:
-  // imported worlds have no pads (no terrain height sampler), so it adds nothing.
-  appendHelipadCollision(req.extra);
   enqueueShip(std::move(req));
 }
 
