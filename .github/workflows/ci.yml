@@ -78,7 +78,8 @@ jobs:
     name: ci (Qt6 build + tests + clang-tidy)
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    # ubuntu-latest moved to 26.04, whose apt mirrors time out on the runner
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         with:
@@ -222,7 +223,7 @@ jobs:
     name: Workspace mock + tests (Qt Advanced Docking, Linux)
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         with:
