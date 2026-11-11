@@ -72,12 +72,14 @@ public:
   // Teleport the running vehicle to (x, y), `up` metres above the terrain
   // sampler there, level and at rest (what a long flight would deliver).
   void teleport(float x, float y, float up) {
-    w_.m_sim->sendResetPose(x, y, -(w_.m_terrainHeightAt(x, y) + up));
+    w_.placeVehicle(x, y, -(w_.m_terrainHeightAt(x, y) + up));
   }
+  // Make every collision build take at least `ms` (a slow runner, on demand).
+  void shipDelay(int ms) { w_.m_testShipDelayMs = ms; }
   bool running() const { return w_.m_sim != nullptr; }
   bool shipBusy() const {
     return w_.m_shipWatcher || w_.m_shipPending || w_.m_collisionPending ||
-           w_.m_spawnResetPending;
+           w_.m_spawnResetPending || w_.m_heldPose.has_value();
   }
   void worldMode() { w_.setMode(1); } // the World tab: free-roam camera
   // The deck the vehicle should rest on at the home pad, from the live terrain
@@ -449,6 +451,68 @@ private slots:
         ++nearPads;
     }
     QVERIFY2(nearPads >= 1, "no helipad was placed around the far vehicle");
+  }
+
+  // A vehicle teleported/reset far away is held until the collision there has
+  // shipped: it is never released into terrain the engine lacks, so it does not
+  // fall through to the engine's z=0 floor (which a slow machine, or a slow
+  // collision build as forced here, would otherwise make it do). Sampled every
+  // 50 ms from the teleport to 3 s after the vehicle is released and settled.
+  void farTeleportNeverFallsThrough_data() {
+    QTest::addColumn<QString>("preset");
+    QTest::newRow("alpine") << QStringLiteral("alpine");
+    QTest::newRow("endless") << QStringLiteral("endless");
+  }
+  void farTeleportNeverFallsThrough() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    if (!SitlModule::instance().available())
+      QSKIP("no engine module (set VAYU_SITL_MODULE)");
+    QFETCH(QString, preset);
+    if (!a_->running()) {
+      a_->start();
+      QVERIFY(a_->running());
+    }
+    a_->changeWorld([&](vsim::WorldConfig &c) {
+      if (preset == QLatin1String("endless")) {
+        c.worldPreset.clear();
+        c.proceduralBiome = preset;
+        c.proceduralSeed = 31;
+      } else {
+        QVERIFY(vsim::applyWorldPreset(c, preset, 31));
+      }
+    });
+    QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 30000));
+    pump(2000);
+
+    const float x = 480.0f, y = 360.0f;
+    a_->shipDelay(3000); // longer than the 8 m fall (~1.3 s)
+    a_->teleport(x, y, 8.0f);
+    float minAlt = 1e9f;
+    int samples = 0;
+    qint64 settledAt = -1;
+    QElapsedTimer t;
+    t.start();
+    while (t.elapsed() < 60000) {
+      pump(50);
+      const QVector3D p = a_->lastPos();
+      const float alt = -p.z() - a_->groundAt(p.x(), p.y());
+      minAlt = std::min(minAlt, alt);
+      ++samples;
+      const bool there = std::hypot(p.x() - x, p.y() - y) < 30.0f;
+      if (there && !a_->shipBusy() && alt < 3.0f && settledAt < 0)
+        settledAt = t.elapsed();
+      if (settledAt >= 0 && t.elapsed() - settledAt >= 3000)
+        break;
+    }
+    a_->shipDelay(0);
+    qInfo("hold %s: samples=%d minAlt=%.2f settledAt=%lld ms", qPrintable(preset),
+          samples, minAlt, static_cast<long long>(settledAt));
+    QVERIFY2(settledAt >= 0, "the vehicle never arrived and came to rest");
+    QVERIFY2(minAlt >= -0.3f, "the vehicle sank below the ground on the way");
+    const QVector3D p = a_->lastPos();
+    const float alt = -p.z() - a_->groundAt(p.x(), p.y());
+    QVERIFY2(alt >= -0.3f && alt < 3.0f, "not resting on the terrain");
   }
 
   // Stop, then change the world again with the sim stopped.

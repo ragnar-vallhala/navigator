@@ -289,6 +289,32 @@ private:
   // Clean reset at the spawn pose (home pad on procedural terrain) carrying the
   // run's noise seed. Start, the Reset button and training all use it.
   void sendSpawnReset();
+  // Place the running vehicle at NED (x, y, z) level and at rest. On streamed
+  // terrain the engine only holds the collision around the vehicle, so a pose
+  // outside it would drop the body through the (unshipped) ground to the
+  // engine's flat z=0 floor: the pose is held until a shipped collision window
+  // contains (x, y) (the streamer is steered there meanwhile), then released.
+  // Released anyway after kHoldTimeoutMs so a stuck ship cannot hang a reset.
+  void placeVehicle(float x, float y, float z, uint32_t seed = 0);
+  bool collisionCovers(float x, float y) const;
+  // announce: also tell the user in the log (a timeout), not only qInfo.
+  void releaseHeldPose(const char *why, bool announce);
+  struct HeldPose {
+    float x = 0, y = 0, z = 0;
+    uint32_t seed = 0;
+  };
+  std::optional<HeldPose> m_heldPose;
+  QTimer *m_holdTimer = nullptr;
+  // Where the streamer centres while a placement is in flight: from the call
+  // until the engine's pose has actually arrived there (the published pose is
+  // still the old one for a few frames after a release; centring on it would
+  // ship the OLD window over the new one).
+  std::optional<QPointF> m_streamHint;
+  QElapsedTimer m_streamHintAge;
+  bool m_shipped = false; // the engine holds a blob shipped by the streamer
+  std::optional<QRectF> m_shippedCover; // its window (none: whole world)
+  static constexpr int kHoldTimeoutMs = 10000;
+  int m_testShipDelayMs = 0; // TEST ONLY: make the collision build slow
   // Start owes a spawn reset, but only once the collision under the spawn has
   // shipped (otherwise the drone is placed over terrain the engine lacks).
   bool spawnResetWaitsForCollision() const;

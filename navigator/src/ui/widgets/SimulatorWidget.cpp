@@ -15,6 +15,8 @@
  * limitations under the License.
  */
 #include "SimulatorWidget.h"
+#include <QThread>
+#include <cmath>
 #include "SimPanelsCommon.h"
 #include "SimAutotunePanel.h"
 #include "SimControlsPanel.h"
@@ -899,6 +901,8 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
     m_floraShown.clear();
     m_floraInflight.clear();
     m_collisionPending = false;
+    m_shipped = false; // the engine's blob is of the old world
+    m_shippedCover.reset();
 
     vsim::ChunkStreamer::Config sc;
     sc.field = w.field; // user-tuned terrain shape + colour bands
@@ -1040,11 +1044,23 @@ void SimulatorWidget::updateMinimap() {
 void SimulatorWidget::onStreamTick() {
   if (!m_chunkStreamer.active() || !m_renderer)
     return;
-  const QVector3D c = m_renderer->streamCenter();
+  QVector3D c = m_renderer->streamCenter();
   // The collision window leads the drone along its velocity (not when the
   // free-fly camera is the centre: that has no physics body).
-  const QVector3D v = (m_sim && !m_renderer->freeFly()) ? m_lastDroneVel
-                                                        : QVector3D();
+  QVector3D v = (m_sim && !m_renderer->freeFly()) ? m_lastDroneVel
+                                                  : QVector3D();
+  if (m_streamHint) { // a placement in flight: stream where the vehicle goes
+    const bool arrived = std::hypot(m_lastDronePos.x() - m_streamHint->x(),
+                                    m_lastDronePos.y() - m_streamHint->y()) <
+                         30.0;
+    if (arrived || !m_sim || m_streamHintAge.elapsed() > 15000) {
+      m_streamHint.reset();
+    } else {
+      c = QVector3D(static_cast<float>(m_streamHint->x()),
+                    static_cast<float>(m_streamHint->y()), 0.0f);
+      v = QVector3D();
+    }
+  }
   const vsim::StreamPlan p = m_chunkStreamer.plan(c.x(), c.y(), v.x(), v.y());
 
   for (qint64 key : p.toRemove) {
@@ -1388,10 +1404,63 @@ void SimulatorWidget::sendSpawnReset() {
   // margin above the pad top so it settles onto the deck, not the slope.
   if (m_terrainHeightAt) {
     const float padTop = landingSurfaceZ(m_homePad.x(), m_homePad.y());
-    m_sim->sendResetPose(m_homePad.x(), m_homePad.y(), padTop - 0.4f, m_runSeed);
+    placeVehicle(m_homePad.x(), m_homePad.y(), padTop - 0.4f, m_runSeed);
   } else {
     m_sim->sendReset(m_runSeed);
   }
+}
+
+bool SimulatorWidget::collisionCovers(float x, float y) const {
+  if (!m_shipped || m_shipWatcher || m_shipPending || m_collisionPending)
+    return false; // nothing shipped yet, or a newer window is on its way
+  return !m_shippedCover || m_shippedCover->contains(x, y);
+}
+
+void SimulatorWidget::placeVehicle(float x, float y, float z, uint32_t seed) {
+  if (!m_sim)
+    return;
+  // Only streamed terrain has a moving collision window; a finite imported
+  // mesh (or no world) ships once and stays.
+  if (!m_chunkStreamer.active()) {
+    m_heldPose.reset();
+    m_sim->sendResetPose(x, y, z, seed);
+    return;
+  }
+  m_streamHint = QPointF(x, y);
+  m_streamHintAge.start();
+  if (collisionCovers(x, y)) {
+    m_heldPose.reset();
+    if (m_holdTimer)
+      m_holdTimer->stop();
+    m_sim->sendResetPose(x, y, z, seed);
+    return;
+  }
+  m_heldPose = HeldPose{x, y, z, seed};
+  if (!m_holdTimer) {
+    m_holdTimer = new QTimer(this);
+    m_holdTimer->setSingleShot(true);
+    connect(m_holdTimer, &QTimer::timeout, this,
+            [this] {
+              releaseHeldPose("timed out waiting for the collision", true);
+            });
+  }
+  m_holdTimer->start(kHoldTimeoutMs);
+  onStreamTick(); // steer the streamer to the target now, not in <=100 ms
+}
+
+void SimulatorWidget::releaseHeldPose(const char *why, bool announce) {
+  if (!m_heldPose)
+    return;
+  const HeldPose p = *m_heldPose;
+  m_heldPose.reset();
+  if (m_holdTimer)
+    m_holdTimer->stop();
+  if (!m_sim)
+    return;
+  qInfo("vehicle pose released (%s)", why);
+  if (announce)
+    appendLog("world", tr("vehicle placed %1").arg(QString::fromLatin1(why)));
+  m_sim->sendResetPose(p.x, p.y, p.z, p.seed);
 }
 
 void SimulatorWidget::placeVehicleOnWorld() {
@@ -1530,7 +1599,10 @@ void SimulatorWidget::startShipJob(WorldShipReq req) {
   // its own captured data, so it is safe even if the widget goes away first.
   watcher->setFuture(QtConcurrent::run(
       [genPtr, gen, tmp, mesh = req.mesh, chunks = std::move(req.chunks),
-        extra = std::move(req.extra), ds = req.doubleSided]() {
+        extra = std::move(req.extra), ds = req.doubleSided,
+        delayMs = m_testShipDelayMs]() {
+        if (delayMs > 0)
+          QThread::msleep(static_cast<unsigned long>(delayMs));
         WorldShipResult r;
         auto stale = [&] { return genPtr->load() != gen; };
         if (stale())
@@ -1624,6 +1696,8 @@ void SimulatorWidget::onShipFinished(const WorldShipResult &r, int gen,
     } else {
       const vsim::WorldConfig &w = m_worldEditor->config();
       const uint32_t ntris = r.nverts / 3;
+      m_shipped = true;
+      m_shippedCover = m_shipRunningCover;
       m_sim->sendWorldMesh(path, r.nverts, ntris, r.nodes,
                            w.worldMeshRestitution, w.worldMeshDoubleSided);
       appendLog("world",
@@ -1646,6 +1720,8 @@ void SimulatorWidget::onShipFinished(const WorldShipResult &r, int gen,
                    m_shipRunningCover->contains(m_lastDronePos.x(),
                                                 m_lastDronePos.y())))
         liftDroneToSurface();
+      if (m_heldPose && collisionCovers(m_heldPose->x, m_heldPose->y))
+        releaseHeldPose("collision shipped", false);
     }
   } else {
     QFile::remove(tmp); // stale, sim gone, or failed
@@ -1953,6 +2029,9 @@ void SimulatorWidget::startInAppSim() {
     appendLog("sim", tr("noise seed %1").arg(m_runSeed));
   }
   m_spawnResetPending = false;
+  m_heldPose.reset();
+  m_shipped = false; // a fresh engine holds no blob
+  m_shippedCover.reset();
   m_sim = new vsim::SimWorker(this);
   m_sim->setTelemetrySink(&uart2_to_widget_trampoline, this);
   connect(m_sim, &vsim::SimWorker::stoppedCleanly, this,
@@ -2134,6 +2213,9 @@ void SimulatorWidget::stopInAppSim() {
     SitlModule::instance().api()->set_telemetry_sink(nullptr, nullptr);
   cancelWorldShip(); // a build in flight must not ship into a stopped sim
   m_spawnResetPending = false;
+  m_heldPose.reset();
+  if (m_holdTimer)
+    m_holdTimer->stop();
   m_sim->requestStop();
   if (!m_sim->wait(2000)) {
     m_sim->terminate();
