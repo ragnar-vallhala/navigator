@@ -17,6 +17,7 @@
 #pragma once
 
 #include "StartGate.h"
+#include "CustomVehicleWarning.h"
 
 #include "CommandRetrier.h"
 #include "vsim/SimWorker.h"
@@ -537,6 +538,9 @@ private:
   bool m_attached = false;         // true while mirroring an external sim
   QCheckBox *m_fpvCheck = nullptr; // onboard FPV (only meaningful running)
   QLabel *m_simStatusLabel = nullptr;
+  QLabel *m_customWarnLabel = nullptr; // Custom + untuned notice (non-modal)
+  CustomTuneState m_customTune;
+  void updateCustomWarning(bool atStart);
   QLabel *m_simPoseLabel = nullptr;
 
   // ---- live readouts derived from snapshot ----

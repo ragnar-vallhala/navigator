@@ -109,6 +109,10 @@ endif()
 navigator_test(tst_start_gate tst_start_gate.cpp)
 target_include_directories(tst_start_gate PRIVATE ${SRC}/ui/widgets)
 
+# ---- Custom-vehicle untuned warning logic (header only) ---------------------
+navigator_test(tst_custom_vehicle_warning tst_custom_vehicle_warning.cpp)
+target_include_directories(tst_custom_vehicle_warning PRIVATE ${SRC}/ui/widgets)
+
 # ---- C++ autotune engine (Space + orchestration, synthetic rollout) -------
 navigator_test(tst_autotune_engine
     tst_autotune_engine.cpp
