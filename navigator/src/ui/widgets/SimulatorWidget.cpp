@@ -799,13 +799,15 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
   const vsim::WorldConfig &w = m_worldEditor->config();
   cancelWorldShip(); // a new world config makes any in-flight collision stale
 
-  // Only a finite procedural arena turns the horizon ground back on (below).
+  // The horizon ground belonged to the finite procedural arena, which is gone.
   m_renderer->setHorizonGround(false);
   if (m_downRenderer)
     m_downRenderer->setHorizonGround(false);
 
-  const bool endless = w.proceduralBiome.compare(QStringLiteral("endless"),
-                                                 Qt::CaseInsensitive) == 0;
+  // Every procedural biome streams endlessly from w.field (preset, "endless"
+  // and the legacy finite "meadow" of old saves); only imported meshes are
+  // finite.
+  const bool endless = vsim::isStreamedBiome(w.proceduralBiome);
 
   // Point the contour minimap at the active terrain's height source. The
   // endless lambda reads the streamer's field lazily (configured below); the
@@ -831,39 +833,23 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
                                               c.collisionResolution)
                : 0.0f;
     };
-  } else if (vsim::isFieldArenaBiome(w.proceduralBiome)) {
-    // Preset arenas (hills/alpine/desert/forest/racing/yard/...): sample the
-    // same meshed surface the arena mesh + collision are built from.
-    auto fld = std::make_shared<vsim::procgen::TerrainField>(
-        vsim::arenaField(w));
-    const float sz = w.proceduralSizeM;
-    const int res = std::clamp(w.proceduralResolution, 4, 1024);
-    rawHeightAt = [fld](float n, float e) { return fld->height(n, e); };
-    heightAt = [fld, sz, res](float n, float e) {
-      return vsim::procgen::arenaSurfaceHeight(*fld, sz, res, n, e);
-    };
-    minimapRange = w.proceduralSizeM * 0.5f;
-  } else if (vsim::isKnownBiome(w.proceduralBiome)) {
-    auto hf = std::make_shared<vsim::procgen::Heightfield>(
-        vsim::proceduralMeadowHeightfield(w));
-    heightAt = [hf](float n, float e) { return hf->sampleWorld(n, e); };
-    minimapRange = w.proceduralSizeM * 0.5f; // fit the finite arena
   }
   if (!rawHeightAt)
-    rawHeightAt = heightAt; // finite biomes: the heightfield is already cheap
+    rawHeightAt = heightAt; // imported / no world: null
   m_terrainHeightAt = heightAt; // null for imported / no world
   m_terrainRawHeightAt = rawHeightAt;
-  // Scatter helipad pads (and the home pad at origin) for the new world.
-  m_lastHelipadCenter = QVector3D(0, 0, 0);
-  recomputeHelipads(0.0f, 0.0f);
+  // Imported / no world: no pads. A streamed world seats its pads once, below,
+  // after the streamer's field exists (the sampler above reads it lazily).
+  if (!endless) {
+    m_lastHelipadCenter = QVector3D(0, 0, 0);
+    recomputeHelipads(0.0f, 0.0f);
+  }
   if (m_minimap) {
     m_minimap->setSampler(rawHeightAt); // ~12k samples: must stay cheap
     if (heightAt) {
       m_minimap->setRangeM(minimapRange);
       m_minimap->setReferenceHeight(
-          (endless || vsim::isFieldArenaBiome(w.proceduralBiome))
-              ? w.field.heightM
-              : 80.0f);
+          endless ? w.field.heightM : 80.0f);
     }
   }
 
@@ -997,37 +983,6 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
     onStreamTick(); // stream the initial neighbourhood immediately
     appendLog("world", tr("endless procedural terrain (seed %1) streaming")
                            .arg(w.proceduralSeed));
-    return;
-  }
-
-  // Procedural world takes precedence over an imported mesh: generate it from
-  // the biome params and feed the same render + collision pipeline.
-  if (!w.proceduralBiome.isEmpty()) {
-    const vsim::LoadedMesh m = vsim::generateProceduralWorld(w);
-    if (!m.valid) {
-      appendLog(
-          "world",
-          tr("procedural world: unknown biome '%1'").arg(w.proceduralBiome));
-      m_renderer->setWorldMesh({}, {});
-      if (m_downRenderer)
-        m_downRenderer->setWorldMesh({}, {});
-      if (m_sim)
-        m_sim->clearWorldMesh();
-      return;
-    }
-    m_renderer->setWorldMesh(m.positions, m.normals, m.colors);
-    m_renderer->setHorizonGround(true); // ground detail + land to the horizon
-    if (m_downRenderer) {
-      m_downRenderer->setWorldMesh(m.positions, m.normals, m.colors);
-      m_downRenderer->setHorizonGround(true);
-    }
-    appendLog("world", tr("procedural world '%1' (seed %2): %3 tris")
-                           .arg(w.proceduralBiome)
-                           .arg(w.proceduralSeed)
-                           .arg(m.triangleCount()));
-    if (m_sim) {
-      sendWorldMeshToSim(m, true); // lifts once the collision has shipped
-    }
     return;
   }
 
@@ -1531,11 +1486,6 @@ void SimulatorWidget::sendWorldMeshToSim(vsim::LoadedMesh m, bool liftAfter,
   req.doubleSided = w.worldMeshDoubleSided;
   req.lift = liftAfter;
   req.coverage = coverage;
-  // The pads drawn on a procedural arena are solid, as they are on the endless
-  // terrain; without them the engine only has the ground under the deck and the
-  // vehicle sinks through the pad it was spawned on. The call is unconditional:
-  // imported worlds have no pads (no terrain height sampler), so it adds nothing.
-  appendHelipadCollision(req.extra);
   enqueueShip(std::move(req));
 }
 
