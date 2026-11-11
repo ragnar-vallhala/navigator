@@ -239,9 +239,26 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
   target_include_directories(tst_sim_gl_context PRIVATE ${SRC}/vsim ${SRC}/ui/widgets ${VAYU_SITL_SDK})
   target_link_libraries(tst_sim_gl_context PRIVATE Qt6::OpenGL Qt6::OpenGLWidgets)
   if(NAVIGATOR_SIM_GRASS) # same renderer configuration as the app
-    target_sources(tst_sim_gl_context PRIVATE ${SRC}/vsim/GpuGrass.cpp)
+    target_sources(tst_sim_gl_context PRIVATE ${SRC}/vsim/GpuGrass.cpp
+        ${SRC}/vsim/procgen/Noise.cpp ${SRC}/vsim/procgen/TerrainField.cpp
+        ${SRC}/vsim/procgen/GroundCover.cpp)
     target_compile_definitions(tst_sim_gl_context PRIVATE VAYU_SIM_GRASS=1)
   endif()
+endif()
+
+# ---- GPU grass respects the ground-cover mask (grass builds only) ----------
+# The mask data checks run anywhere; the blade readback needs a real GL platform
+# (xcb on an Xvfb + LIBGL_ALWAYS_SOFTWARE=1) and skips on offscreen.
+if(NAVIGATOR_SIM_GRASS)
+  find_package(Qt6 REQUIRED COMPONENTS OpenGL)
+  navigator_test(tst_gpu_grass
+      tst_gpu_grass.cpp
+      ${SRC}/vsim/GpuGrass.cpp
+      ${SRC}/vsim/procgen/Noise.cpp
+      ${SRC}/vsim/procgen/TerrainField.cpp
+      ${SRC}/vsim/procgen/GroundCover.cpp)
+  target_include_directories(tst_gpu_grass PRIVATE ${SRC}/vsim)
+  target_link_libraries(tst_gpu_grass PRIVATE Qt6::OpenGL)
 endif()
 
 # ---- World tab preset wiring (headless widget test) ------------------------

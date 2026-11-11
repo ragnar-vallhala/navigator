@@ -939,6 +939,7 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
     gp.heightStdDev = w.flora.heightStdDev;
     gp.flowerFrac = w.flora.flowerFrac;
     gp.look = w.look; // live grass shading knobs
+    gp.field = sc.field; // palette etc. for the ground-cover (grass) mask
     const float bpc = std::max(1.0f, w.flora.bladesPerCell);
     // Near-ring candidate spacing. GpuGrass adds a coarse FAR ring (4x cell) on
     // top for distance, so this only controls near density — push it small.
