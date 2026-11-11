@@ -28,7 +28,8 @@
 // Needs a real GL platform plugin (the widget owns GL views): run with
 // QT_QPA_PLATFORM=xcb on an Xvfb and LIBGL_ALWAYS_SOFTWARE=1. On "offscreen"
 // (ctest's default) it skips. The Running part also needs the engine module
-// (VAYU_SITL_MODULE) and skips, saying why, without one. Give it private
+// (VAYU_SITL_MODULE) and skips, saying why, without one. Every case is
+// self-contained (CI runs each in its own process). Give it private
 // VAYU_VFS_DIR / VSIM_FIFO_SUFFIX / XDG_* when running it. Wall-clock paced.
 
 #include "SimRendererWidget.h"
@@ -64,6 +65,7 @@ public:
   float groundAt(float x, float y) const { return w_.m_terrainHeightAt(x, y); }
   QVector3D lastPos() const { return w_.m_lastDronePos; }
   bool running() const { return w_.m_sim != nullptr; }
+  QString logText() const { return w_.m_log->toPlainText(); }
   bool shipBusy() const {
     return w_.m_shipWatcher || w_.m_shipPending || w_.m_collisionPending ||
            w_.m_spawnResetPending;
@@ -232,6 +234,7 @@ private slots:
     qInfo("running: initial alt=%.2f", altAbove(*a_));
     QVERIFY(altAbove(*a_) >= -0.05f);
 
+    QVERIFY(!a_->logText().contains(QStringLiteral("World changed")));
     const QVector<Change> cs = changes();
     for (int i = 1; i < cs.size(); ++i) {
       a_->changeWorld(cs[i].edit);
@@ -250,14 +253,27 @@ private slots:
                qPrintable(QStringLiteral("not re-placed after '%1'")
                               .arg(QString::fromLatin1(cs[i].name))));
     }
+    // The in-flight respawn is announced to the user, once (not per change).
+    QCOMPARE(a_->logText().count(QStringLiteral(
+                 "World changed: vehicle respawned on the home pad")),
+             1);
   }
 
   // Stop, then change the world again with the sim stopped.
   void stoppedAfterRunPlacesVehicleOnGround() {
     if (!gl_)
       QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
-    if (!a_->running())
-      QSKIP("the Running test did not start the engine");
+    if (!SitlModule::instance().available())
+      QSKIP("no engine module (set VAYU_SITL_MODULE)");
+    // Self-contained (CI runs each case in its own process): start a run here
+    // if no earlier case left one going.
+    if (!a_->running()) {
+      a_->changeWorld(changes()[0].edit);
+      a_->start();
+      QVERIFY(a_->running());
+      QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 20000));
+      pump(1000);
+    }
     a_->stop();
     QVERIFY(!a_->running());
     pump(500); // let the worker's last queued pose snapshots drain
