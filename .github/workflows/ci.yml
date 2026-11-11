@@ -248,9 +248,8 @@ jobs:
         # pins QT_QPA_PLATFORM=offscreen on every ctest case (so this step's
         # xcb was overridden and the test only ever skipped), and ctest hides
         # a QtTest skip as a pass. Run directly, the log shows PASS or SKIP.
-        # It has not been green on a GitHub runner yet, so it does not fail the
-        # job until it has; drop continue-on-error once it has been green.
-        continue-on-error: true
+        # It was green on two separate GitHub runs (both cases PASS), so a
+        # failure or a timeout in any case now fails the job.
         # Run directly (no ctest TIMEOUT), the first run on a runner hung for
         # 30+ minutes, and the next one hung one case for 145 s. Each test
         # function is its own process under its own timeout and xvfb-run, so one
