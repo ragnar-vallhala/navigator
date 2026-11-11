@@ -114,6 +114,7 @@ class SimulatorWidget : public QWidget {
   friend class SimWorldPanel;
   friend class SimControlsPanel;
   friend class SimAutotunePanel;
+  friend class PerfHarness; // env-gated profiling harness (app/PerfHarness)
 
 public:
   explicit SimulatorWidget(QWidget *parent = nullptr);

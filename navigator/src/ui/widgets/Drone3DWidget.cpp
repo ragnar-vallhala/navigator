@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "../../core/PerfProbe.h"
 #include "Drone3DWidget.h"
 
 #include <QMatrix4x4>
@@ -121,6 +122,17 @@ void Drone3DWidget::hideEvent(QHideEvent *event) {
 }
 
 void Drone3DWidget::paintEvent(QPaintEvent *) {
+  struct PerfPaint {
+    bool on = perfprobe::on();
+    PerfPaint() {
+      if (on)
+        perfprobe::paintBegin("drone3d");
+    }
+    ~PerfPaint() {
+      if (on)
+        perfprobe::paintEnd("drone3d");
+    }
+  } perfPaint;
   QPainter p(this);
   p.setRenderHint(QPainter::Antialiasing);
 

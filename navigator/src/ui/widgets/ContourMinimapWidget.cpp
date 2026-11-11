@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "../../core/PerfProbe.h"
 #include "ContourMinimapWidget.h"
 
 #include <QImage>
@@ -76,6 +77,7 @@ void ContourMinimapWidget::setRangeM(float r) {
 }
 
 void ContourMinimapWidget::paintEvent(QPaintEvent *) {
+  PERF_SCOPE("minimap.paint_ms");
   QPainter p(this);
   p.setRenderHint(QPainter::Antialiasing, true);
   const int side = std::min(width(), height());

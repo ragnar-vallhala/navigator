@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "../../core/PerfProbe.h"
 #include "SimHudWidget.h"
 
 #include "core/Units.h"
@@ -84,6 +85,7 @@ void SimHudWidget::setImu(const float acc[3], const float gyr[3]) {
 }
 
 void SimHudWidget::paintEvent(QPaintEvent *) {
+  PERF_SCOPE("simhud.paint_ms");
   const int W = width(), H = height();
   if (W < 80 || H < 80)
     return;

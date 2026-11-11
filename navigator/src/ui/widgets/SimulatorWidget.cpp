@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "../../core/PerfProbe.h"
 #include "SimulatorWidget.h"
 #include "SimPanelsCommon.h"
 #include "SimAutotunePanel.h"
@@ -710,6 +711,7 @@ void SimulatorWidget::notifyPidGainsSent() {
 }
 
 void SimulatorWidget::updateHud(const vsim::SimSnapshot &s) {
+  PERF_SCOPE("sim.updateHud_ms");
   m_lastDronePos = s.pos_w; // tracked for the lift-onto-terrain logic
   m_lastDroneVel = s.vel_w;
   if (m_hud)
@@ -793,6 +795,7 @@ void SimulatorWidget::updateTrainingProgress() {
 }
 
 void SimulatorWidget::loadWorldMeshToRenderer() {
+  PERF_SCOPE("sim.loadWorldMesh_ms");
   if (!m_renderer || !m_worldEditor)
     return;
   const vsim::WorldConfig &w = m_worldEditor->config();
@@ -958,7 +961,9 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
                                      w.look.ambientStrength);
 
 #ifdef VAYU_SIM_GRASS
-    m_useGpuGrass = m_renderer->gpuGrassReady();
+    // NAVIGATOR_GRASS_CPU=1 forces the CPU flora path (measurement only).
+    m_useGpuGrass = m_renderer->gpuGrassReady() &&
+                    qEnvironmentVariableIsEmpty("NAVIGATOR_GRASS_CPU");
     if (m_useGpuGrass) {
       // Params are always pushed so a later toggle-on renders immediately, but
       // the pass only activates when the "Grass" toggle is on.
@@ -1067,6 +1072,7 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
 }
 
 void SimulatorWidget::updateMinimap() {
+  PERF_SCOPE("sim.updateMinimap_ms");
   if (!m_minimap || !m_minimapPip || !m_minimapPip->isVisible())
     return;
   if (!m_renderer || !m_minimap->hasSampler())
@@ -1076,6 +1082,7 @@ void SimulatorWidget::updateMinimap() {
 }
 
 void SimulatorWidget::onStreamTick() {
+  PERF_SCOPE("sim.onStreamTick_ms");
   if (!m_chunkStreamer.active() || !m_renderer)
     return;
   const QVector3D c = m_renderer->streamCenter();
@@ -1130,6 +1137,7 @@ void SimulatorWidget::onStreamTick() {
               watcher->deleteLater();
             });
     watcher->setFuture(QtConcurrent::run([field, req, chunkM, res, collRes]() {
+      PERF_SCOPE("worker.chunk_build_ms"); // pool thread, not the GUI thread
       BuiltChunk b;
       b.mesh =
           vsim::procgen::meshFieldChunk(*field, req.cx, req.cy, chunkM, res);
@@ -1152,6 +1160,7 @@ void SimulatorWidget::onStreamTick() {
 }
 
 void SimulatorWidget::onChunkMeshed(qint64 key, const BuiltChunk &built) {
+  PERF_SCOPE("sim.onChunkMeshed_ms");
   m_chunkStreamer.markBuilt(key);
   if (!m_chunkStreamer.wanted(key)) { // drifted out of range while meshing
     m_chunkStreamer.forget(key);
@@ -1252,6 +1261,7 @@ void SimulatorWidget::onFloraScattered(qint64 key,
 #endif // VAYU_SIM_GRASS
 
 void SimulatorWidget::tryBuildCollision() {
+  PERF_SCOPE("sim.tryBuildCollision_ms");
   if (!m_collisionPending)
     return;
   if (!m_sim) {
@@ -1527,6 +1537,7 @@ void SimulatorWidget::startShipJob(WorldShipReq req) {
   watcher->setFuture(QtConcurrent::run(
       [genPtr, gen, tmp, mesh = req.mesh, chunks = std::move(req.chunks),
         extra = std::move(req.extra), ds = req.doubleSided]() {
+        PERF_SCOPE("worker.collision_ship_ms"); // pool thread
         WorldShipResult r;
         auto stale = [&] { return genPtr->load() != gen; };
         if (stale())
@@ -1591,6 +1602,7 @@ void SimulatorWidget::startShipJob(WorldShipReq req) {
 
 void SimulatorWidget::onShipFinished(const WorldShipResult &r, int gen,
                                      const QString &path, const QString &tmp) {
+  PERF_SCOPE("sim.onShipFinished_ms");
   const bool lift = m_shipRunningLift;
   m_shipWatcher = nullptr;
   m_shipRunningTmp.clear();
@@ -2534,6 +2546,7 @@ void SimulatorWidget::queueUartBytes(const uint8_t *data, size_t n) {
 }
 
 void SimulatorWidget::onUartBytes() {
+  PERF_SCOPE("sim.onUartBytes_ms"); // includes the dataReceived consumers
   // GUI thread: take the whole accumulated batch and clear the pending flag so a
   // fresh producer post can be queued. Bytes appended after the swap simply
   // trigger the next drain — nothing is lost.
@@ -2612,6 +2625,7 @@ void SimulatorWidget::openNewLogFile() {
 //   f32 batt_voltage          [V]
 //   f32 batt_soc              [0,1]
 void SimulatorWidget::logGroundTruth(vsim::SimSnapshot snap) {
+  PERF_SCOPE("sim.logGroundTruth_ms");
   if (!m_runLog || !m_runLog->isOpen())
     return;
   float roll, pitch, yaw;
@@ -2655,6 +2669,7 @@ void SimulatorWidget::closeLogFile() {
 }
 
 void SimulatorWidget::appendLog(const QString &tag, const QString &text) {
+  PERF_SCOPE("sim.appendLog_ms");
   QString trimmed = text;
   while (trimmed.endsWith('\n') || trimmed.endsWith('\r')) {
     trimmed.chop(1);

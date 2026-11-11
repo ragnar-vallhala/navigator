@@ -458,6 +458,10 @@ SimRendererWidget::SimRendererWidget(QWindow *parent)
   f.setDepthBufferSize(24);
   f.setStencilBufferSize(8);
   setFormat(f);
+  connect(this, &QOpenGLWindow::frameSwapped, this, [this] {
+    if (perfprobe::on())
+      perfprobe::swapped(downCam_ ? "down" : "main");
+  });
 }
 
 void SimRendererWidget::setHudWidget(QWidget *w) {
@@ -532,6 +536,7 @@ void SimRendererWidget::resetGlState() {
 // screen: it is rendered into an ARGB image at the window's size (device pixels
 // honoured) and drawn with QPainter on the GL window.
 void SimRendererWidget::paintHud() {
+  PERF_SCOPE(downCam_ ? "down.hud_cpu_ms" : "main.hud_cpu_ms");
   if (!hud_ || !hudVisible_ || width() <= 0 || height() <= 0)
     return;
   QElapsedTimer t;
@@ -1190,6 +1195,15 @@ QMatrix4x4 SimRendererWidget::cameraView() const {
 }
 
 void SimRendererWidget::paintGL() {
+  const bool pf = perfprobe::on();
+  const char *pn = downCam_ ? "down" : "main";
+  QElapsedTimer pt;
+  drawCalls_ = 0;
+  if (pf) {
+    perfprobe::paintBegin(pn);
+    pt.start();
+    gpuScene_.begin();
+  }
   // After a context-gone the resources were released (and the streamed data
   // queued); come back up on whatever context is current. initializeGL does
   // this when Qt makes a new context; this covers a drop that Qt does not
@@ -1274,11 +1288,13 @@ void SimRendererWidget::paintGL() {
 
   // Streaming terrain chunks (lit, world frame). Same lit shader / vertex-color
   // path as the imported mesh, one draw per loaded chunk.
-  if (showChunks)
+  if (showChunks) {
+    PERF_SCOPE(downCam_ ? "down.terrain_cpu_ms" : "main.terrain_cpu_ms");
     for (auto &kv : worldChunks_)
       if (kv.second->vertex_count)
         drawLit(*kv.second, view, QMatrix4x4(), QVector3D(1.0f, 1.0f, 1.0f),
                 true);
+  }
 
   // With no terrain mesh in World mode, and around a finite procedural arena,
   // draw a detailed ground out to the horizon instead of the old +/-10 m line
@@ -1297,6 +1313,7 @@ void SimRendererWidget::paintGL() {
   // Grass over the terrain (after the ground so depth works). GPU-generated when
   // available + selected; otherwise the CPU chunk-instanced path.
   if (worldVisible_ && !training && floraVisible_) {
+    PERF_SCOPE(downCam_ ? "down.grass_cpu_ms" : "main.grass_cpu_ms");
     if (gpuGrassActive_ && gpuGrass_.ready())
       gpuGrass_.render(this, proj_, view, camEye_, sunDir_, floraTime_,
                        lightVP_, shadowTex_, shadowOn_);
@@ -1306,6 +1323,9 @@ void SimRendererWidget::paintGL() {
 #endif
 
   // Static world obstacles (lit solids), each scaled/rotated/placed.
+  // Covers the rest of paintGL: obstacles, pads, drone body, HUD.
+  PERF_SCOPE(downCam_ ? "down.post_terrain_cpu_ms"
+                      : "main.post_terrain_cpu_ms");
   for (int oi = 0; worldVisible_ && !training && oi < obstacles_.size(); ++oi) {
     const vsim::Obstacle &o = obstacles_[oi];
     QMatrix4x4 m;
@@ -1439,7 +1459,27 @@ void SimRendererWidget::paintGL() {
     // Body +X / north arrow: shown in both Vehicle and World modes.
     drawNorthIndicator(view);
   } // end if (!hideBody)
+  if (pf) {
+    gpuScene_.end();
+    perfprobe::record(std::string(pn) + ".scene_cpu_ms",
+                      double(pt.nsecsElapsed()) / 1e6);
+    gpuHud_.begin();
+  }
   paintHud();
+  if (pf) {
+    gpuHud_.end();
+    gpuScene_.poll(downCam_ ? "down.gpu_scene_ms" : "main.gpu_scene_ms");
+    gpuHud_.poll(downCam_ ? "down.gpu_hud_ms" : "main.gpu_hud_ms");
+    perfprobe::paintEnd(pn);
+    const std::string np(pn);
+    perfprobe::record(np + ".draw_calls", drawCalls_);
+    perfprobe::record(np + ".obstacles", obstacles_.size());
+    perfprobe::record(np + ".chunks", double(worldChunks_.size()));
+    double verts = double(worldMesh_.vertex_count);
+    for (auto &kv : worldChunks_)
+      verts += double(kv.second->vertex_count);
+    perfprobe::record(np + ".terrain_kverts", verts / 1000.0);
+  }
   if (glErrorCheck_)
     while (glGetError() != GL_NO_ERROR)
       ++glErrors_;
@@ -1447,6 +1487,7 @@ void SimRendererWidget::paintGL() {
 
 void SimRendererWidget::drawMesh(const Mesh &m, const QMatrix4x4 &mvp,
                                  const QVector3D &color) {
+  ++drawCalls_;
   prog_->bind();
   prog_->setUniformValue(u_mvp_, proj_ * mvp);
   prog_->setUniformValue(u_color_, color);
@@ -1489,6 +1530,7 @@ void SimRendererWidget::buildShadowMap() {
 }
 
 void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks) {
+  PERF_SCOPE(downCam_ ? "down.shadow_cpu_ms" : "main.shadow_cpu_ms");
   shadowOn_ = false;
   if (!shadowReady_ || (!showWorld && !showChunks))
     return;
@@ -1545,6 +1587,7 @@ void SimRendererWidget::drawLit(const Mesh &m, const QMatrix4x4 &view,
                                 bool terrain, float bands) {
   if (m.vertex_count == 0)
     return;
+  ++drawCalls_;
   progLit_->bind();
   progLit_->setUniformValue(ul_mvp_, proj_ * view * model);
   progLit_->setUniformValue(ul_model_, model);
@@ -1646,6 +1689,7 @@ void SimRendererWidget::uploadDroneMesh() {
 }
 
 void SimRendererWidget::uploadWorldMesh() {
+  PERF_SCOPE(downCam_ ? "down.upload_world_ms" : "main.upload_world_ms");
   worldMeshDirty_ = false;
   hasWorldMesh_ = !pendingWorldPos_.empty();
   if (!hasWorldMesh_) {
@@ -1934,6 +1978,7 @@ void SimRendererWidget::clearWorldChunks() {
 }
 
 void SimRendererWidget::flushChunkUpdates() {
+  PERF_SCOPE(downCam_ ? "down.flush_chunks_ms" : "main.flush_chunks_ms");
   chunksDirty_ = false;
   if (clearAllChunks_) {
     eraseAllChunks(); // GL context current here -> safe to destroy

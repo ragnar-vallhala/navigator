@@ -14,6 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "../core/PerfProbe.h"
+#ifdef __linux__
+#include <pthread.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
 #include "SimWorker.h"
 
 #include "SitlModule.h" // runtime-loaded SITL engine (boot/run_step/get_pose/config)
@@ -371,6 +377,13 @@ void SimWorker::startAttach(const QString &posePath) {
 }
 
 void SimWorker::run() {
+#ifdef __linux__
+  if (perfprobe::on()) {
+    pthread_setname_np(pthread_self(), "SimWorker"); // profiler label
+    perfprobe::g_simWorkerTid.store(int(syscall(SYS_gettid)));
+    perfprobe::installAltStack();
+  }
+#endif
   stop_flag_.store(false, std::memory_order_release);
   if (attach_only_)
     runAttach(); // mirror an external sim's pose FIFO

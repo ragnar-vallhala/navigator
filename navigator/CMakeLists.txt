@@ -72,6 +72,7 @@ find_package(Qt6 REQUIRED COMPONENTS
 # degrades gracefully (FR-0d / FR-SIM-10).
 set(GCS_SOURCES
     src/app/main.cpp
+    src/app/PerfHarness.cpp
     src/ui/main/MainStatusBar.cpp
     src/ui/main/MainToolbar.cpp
     src/ui/main/MainWindow.cpp

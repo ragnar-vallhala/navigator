@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "../../core/PerfProbe.h"
 #include "MainWindow.h"
 #include "../core/FaultsModel.h"
 #include "../core/Notify.h"
@@ -1477,6 +1478,7 @@ void MainWindow::refreshConnectionPill() {
 // ---------------------------------------------------------------------------
 
 void MainWindow::onUiTimer() {
+  PERF_SCOPE("ui.onUiTimer_ms");
   static int tick = 0;
   tick++;
 

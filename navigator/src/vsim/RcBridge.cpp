@@ -14,6 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "../core/PerfProbe.h"
+#ifdef __linux__
+#include <pthread.h>
+#endif
 #include "RcBridge.h"
 #include "RcFrame.h"
 
@@ -289,6 +293,10 @@ bool RcBridge::openPty(QString *err) {
 void RcBridge::requestStop() { stop_.store(true, std::memory_order_release); }
 
 void RcBridge::run() {
+#ifdef __linux__
+  if (perfprobe::on())
+    pthread_setname_np(pthread_self(), "RcBridge"); // profiler label
+#endif
   stop_.store(false, std::memory_order_release);
 
   // Throttle idles low; everything else centered until the device reports.

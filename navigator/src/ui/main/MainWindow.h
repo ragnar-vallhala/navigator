@@ -63,6 +63,7 @@ class QMenu;
 
 class MainWindow : public QMainWindow {
   Q_OBJECT
+  friend class PerfHarness; // env-gated profiling harness (app/PerfHarness)
 
 public:
   explicit MainWindow(QWidget *parent = nullptr);

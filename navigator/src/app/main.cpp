@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 #include "Logger.h"
+#include "PerfHarness.h"
 #include "MainWindow.h"
 #include "Theme.h"
 #include "WheelGuard.h"
@@ -33,6 +34,8 @@ int main(int argc, char *argv[]) {
   fmt.setVersion(4, 6);
   fmt.setProfile(QSurfaceFormat::CoreProfile);
   fmt.setSamples(4); // MSAA
+  if (qEnvironmentVariableIsSet("NAVIGATOR_SWAP_INTERVAL")) // measurement only
+    fmt.setSwapInterval(qEnvironmentVariableIntValue("NAVIGATOR_SWAP_INTERVAL"));
   QSurfaceFormat::setDefaultFormat(fmt);
 
   QApplication app(argc, argv);
@@ -70,6 +73,7 @@ int main(int argc, char *argv[]) {
 
   MainWindow w;
   w.show();
+  PerfHarness::maybeStart(&w); // env-gated profiling run, off by default
 
   const int rc = app.exec();
   Logger::shutdown();

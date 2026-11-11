@@ -27,6 +27,7 @@
 #include "DroneModel.h"
 #include "SimWorker.h"
 #include "TrainingCourse.h"
+#include "../core/PerfProbe.h"
 
 #include <QElapsedTimer>
 #include <QMatrix4x4>
@@ -489,6 +490,8 @@ private:
   QImage hudImg_;
   QSize hudSize_;
   qreal hudDpr_ = 0;
+  perfprobe::GlTimer gpuScene_, gpuHud_; // harness-only GL timer queries
+  int drawCalls_ = 0;                    // harness-only: draws this frame
   int hudRenders_ = 0;
   qint64 hudNs_ = 0;
   bool forceChunkCpu_ = false;

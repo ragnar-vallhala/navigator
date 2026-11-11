@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "../../core/PerfProbe.h"
 #include "HorizonHud.h"
 
 #include <QPainter>
@@ -36,6 +37,7 @@ void HorizonHud::setAttitude(float rollDeg, float pitchDeg, float yawDeg) {
 }
 
 void HorizonHud::paintEvent(QPaintEvent *) {
+  PERF_SCOPE("horizon.paint_ms");
   const int W = width(), H = height();
   if (W < 40 || H < 40)
     return;
