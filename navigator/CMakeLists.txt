@@ -87,6 +87,8 @@ set(GCS_SOURCES
     src/ui/widgets/ImuPanel.cpp
     src/ui/widgets/VGauge.cpp
     src/ui/widgets/LogPanel.cpp
+    src/ui/widgets/FaultsPanel.cpp
+    src/core/FaultsModel.cpp
     src/core/crc.cpp
     src/core/CommandRegistry.cpp
     src/core/ShortcutsManager.cpp
@@ -144,6 +146,8 @@ set(GCS_HEADERS
     src/ui/widgets/AttitudeWidget.h
     src/ui/widgets/ImuPanel.h
     src/ui/widgets/LogPanel.h
+    src/ui/widgets/FaultsPanel.h
+    src/core/FaultsModel.h
     src/core/Types.h
     src/core/crc.h
     src/core/Command.h
@@ -421,6 +425,13 @@ endif()
 
 message(STATUS "Qt6 Navigator build configured")
 message(STATUS "Qt6 version: ${Qt6_VERSION}")
+
+# Workspace mock (docking prototype). Standalone; skipped unless Qt Advanced
+# Docking System is found. See tools/workspace_mock/CMakeLists.txt.
+option(NAVIGATOR_WORKSPACE_MOCK "Build the docking/workspace mock app" ON)
+if(NAVIGATOR_WORKSPACE_MOCK)
+    add_subdirectory(tools/workspace_mock)
+endif()
 
 # -------------------------------------------------------
 # Unit tests (QtTest + ctest). On by default; -DNAVIGATOR_BUILD_TESTS=OFF

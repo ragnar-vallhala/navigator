@@ -54,6 +54,7 @@ signals:
   void hslStatusReceived(const HslStatusData &data);
   void flightModeReceived(quint8 mode, quint8 source);
   void logReceived(const QString &message);
+  void faultReceived(const FaultEvent &fault);
   void statusReceived(const QString &message);
   void calibrationUpdateReceived(const CalibrationUpdate &update);
   void heartbeatReceived(uint64_t timestamp, uint8_t deviceId);

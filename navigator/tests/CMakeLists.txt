@@ -109,6 +109,10 @@ endif()
 navigator_test(tst_start_gate tst_start_gate.cpp)
 target_include_directories(tst_start_gate PRIVATE ${SRC}/ui/widgets)
 
+# ---- Custom-vehicle untuned warning logic (header only) ---------------------
+navigator_test(tst_custom_vehicle_warning tst_custom_vehicle_warning.cpp)
+target_include_directories(tst_custom_vehicle_warning PRIVATE ${SRC}/ui/widgets)
+
 # ---- C++ autotune engine (Space + orchestration, synthetic rollout) -------
 navigator_test(tst_autotune_engine
     tst_autotune_engine.cpp
@@ -365,3 +369,29 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
       TIMEOUT 120)
 endif()
+
+# ---- Workspace manager (docking layer behind the workspace mock) -----------
+# Needs Qt Advanced Docking System; skipped, like the mock, when it is absent.
+if(TARGET navigator_workspace)
+    navigator_test(tst_workspace_manager tst_workspace_manager.cpp)
+    target_link_libraries(tst_workspace_manager PRIVATE navigator_workspace)
+endif()
+
+# QOpenGLWidget inside the dock layer: skips on "offscreen" (see the file).
+if(TARGET navigator_workspace)
+    navigator_test(tst_workspace_gl tst_workspace_gl.cpp
+        ${CMAKE_SOURCE_DIR}/tools/workspace_mock/GlPanel.h)
+    target_include_directories(tst_workspace_gl PRIVATE
+        ${CMAKE_SOURCE_DIR}/tools/workspace_mock)
+    target_link_libraries(tst_workspace_gl PRIVATE navigator_workspace
+        Qt6::OpenGLWidgets)
+endif()
+
+# ---- FAULT_STATUS: faults model, router decode, panel badge ---------------
+navigator_test(tst_faults
+    tst_faults.cpp
+    ${SRC}/core/FaultsModel.cpp
+    ${SRC}/protocol/NavlinkRouter.cpp
+    ${SRC}/ui/widgets/FaultsPanel.cpp)
+target_include_directories(tst_faults PRIVATE ${SRC}/ui/widgets)
+target_link_libraries(tst_faults PRIVATE navlink_codec)

@@ -293,3 +293,16 @@ struct PerfReport {
   QVector<PerfTaskRow> tasks;
   QVector<PerfFifoRow> fifos;
 };
+
+// -----------------------------------------------------------
+// FAULT_STATUS (NavLink msgid 11): one latched fault, raised or cleared.
+// `name` is the faults.json key for a known id (empty if the id is not in the
+// table the GCS was built against); `text` is the frame's own text.
+// -----------------------------------------------------------
+struct FaultEvent {
+  uint16_t id = 0;
+  uint8_t severity = 6; // syslog-style: 0 EMERGENCY .. 7 DEBUG
+  bool active = false;  // true = raised, false = cleared
+  QString name;
+  QString text;
+};

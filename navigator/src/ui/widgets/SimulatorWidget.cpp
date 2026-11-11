@@ -581,6 +581,9 @@ void SimulatorWidget::buildUi() {
     connect(m_geomEditor, &GeometryEditorWidget::previewUpdated, this, [this] {
       applyGeometryToRenderer();
       persistGeometry(m_geomEditor->config());
+      // Any edit makes an earlier autotune result stale for this vehicle.
+      m_customTune.onVehicleChanged();
+      updateCustomWarning(false);
     });
     // Gizmo edits in the 3D view flow back into the editor (CoM frame).
     connect(m_renderer, &vsim::SimRendererWidget::motorEdited, m_geomEditor,
@@ -588,6 +591,8 @@ void SimulatorWidget::buildUi() {
     connect(m_geomEditor, &GeometryEditorWidget::presetChosen, this,
             [this](const QString &id) {
               m_presetId = id;
+              m_customTune.onVehicleChanged();
+              updateCustomWarning(false);
               applyGeometryToRenderer(); // the model depicts the new class
               // Preset changed (or went Custom): the old round is moot. The
               // new set is armed when Apply pushes it.
@@ -729,6 +734,22 @@ void SimulatorWidget::buildUi() {
     m_simStatusLabel->setStyleSheet(
         QString("color: %1;").arg(Theme::hex(Theme::kTextMuted)));
     sv->addWidget(m_simStatusLabel);
+
+    // Non-modal notice, shown when Start is pressed on an untuned Custom
+    // vehicle. Never blocks Start. The link jumps to the Autotune page.
+    m_customWarnLabel = new QLabel(simBody);
+    m_customWarnLabel->setObjectName(QStringLiteral("customVehicleWarning"));
+    m_customWarnLabel->setWordWrap(true);
+    m_customWarnLabel->setTextFormat(Qt::RichText);
+    m_customWarnLabel->setStyleSheet(
+        QString("color: %1; font-size: 11px;").arg(Theme::hex(Theme::kWarn)));
+    m_customWarnLabel->setText(
+        tr("Custom vehicle: no tuned gains. Stock gains may be unstable; run "
+           "the autotuner first. <a href=\"#autotune\">Open Autotune</a>"));
+    m_customWarnLabel->hide();
+    connect(m_customWarnLabel, &QLabel::linkActivated, this,
+            [this] { setMode(2); });
+    sv->addWidget(m_customWarnLabel);
 
     auto *runRow = new QGridLayout();
     runRow->setContentsMargins(0, 0, 0, 0);
@@ -2154,6 +2175,11 @@ void SimulatorWidget::applyProposedGains() {
           .arg(cmds.size()));
 }
 
+void SimulatorWidget::notifyPidGainsSent() {
+  m_customTune.onGainsApplied();
+  updateCustomWarning(false);
+}
+
 void SimulatorWidget::updateHud(const vsim::SimSnapshot &s) {
   m_lastDronePos = s.pos_w; // tracked for the lift-onto-terrain logic
   m_lastDroneVel = s.vel_w;
@@ -3346,9 +3372,17 @@ void SimulatorWidget::applyStartBlock() {
   }
 }
 
+void SimulatorWidget::updateCustomWarning(bool atStart) {
+  if (!m_customWarnLabel)
+    return;
+  const bool custom = !vsim::findAirframePreset(m_presetId);
+  m_customWarnLabel->setVisible(atStart && m_customTune.shouldWarn(custom));
+}
+
 void SimulatorWidget::startInAppSim() {
   if (m_sim || startBlocked())
     return;
+  updateCustomWarning(true); // informational only; never blocks Start
 
   // Per-instance path isolation: publish a suffix for this Navigator process in
   // the environment BEFORE the engine boots (the firmware shim caches its
