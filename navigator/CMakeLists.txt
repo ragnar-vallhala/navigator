@@ -88,6 +88,9 @@ set(GCS_SOURCES
     src/ui/widgets/VGauge.cpp
     src/ui/widgets/LogPanel.cpp
     src/ui/widgets/FaultsPanel.cpp
+    src/ui/widgets/AttitudePanel.cpp
+    src/ui/widgets/NumbersPanel.cpp
+    src/ui/widgets/LogsPanel.cpp
     src/core/FaultsModel.cpp
     src/core/crc.cpp
     src/core/CommandRegistry.cpp
@@ -147,6 +150,10 @@ set(GCS_HEADERS
     src/ui/widgets/ImuPanel.h
     src/ui/widgets/LogPanel.h
     src/ui/widgets/FaultsPanel.h
+    src/ui/widgets/AttitudePanel.h
+    src/ui/widgets/NumbersPanel.h
+    src/ui/widgets/LogsPanel.h
+    src/ui/widgets/HomePanelIds.h
     src/core/FaultsModel.h
     src/core/Types.h
     src/core/crc.h
