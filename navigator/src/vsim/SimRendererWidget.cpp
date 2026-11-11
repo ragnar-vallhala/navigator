@@ -19,12 +19,20 @@
 #include "procgen/PropStyle.h"
 
 #include <QCursor>
+#include <QElapsedTimer>
+#include <QEventLoop>
+#include <QTimer>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QOpenGLContext>
+#include <QPainter>
+#include <QSurfaceFormat>
+#include <QWidget>
 #include <QWheelEvent>
 #include <QtMath>
 
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <vector>
 
@@ -440,10 +448,118 @@ void main() {
 
 } // namespace
 
-SimRendererWidget::SimRendererWidget(QWidget *parent) : QOpenGLWidget(parent) {
-  setMouseTracking(false);
-  setMinimumSize(400, 300);
-  setFocusPolicy(Qt::StrongFocus); // needs key focus for G/R/X/Y/Z/Esc
+SimRendererWidget::SimRendererWidget(QWindow *parent)
+    : QOpenGLWindow(NoPartialUpdate, parent) {
+  // The widget used to get depth/stencil from its FBO; a window must ask for
+  // them (QPainter needs the stencil for the HUD's clipping).
+  // (Mouse tracking needs no switch here: a QWindow always receives moves with
+  // no button held, which the G/R/S gizmo tools rely on.)
+  QSurfaceFormat f = QSurfaceFormat::defaultFormat();
+  f.setDepthBufferSize(24);
+  f.setStencilBufferSize(8);
+  setFormat(f);
+}
+
+void SimRendererWidget::setHudWidget(QWidget *w) {
+  if (hud_)
+    disconnect(hud_, nullptr, this, nullptr);
+  hud_ = w;
+  hudDirty_ = true;
+  hudHasSignal_ = w && w->metaObject()->indexOfSignal("changed()") >= 0;
+  if (hudHasSignal_)
+    connect(w, SIGNAL(changed()), this, SLOT(invalidateHud()));
+  update();
+}
+
+void SimRendererWidget::setHudVisible(bool on) {
+  if (on && !hudVisible_)
+    hudDirty_ = true; // content may have changed while it was hidden
+  hudVisible_ = on;
+  update();
+}
+
+void SimRendererWidget::invalidateHud() {
+  hudDirty_ = true;
+  if (hudVisible_)
+    update();
+}
+
+QImage SimRendererWidget::grabFrame(int timeoutMs) {
+  if (!isExposed())
+    return QImage();
+  QEventLoop loop;
+  QTimer guard;
+  guard.setSingleShot(true);
+  connect(&guard, &QTimer::timeout, &loop, &QEventLoop::quit);
+  int swaps = 0; // the first swap may be a frame that started before this call
+  const QMetaObject::Connection c =
+      connect(this, &QOpenGLWindow::frameSwapped, &loop, [&] {
+        if (++swaps >= 2)
+          loop.quit();
+        else
+          update();
+      });
+  update();
+  guard.start(timeoutMs);
+  loop.exec();
+  disconnect(c);
+  return grabFramebuffer();
+}
+
+// QPainter leaves blending, depth, stencil, scissor, the bound program and VAO
+// in its own state; every frame starts from the one the scene expects.
+void SimRendererWidget::resetGlState() {
+  glBindFramebuffer(GL_FRAMEBUFFER, context()->defaultFramebufferObject());
+  glViewport(0, 0, fbW_, fbH_);
+  glUseProgram(0);
+  glBindVertexArray(0);
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+  glActiveTexture(GL_TEXTURE0);
+  glBindTexture(GL_TEXTURE_2D, 0);
+  glDisable(GL_BLEND);
+  glDisable(GL_SCISSOR_TEST);
+  glDisable(GL_STENCIL_TEST);
+  glDisable(GL_CULL_FACE);
+  glEnable(GL_DEPTH_TEST);
+  glDepthFunc(GL_LESS);
+  glDepthMask(GL_TRUE);
+  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+  glEnable(GL_LINE_SMOOTH);
+  glClearColor(0.08f, 0.09f, 0.11f, 1.0f);
+}
+
+// Composites the HUD widget over the finished frame. The widget is never on
+// screen: it is rendered into an ARGB image at the window's size (device pixels
+// honoured) and drawn with QPainter on the GL window.
+void SimRendererWidget::paintHud() {
+  if (!hud_ || !hudVisible_ || width() <= 0 || height() <= 0)
+    return;
+  QElapsedTimer t;
+  t.start();
+  const qreal dpr = devicePixelRatio();
+  const QSize sz(width(), height());
+  // Re-render only when the HUD changed, the size / pixel ratio changed, or
+  // the HUD cannot tell us (no changed() signal) or caching is off. An image
+  // that is unchanged keeps its cacheKey, so QPainter reuses the texture it
+  // already uploaded instead of sending the pixels again.
+  if (!hudCache_ || !hudHasSignal_ || hudDirty_ || sz != hudSize_ ||
+      dpr != hudDpr_ || hudImg_.isNull()) {
+    hudImg_ = QImage(sz * dpr, QImage::Format_ARGB32_Premultiplied);
+    hudImg_.setDevicePixelRatio(dpr);
+    hudImg_.fill(Qt::transparent);
+    hud_->resize(sz);
+    hud_->render(&hudImg_);
+    hudSize_ = sz;
+    hudDpr_ = dpr;
+    hudDirty_ = false;
+    ++hudRenders_;
+  }
+  glDisable(GL_DEPTH_TEST);
+  QPainter p(this);
+  p.drawImage(0, 0, hudImg_);
+  p.end();
+  resetGlState();
+  hudNs_ += t.nsecsElapsed();
 }
 
 void SimRendererWidget::setMotorsEditable(bool on) {
@@ -477,17 +593,226 @@ void SimRendererWidget::selectObstacle(int index) {
   update();
 }
 
+namespace {
+std::atomic<int> g_chunkReadBacks{0};
+}
+int SimRendererWidget::chunkReadBacks() { return g_chunkReadBacks; }
+
 SimRendererWidget::~SimRendererWidget() {
-  // Need a current context to release GL resources cleanly.
-  makeCurrent();
-  for (Mesh *m :
-       {&ground_, &axes_, &body_, &rotor_, &thrustLine_, &comMarker_,
-        &gizmoArrow_, &gizmoRing_, &digitMesh_[0], &digitMesh_[1],
-        &digitMesh_[2], &digitMesh_[3], &northArrow_, &glyphN_, &locator_, &droneMesh_}) {
-    m->vbo.destroy();
-    m->vao.destroy();
+  // Free the GL side while a context is still current. Nothing will use the
+  // streamed data again, so no read-back (readBack=false). Disconnect first so
+  // the context, which QOpenGLWindow deletes after this body has run, cannot
+  // call back into a half-destroyed object.
+  if (glCtx_)
+    disconnect(glCtx_, nullptr, this, nullptr);
+  if (glLive_) {
+    makeCurrent();
+    releaseGLResources(false);
+    doneCurrent();
   }
+}
+
+// Chunk bookkeeping that frees the GL objects: a Mesh's destructor does not
+// delete its QOpenGLBuffer, so every drop goes through release() first.
+bool SimRendererWidget::chunkCpuMode() const {
+  return forceChunkCpu_ || (context() && context()->isOpenGLES());
+}
+
+void SimRendererWidget::eraseChunk(qint64 key) {
+  const auto it = worldChunks_.find(key);
+  if (it == worldChunks_.end())
+    return;
+  it->second->release();
+  worldChunks_.erase(it);
+  chunkCpu_.erase(key);
+}
+
+void SimRendererWidget::eraseAllChunks() {
+  for (auto &kv : worldChunks_)
+    kv.second->release();
+  worldChunks_.clear();
+  chunkCpu_.clear();
+}
+
+template <class F> void SimRendererWidget::forEachMesh(F &&f) {
+  for (Mesh *m :
+       {&ground_,    &unitBox_,     &unitSphere_,  &horizonQuad_, &unitCyl_,
+        &helipadDisk_, &helipadMark_, &axes_,       &body_,        &modelBody_,
+        &rotor_,     &thrustLine_,  &comMarker_,   &gizmoArrow_,  &gizmoRing_,
+        &locator_,   &northArrow_,  &glyphN_,      &ring_,        &guideArrow_,
+        &droneMesh_, &worldMesh_})
+    f(*m);
+  for (Mesh &m : modelProp_)
+    f(m);
+  for (Mesh &m : digitMesh_)
+    f(m);
+}
+
+int SimRendererWidget::liveGlObjects() const {
+  int n = 0;
+  const_cast<SimRendererWidget *>(this)->forEachMesh(
+      [&](Mesh &m) { n += m.liveObjects(); });
+  for (const auto &kv : worldChunks_)
+    n += kv.second->liveObjects();
+  n += skyVao_.isCreated() ? 1 : 0;
+  n += (prog_ ? 1 : 0) + (progLit_ ? 1 : 0) + (progDepth_ ? 1 : 0) +
+       (progSky_ ? 1 : 0);
+  n += (shadowFbo_ ? 1 : 0) + (shadowTex_ ? 1 : 0);
+#ifdef VAYU_SIM_GRASS
+  n += progFlora_ ? 1 : 0;
+  for (const QOpenGLBuffer &b : grassVbo_)
+    n += b.isCreated() ? 1 : 0;
+  n += floraVao_.isCreated() ? 1 : 0;
+  for (const auto &kv : floraChunks_)
+    n += kv.second->inst.isCreated() ? 1 : 0;
+  n += gpuGrass_.liveObjects();
+#endif
+  return n;
+}
+
+// Frees every GL object (the context must be current) and puts back into the
+// pending queues whatever the next context has to re-upload. Nothing here may
+// assume the objects exist: it runs from the destructor and from the context's
+// aboutToBeDestroyed, possibly both.
+void SimRendererWidget::releaseGLResources(bool readBack) {
+  if (!glLive_)
+    return;
+  glLive_ = false;
+
+  // Streamed terrain chunks normally have no CPU copy (a copy would double the
+  // memory of the whole loaded terrain), so when a following context needs
+  // them each VBO is read back into the upload queue before the buffer goes.
+  // glGetBufferSubData does not exist on GLES, so there (or when forced) the
+  // copy made at upload time is used instead. Teardown (destructor, context
+  // going away) reads nothing: the data is not wanted and the context may be
+  // on its way out. Re-queued chunks go ahead of anything still pending, which
+  // is newer and overrides them by key.
+  if (clearAllChunks_) { // a queued clear: nothing of the old set survives
+    eraseAllChunks();
+    pendingChunkRemovals_.clear();
+    clearAllChunks_ = false;
+  }
+  for (const qint64 key : pendingChunkRemovals_)
+    eraseChunk(key);
+  pendingChunkRemovals_.clear();
+  if (readBack) {
+    std::vector<PendingChunk> back;
+    for (auto &kv : worldChunks_) {
+      PendingChunk pc;
+      pc.key = kv.first;
+      Mesh &m = *kv.second;
+      const auto cit = chunkCpu_.find(kv.first);
+      if (cit != chunkCpu_.end()) {
+        pc.data = std::move(cit->second);
+        back.push_back(std::move(pc));
+      } else if (!chunkCpuMode() && m.vbo.isCreated() && m.vbo.bind()) {
+        const int bytes = m.vbo.size();
+        pc.data.resize(size_t(std::max(bytes, 0)) / sizeof(float));
+        ++g_chunkReadBacks;
+        if (bytes > 0 && m.vbo.read(0, pc.data.data(), bytes))
+          back.push_back(std::move(pc));
+        else
+          qWarning("[SimRenderer] chunk %lld could not be read back; dropped",
+                   static_cast<long long>(kv.first));
+        m.vbo.release();
+      }
+    }
+    for (PendingChunk &pc : pendingChunkUploads_)
+      back.push_back(std::move(pc));
+    pendingChunkUploads_ = std::move(back);
+    chunksDirty_ = !pendingChunkUploads_.empty();
+  }
+  eraseAllChunks();
+
+#ifdef VAYU_SIM_GRASS
+  if (clearAllFlora_) {
+    eraseAllFlora();
+    pendingFloraRemovals_.clear();
+    clearAllFlora_ = false;
+  }
+  for (const qint64 key : pendingFloraRemovals_)
+    eraseFlora(key);
+  pendingFloraRemovals_.clear();
+  if (readBack) {
+    std::vector<PendingFlora> floraBack;
+    for (auto &kv : floraChunks_) {
+      FloraChunk &fc = *kv.second;
+      const auto cit = floraCpu_.find(kv.first);
+      if (cit != floraCpu_.end()) {
+        floraBack.push_back(std::move(cit->second));
+      } else if (!chunkCpuMode() && fc.inst.isCreated() && fc.inst.bind()) {
+        PendingFlora pf;
+        pf.key = kv.first;
+        pf.count = fc.count;
+        pf.cx = fc.cx;
+        pf.cy = fc.cy;
+        pf.half = fc.half;
+        const int bytes = fc.inst.size();
+        pf.data.resize(size_t(std::max(bytes, 0)) / sizeof(float));
+        ++g_chunkReadBacks;
+        if (bytes > 0 && fc.inst.read(0, pf.data.data(), bytes))
+          floraBack.push_back(std::move(pf));
+        fc.inst.release();
+      }
+    }
+    for (PendingFlora &pf : pendingFloraUploads_)
+      floraBack.push_back(std::move(pf));
+    pendingFloraUploads_ = std::move(floraBack);
+    floraDirty_ = !pendingFloraUploads_.empty();
+  }
+  eraseAllFlora();
+  gpuGrass_.release(this);
+  for (QOpenGLBuffer &b : grassVbo_)
+    b.destroy();
+  for (int &v : grassVerts_)
+    v = 0;
+  floraVao_.destroy();
+  progFlora_.reset();
+#endif
+
+  forEachMesh([](Mesh &m) { m.release(); });
   skyVao_.destroy();
+  prog_.reset();
+  progLit_.reset();
+  progDepth_.reset();
+  progSky_.reset();
+  if (shadowFbo_)
+    glDeleteFramebuffers(1, &shadowFbo_);
+  if (shadowTex_)
+    glDeleteTextures(1, &shadowTex_);
+  shadowFbo_ = shadowTex_ = 0;
+  shadowReady_ = shadowOn_ = false;
+
+  // Everything CPU-side that the GL objects were built from is still held:
+  // the drone mesh and the world mesh (pendingPos_/pendingWorldPos_), the
+  // layout the procedural airframe is rebuilt from, and the static meshes are
+  // regenerated by initResources. Flag the lazy uploads to run again.
+  meshDirty_ = true;
+  worldMeshDirty_ = true;
+  modelDirty_ = true;
+}
+
+void SimRendererWidget::resetGlResources() {
+  makeCurrent();
+  releaseGLResources(true); // same context stays; later frames need the data
+  initResources();
+  doneCurrent();
+  update();
+}
+
+// aboutToBeDestroyed slot: the window's native context is being destroyed
+// (undock / re-create) but THIS renderer lives on and will get a new context
+// from initializeGL. Qt emits the signal with the context still current-able,
+// so the VBOs can be read: readBack=true re-queues the streamed terrain and
+// flora, whose only copy is on the GPU, for the next context. Safe to call
+// when nothing is live.
+void SimRendererWidget::onContextGone() {
+  if (!glLive_)
+    return;
+  ++goneCount_;
+  makeCurrent();
+  goneCurrent_ = QOpenGLContext::currentContext() == glCtx_;
+  releaseGLResources(true);
   doneCurrent();
 }
 
@@ -644,72 +969,89 @@ void SimRendererWidget::setComMarker(const QVector3D &com) {
   update();
 }
 
-void SimRendererWidget::initializeGL() {
+void SimRendererWidget::initializeGL() { initResources(); }
+
+namespace {
+std::unique_ptr<QOpenGLShaderProgram>
+buildProgram(const char *name, const QByteArray &vs, const QByteArray &fs) {
+  auto p = std::make_unique<QOpenGLShaderProgram>();
+  if (!p->addShaderFromSourceCode(QOpenGLShader::Vertex, vs) ||
+      !p->addShaderFromSourceCode(QOpenGLShader::Fragment, fs) || !p->link())
+    qWarning("[SimRenderer] %s program failed:\n%s", name,
+             p->log().toLocal8Bit().constData());
+  return p;
+}
+} // namespace
+
+void SimRendererWidget::initResources() {
+  // A new context: anything still held belongs to the previous one and is
+  // released first, so init can run any number of times without leaking or
+  // adding shaders to an already-linked program.
+  // Handles of a context that is already gone: the objects cannot be read
+  // (and onContextGone, which does read, has already run when it could).
+  if (glLive_)
+    releaseGLResources(false);
   initializeOpenGLFunctions();
+  if (context() != glCtx_) {
+    glCtx_ = context();
+    connect(glCtx_, &QOpenGLContext::aboutToBeDestroyed, this,
+            &SimRendererWidget::onContextGone, Qt::DirectConnection);
+  }
+  glLive_ = true;
+  ++glInitCount_;
   glClearColor(0.08f, 0.09f, 0.11f, 1.0f);
   glEnable(GL_DEPTH_TEST);
   glEnable(GL_LINE_SMOOTH);
 
-  prog_.addShaderFromSourceCode(QOpenGLShader::Vertex, kVertexShader);
-  prog_.addShaderFromSourceCode(QOpenGLShader::Fragment, kFragmentShader);
-  prog_.link();
-  u_mvp_ = prog_.uniformLocation("u_mvp");
-  u_color_ = prog_.uniformLocation("u_color");
+  prog_ = buildProgram("flat", kVertexShader, kFragmentShader);
+  u_mvp_ = prog_->uniformLocation("u_mvp");
+  u_color_ = prog_->uniformLocation("u_color");
 
-  progLit_.addShaderFromSourceCode(QOpenGLShader::Vertex, kLitVertexShader);
-  progLit_.addShaderFromSourceCode(
-      QOpenGLShader::Fragment, QByteArray(kLitFragmentHead) + kAtmosphereGLSL +
-                                   kShadowGLSL + kLitFragmentMain);
-  progLit_.link();
-  ul_mvp_ = progLit_.uniformLocation("u_mvp");
-  ul_model_ = progLit_.uniformLocation("u_model");
-  ul_nmat_ = progLit_.uniformLocation("u_nmat");
-  ul_color_ = progLit_.uniformLocation("u_color");
-  ul_sundir_ = progLit_.uniformLocation("u_sundir");
-  ul_campos_ = progLit_.uniformLocation("u_campos");
-  ul_fogdensity_ = progLit_.uniformLocation("u_fogdensity");
-  ul_fogstart_ = progLit_.uniformLocation("u_fogstart");
-  ul_lightvp_ = progLit_.uniformLocation("u_lightvp");
-  ul_shadowtex_ = progLit_.uniformLocation("u_shadowtex");
-  ul_shadowon_ = progLit_.uniformLocation("u_shadowon");
-  ul_drone_ = progLit_.uniformLocation("u_drone");
-  ul_droner_ = progLit_.uniformLocation("u_droner");
-  ul_sunint_ = progLit_.uniformLocation("u_sunint");
-  ul_ambstr_ = progLit_.uniformLocation("u_ambstr");
-  ul_terrain_ = progLit_.uniformLocation("u_terrain");
-  ul_bands_ = progLit_.uniformLocation("u_bands");
+  progLit_ = buildProgram("lit", kLitVertexShader,
+                          QByteArray(kLitFragmentHead) + kAtmosphereGLSL +
+                              kShadowGLSL + kLitFragmentMain);
+  ul_mvp_ = progLit_->uniformLocation("u_mvp");
+  ul_model_ = progLit_->uniformLocation("u_model");
+  ul_nmat_ = progLit_->uniformLocation("u_nmat");
+  ul_color_ = progLit_->uniformLocation("u_color");
+  ul_sundir_ = progLit_->uniformLocation("u_sundir");
+  ul_campos_ = progLit_->uniformLocation("u_campos");
+  ul_fogdensity_ = progLit_->uniformLocation("u_fogdensity");
+  ul_fogstart_ = progLit_->uniformLocation("u_fogstart");
+  ul_lightvp_ = progLit_->uniformLocation("u_lightvp");
+  ul_shadowtex_ = progLit_->uniformLocation("u_shadowtex");
+  ul_shadowon_ = progLit_->uniformLocation("u_shadowon");
+  ul_drone_ = progLit_->uniformLocation("u_drone");
+  ul_droner_ = progLit_->uniformLocation("u_droner");
+  ul_sunint_ = progLit_->uniformLocation("u_sunint");
+  ul_ambstr_ = progLit_->uniformLocation("u_ambstr");
+  ul_terrain_ = progLit_->uniformLocation("u_terrain");
+  ul_bands_ = progLit_->uniformLocation("u_bands");
 
-  progDepth_.addShaderFromSourceCode(QOpenGLShader::Vertex, kDepthVertexShader);
-  progDepth_.addShaderFromSourceCode(QOpenGLShader::Fragment,
-                                     kDepthFragmentShader);
-  progDepth_.link();
-  ud_lightmvp_ = progDepth_.uniformLocation("u_lightmvp");
+  progDepth_ = buildProgram("depth", kDepthVertexShader, kDepthFragmentShader);
+  ud_lightmvp_ = progDepth_->uniformLocation("u_lightmvp");
   buildShadowMap();
 
-  progSky_.addShaderFromSourceCode(QOpenGLShader::Vertex, kSkyVertexShader);
-  progSky_.addShaderFromSourceCode(QOpenGLShader::Fragment,
-                                   QByteArray(kSkyFragmentHead) +
-                                       kAtmosphereGLSL + kSkyFragmentMain);
-  progSky_.link();
-  us_invvp_ = progSky_.uniformLocation("u_invvp");
-  us_sundir_ = progSky_.uniformLocation("u_sundir");
-  us_time_ = progSky_.uniformLocation("u_time");
+  progSky_ = buildProgram("sky", kSkyVertexShader,
+                          QByteArray(kSkyFragmentHead) + kAtmosphereGLSL +
+                              kSkyFragmentMain);
+  us_invvp_ = progSky_->uniformLocation("u_invvp");
+  us_sundir_ = progSky_->uniformLocation("u_sundir");
+  us_time_ = progSky_->uniformLocation("u_time");
   skyVao_.create(); // core profile needs a bound VAO even with no attributes
 
 #ifdef VAYU_SIM_GRASS
-  progFlora_.addShaderFromSourceCode(QOpenGLShader::Vertex, kFloraVertexShader);
-  progFlora_.addShaderFromSourceCode(QOpenGLShader::Fragment,
-                                     QByteArray(kFloraFragmentHead) +
-                                         kAtmosphereGLSL + kFloraFragmentMain);
-  progFlora_.link();
-  uf_vp_ = progFlora_.uniformLocation("u_vp");
-  uf_campos_ = progFlora_.uniformLocation("u_campos");
-  uf_time_ = progFlora_.uniformLocation("u_time");
-  uf_fadestart_ = progFlora_.uniformLocation("u_fadestart");
-  uf_fadeend_ = progFlora_.uniformLocation("u_fadeend");
-  uf_sundir_ = progFlora_.uniformLocation("u_sundir");
-  uf_fogdensity_ = progFlora_.uniformLocation("u_fogdensity");
-  uf_fogstart_ = progFlora_.uniformLocation("u_fogstart");
+  progFlora_ = buildProgram("flora", kFloraVertexShader,
+                            QByteArray(kFloraFragmentHead) + kAtmosphereGLSL +
+                                kFloraFragmentMain);
+  uf_vp_ = progFlora_->uniformLocation("u_vp");
+  uf_campos_ = progFlora_->uniformLocation("u_campos");
+  uf_time_ = progFlora_->uniformLocation("u_time");
+  uf_fadestart_ = progFlora_->uniformLocation("u_fadestart");
+  uf_fadeend_ = progFlora_->uniformLocation("u_fadeend");
+  uf_sundir_ = progFlora_->uniformLocation("u_sundir");
+  uf_fogdensity_ = progFlora_->uniformLocation("u_fogdensity");
+  uf_fogstart_ = progFlora_->uniformLocation("u_fogstart");
   buildGrassBlade();
   gpuGrass_.init(this); // GPU grass if the context supports compute (4.3+)
 #endif
@@ -737,10 +1079,12 @@ void SimRendererWidget::initializeGL() {
   buildGuideArrow();
 }
 
-void SimRendererWidget::resizeGL(int w, int h) {
-  fbW_ = w;
-  fbH_ = h;
-  glViewport(0, 0, w, h);
+void SimRendererWidget::resizeGL(int, int) {
+  // Device pixels, whatever the framework passes: the GL viewport and the
+  // projection aspect need them; input and picking stay in logical pixels.
+  fbW_ = std::max(1, int(std::lround(width() * devicePixelRatio())));
+  fbH_ = std::max(1, int(std::lround(height() * devicePixelRatio())));
+  glViewport(0, 0, fbW_, fbH_);
   nearCur_ = 0.0f; // force a rebuild with the new aspect
   updateProjection();
 }
@@ -846,6 +1190,16 @@ QMatrix4x4 SimRendererWidget::cameraView() const {
 }
 
 void SimRendererWidget::paintGL() {
+  // After a context-gone the resources were released (and the streamed data
+  // queued); come back up on whatever context is current. initializeGL does
+  // this when Qt makes a new context; this covers a drop that Qt does not
+  // follow with initializeGL.
+  if (!glLive_)
+    initResources();
+  resetGlState();
+  if (glErrorCheck_)
+    while (glGetError() != GL_NO_ERROR) {
+    } // not ours: whatever the framework left
   updateProjection();
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   if (meshDirty_)
@@ -892,14 +1246,14 @@ void SimRendererWidget::paintGL() {
   // Sky-dome background (gradient + sun glow along the per-pixel view ray).
   // Drawn first with depth test off so the scene paints over it.
   glDisable(GL_DEPTH_TEST);
-  progSky_.bind();
-  progSky_.setUniformValue(us_invvp_, (proj_ * view).inverted());
-  progSky_.setUniformValue(us_sundir_, sunDir_);
-  progSky_.setUniformValue(us_time_, floraTime_);
+  progSky_->bind();
+  progSky_->setUniformValue(us_invvp_, (proj_ * view).inverted());
+  progSky_->setUniformValue(us_sundir_, sunDir_);
+  progSky_->setUniformValue(us_time_, floraTime_);
   skyVao_.bind();
   glDrawArrays(GL_TRIANGLES, 0, 3);
   skyVao_.release();
-  progSky_.release();
+  progSky_->release();
   glEnable(GL_DEPTH_TEST);
 
   // Reference ground grid at z=0 — skipped when an imported world mesh is
@@ -1085,17 +1439,21 @@ void SimRendererWidget::paintGL() {
     // Body +X / north arrow: shown in both Vehicle and World modes.
     drawNorthIndicator(view);
   } // end if (!hideBody)
+  paintHud();
+  if (glErrorCheck_)
+    while (glGetError() != GL_NO_ERROR)
+      ++glErrors_;
 }
 
 void SimRendererWidget::drawMesh(const Mesh &m, const QMatrix4x4 &mvp,
                                  const QVector3D &color) {
-  prog_.bind();
-  prog_.setUniformValue(u_mvp_, proj_ * mvp);
-  prog_.setUniformValue(u_color_, color);
+  prog_->bind();
+  prog_->setUniformValue(u_mvp_, proj_ * mvp);
+  prog_->setUniformValue(u_color_, color);
   QOpenGLVertexArrayObject::Binder b(
       const_cast<QOpenGLVertexArrayObject *>(&m.vao));
   glDrawArrays(m.primitive, 0, m.vertex_count);
-  prog_.release();
+  prog_->release();
 }
 
 #ifndef GL_DEPTH_COMPONENT32F
@@ -1125,7 +1483,7 @@ void SimRendererWidget::buildShadowMap() {
   shadowReady_ =
       glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
   glBindTexture(GL_TEXTURE_2D, 0);
-  glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
+  glBindFramebuffer(GL_FRAMEBUFFER, context()->defaultFramebufferObject());
   if (!shadowReady_)
     qInfo("[SimRenderer] shadow FBO incomplete -> shadows disabled.");
 }
@@ -1152,11 +1510,11 @@ void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks) {
   glViewport(0, 0, shadowSize_, shadowSize_);
   glClear(GL_DEPTH_BUFFER_BIT);
   glEnable(GL_DEPTH_TEST);
-  progDepth_.bind();
+  progDepth_->bind();
   auto drawDepth = [&](const Mesh &m) {
     if (m.vertex_count == 0)
       return;
-    progDepth_.setUniformValue(ud_lightmvp_,
+    progDepth_->setUniformValue(ud_lightmvp_,
                                lightVP_); // model = identity (world)
     QOpenGLVertexArrayObject::Binder b(
         const_cast<QOpenGLVertexArrayObject *>(&m.vao));
@@ -1171,13 +1529,13 @@ void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks) {
   // Helipad platforms cast shadows too (each has its own model transform).
   if (helipadDisk_.vertex_count)
     for (const QVector3D &pad : helipads_) {
-      progDepth_.setUniformValue(ud_lightmvp_, lightVP_ * helipadModel(pad));
+      progDepth_->setUniformValue(ud_lightmvp_, lightVP_ * helipadModel(pad));
       QOpenGLVertexArrayObject::Binder b(&helipadDisk_.vao);
       glDrawArrays(GL_TRIANGLES, 0, helipadDisk_.vertex_count);
     }
-  progDepth_.release();
+  progDepth_->release();
 
-  glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
+  glBindFramebuffer(GL_FRAMEBUFFER, context()->defaultFramebufferObject());
   glViewport(0, 0, fbW_, fbH_);
   shadowOn_ = true;
 }
@@ -1187,25 +1545,25 @@ void SimRendererWidget::drawLit(const Mesh &m, const QMatrix4x4 &view,
                                 bool terrain, float bands) {
   if (m.vertex_count == 0)
     return;
-  progLit_.bind();
-  progLit_.setUniformValue(ul_mvp_, proj_ * view * model);
-  progLit_.setUniformValue(ul_model_, model);
-  progLit_.setUniformValue(ul_nmat_, model.normalMatrix());
-  progLit_.setUniformValue(ul_color_, color);
-  progLit_.setUniformValue(ul_sundir_, sunDir_);
-  progLit_.setUniformValue(ul_campos_, camEye_);
+  progLit_->bind();
+  progLit_->setUniformValue(ul_mvp_, proj_ * view * model);
+  progLit_->setUniformValue(ul_model_, model);
+  progLit_->setUniformValue(ul_nmat_, model.normalMatrix());
+  progLit_->setUniformValue(ul_color_, color);
+  progLit_->setUniformValue(ul_sundir_, sunDir_);
+  progLit_->setUniformValue(ul_campos_, camEye_);
   // Aerial perspective: gentle haze that fully veils the streamed-terrain edge.
-  progLit_.setUniformValue(ul_fogdensity_, 1.0f / 420.0f);
-  progLit_.setUniformValue(ul_fogstart_, 45.0f);
-  progLit_.setUniformValue(ul_lightvp_, lightVP_);
-  progLit_.setUniformValue(ul_shadowon_, shadowOn_ ? 1.0f : 0.0f);
-  progLit_.setUniformValue(ul_drone_, droneShadowPos_);
-  progLit_.setUniformValue(ul_droner_, droneShadowR_);
-  progLit_.setUniformValue(ul_shadowtex_, 1); // sampler on texture unit 1
-  progLit_.setUniformValue(ul_sunint_, litSunInt_);
-  progLit_.setUniformValue(ul_ambstr_, litAmbStr_);
-  progLit_.setUniformValue(ul_terrain_, terrain ? 1.0f : 0.0f);
-  progLit_.setUniformValue(ul_bands_, bands);
+  progLit_->setUniformValue(ul_fogdensity_, 1.0f / 420.0f);
+  progLit_->setUniformValue(ul_fogstart_, 45.0f);
+  progLit_->setUniformValue(ul_lightvp_, lightVP_);
+  progLit_->setUniformValue(ul_shadowon_, shadowOn_ ? 1.0f : 0.0f);
+  progLit_->setUniformValue(ul_drone_, droneShadowPos_);
+  progLit_->setUniformValue(ul_droner_, droneShadowR_);
+  progLit_->setUniformValue(ul_shadowtex_, 1); // sampler on texture unit 1
+  progLit_->setUniformValue(ul_sunint_, litSunInt_);
+  progLit_->setUniformValue(ul_ambstr_, litAmbStr_);
+  progLit_->setUniformValue(ul_terrain_, terrain ? 1.0f : 0.0f);
+  progLit_->setUniformValue(ul_bands_, bands);
   glActiveTexture(GL_TEXTURE1);
   glBindTexture(GL_TEXTURE_2D, shadowTex_);
   glActiveTexture(GL_TEXTURE0);
@@ -1216,7 +1574,7 @@ void SimRendererWidget::drawLit(const Mesh &m, const QMatrix4x4 &view,
   // enable attribute 2 and override this.
   glVertexAttrib3f(2, 1.0f, 1.0f, 1.0f);
   glDrawArrays(GL_TRIANGLES, 0, m.vertex_count);
-  progLit_.release();
+  progLit_->release();
 }
 
 // Tree crown: blobs of the crown colour packed inside the obstacle's sphere
@@ -1283,9 +1641,8 @@ void SimRendererWidget::uploadDroneMesh() {
   droneMesh_.vao.release();
   droneMesh_.vertex_count = int(pendingPos_.size());
   droneMesh_.primitive = GL_TRIANGLES;
-
-  pendingPos_.clear();
-  pendingNrm_.clear();
+  // pendingPos_/pendingNrm_ stay: they are the CPU copy a new context
+  // re-uploads from.
 }
 
 void SimRendererWidget::uploadWorldMesh() {
@@ -1293,8 +1650,6 @@ void SimRendererWidget::uploadWorldMesh() {
   hasWorldMesh_ = !pendingWorldPos_.empty();
   if (!hasWorldMesh_) {
     worldMesh_.vertex_count = 0;
-    pendingWorldPos_.clear();
-    pendingWorldNrm_.clear();
     return;
   }
   // Interleave [px,py,pz, nx,ny,nz, r,g,b] per vertex so the world mesh keeps
@@ -1320,9 +1675,7 @@ void SimRendererWidget::uploadWorldMesh() {
   horizonZ_ = lowestZ + 0.5f; // well clear of depth resolution at distance
   horizonCol_ = colSum / float(pendingWorldPos_.size());
   uploadColoredMesh(worldMesh_, data);
-  pendingWorldPos_.clear();
-  pendingWorldNrm_.clear();
-  pendingWorldCol_.clear();
+  // pendingWorld* stay as the CPU copy for re-upload into a new context.
 }
 
 // ---------- geometry generators ----------
@@ -1583,7 +1936,7 @@ void SimRendererWidget::clearWorldChunks() {
 void SimRendererWidget::flushChunkUpdates() {
   chunksDirty_ = false;
   if (clearAllChunks_) {
-    worldChunks_.clear(); // GL context current here -> safe to destroy
+    eraseAllChunks(); // GL context current here -> safe to destroy
     pendingChunkRemovals_.clear();
     clearAllChunks_ = false;
     // NOTE: pendingChunkUploads_ is intentionally NOT cleared — uploads queued
@@ -1591,13 +1944,15 @@ void SimRendererWidget::flushChunkUpdates() {
     // then stream the new one) are the fresh set and must still apply.
   }
   for (qint64 key : pendingChunkRemovals_)
-    worldChunks_.erase(key);
+    eraseChunk(key);
   pendingChunkRemovals_.clear();
   for (PendingChunk &pc : pendingChunkUploads_) {
     std::unique_ptr<Mesh> &mesh = worldChunks_[pc.key];
     if (!mesh)
       mesh = std::make_unique<Mesh>();
     uploadColoredMesh(*mesh, pc.data);
+    if (chunkCpuMode())
+      chunkCpu_[pc.key] = std::move(pc.data);
   }
   pendingChunkUploads_.clear();
 }
@@ -1685,20 +2040,36 @@ void SimRendererWidget::clearChunkFlora() {
   update();
 }
 
+void SimRendererWidget::eraseFlora(qint64 key) {
+  const auto it = floraChunks_.find(key);
+  if (it == floraChunks_.end())
+    return;
+  it->second->inst.destroy();
+  floraChunks_.erase(it);
+  floraCpu_.erase(key);
+}
+
+void SimRendererWidget::eraseAllFlora() {
+  for (auto &kv : floraChunks_)
+    kv.second->inst.destroy();
+  floraChunks_.clear();
+  floraCpu_.clear();
+}
+
 void SimRendererWidget::flushFloraUpdates() {
   floraDirty_ = false;
   if (clearAllFlora_) {
-    floraChunks_.clear();
+    eraseAllFlora();
     pendingFloraRemovals_.clear();
     clearAllFlora_ = false;
     // (queued uploads are kept — fresh set after a reconfigure)
   }
   for (qint64 key : pendingFloraRemovals_)
-    floraChunks_.erase(key);
+    eraseFlora(key);
   pendingFloraRemovals_.clear();
   for (PendingFlora &pf : pendingFloraUploads_) {
     if (pf.count <= 0) {
-      floraChunks_.erase(pf.key);
+      eraseFlora(pf.key);
       continue;
     }
     std::unique_ptr<FloraChunk> &fc = floraChunks_[pf.key];
@@ -1713,6 +2084,8 @@ void SimRendererWidget::flushFloraUpdates() {
     fc->cx = pf.cx;
     fc->cy = pf.cy;
     fc->half = pf.half;
+    if (chunkCpuMode())
+      floraCpu_[pf.key] = pf;
   }
   pendingFloraUploads_.clear();
 }
@@ -1720,15 +2093,15 @@ void SimRendererWidget::flushFloraUpdates() {
 void SimRendererWidget::drawFlora(const QMatrix4x4 &view) {
   if (floraChunks_.empty() || grassVerts_[0] == 0)
     return;
-  progFlora_.bind();
-  progFlora_.setUniformValue(uf_vp_, proj_ * view);
-  progFlora_.setUniformValue(uf_campos_, camEye_);
-  progFlora_.setUniformValue(uf_time_, floraTime_);
-  progFlora_.setUniformValue(uf_fadestart_, 90.0f);
-  progFlora_.setUniformValue(uf_fadeend_, 150.0f);
-  progFlora_.setUniformValue(uf_sundir_, sunDir_);
-  progFlora_.setUniformValue(uf_fogdensity_, 1.0f / 420.0f);
-  progFlora_.setUniformValue(uf_fogstart_, 45.0f);
+  progFlora_->bind();
+  progFlora_->setUniformValue(uf_vp_, proj_ * view);
+  progFlora_->setUniformValue(uf_campos_, camEye_);
+  progFlora_->setUniformValue(uf_time_, floraTime_);
+  progFlora_->setUniformValue(uf_fadestart_, 90.0f);
+  progFlora_->setUniformValue(uf_fadeend_, 150.0f);
+  progFlora_->setUniformValue(uf_sundir_, sunDir_);
+  progFlora_->setUniformValue(uf_fogdensity_, 1.0f / 420.0f);
+  progFlora_->setUniformValue(uf_fogstart_, 45.0f);
   floraVao_.bind();
   for (auto &kv : floraChunks_) {
     FloraChunk *fc = kv.second.get();
@@ -1771,7 +2144,7 @@ void SimRendererWidget::drawFlora(const QMatrix4x4 &view) {
     glDrawArraysInstanced(GL_TRIANGLES, 0, grassVerts_[lod], fc->count);
   }
   floraVao_.release();
-  progFlora_.release();
+  progFlora_->release();
 }
 #endif // VAYU_SIM_GRASS
 
@@ -2324,7 +2697,7 @@ void SimRendererWidget::drawTraining(const QMatrix4x4 &view) {
 // ---------- camera controls ----------
 
 void SimRendererWidget::mousePressEvent(QMouseEvent *e) {
-  setFocus();
+  requestActivate(); // key focus for G/R/X/Y/Z/Esc/WASD (the widget used setFocus)
   last_mouse_ = e->pos();
 
   // Obstacle editing (World mode) takes precedence over camera orbit.
@@ -2464,7 +2837,7 @@ void SimRendererWidget::keyPressEvent(QKeyEvent *e) {
         commitObsTool(true);
         break;
       default:
-        QOpenGLWidget::keyPressEvent(e);
+        QOpenGLWindow::keyPressEvent(e);
         return;
       }
       return;
@@ -2491,7 +2864,7 @@ void SimRendererWidget::keyPressEvent(QKeyEvent *e) {
     }
     if (freeFlyMove(e->key(), e->modifiers() & Qt::ShiftModifier))
       return;
-    QOpenGLWidget::keyPressEvent(e);
+    QOpenGLWindow::keyPressEvent(e);
     return;
   }
   if (obsMode_) {
@@ -2541,13 +2914,13 @@ void SimRendererWidget::keyPressEvent(QKeyEvent *e) {
         commitObsTool(true);
       break;
     default:
-      QOpenGLWidget::keyPressEvent(e);
+      QOpenGLWindow::keyPressEvent(e);
       return;
     }
     return;
   }
   if (!editable_) {
-    QOpenGLWidget::keyPressEvent(e);
+    QOpenGLWindow::keyPressEvent(e);
     return;
   }
   switch (e->key()) {
@@ -2591,7 +2964,7 @@ void SimRendererWidget::keyPressEvent(QKeyEvent *e) {
       commitTool(true);
     break;
   default:
-    QOpenGLWidget::keyPressEvent(e);
+    QOpenGLWindow::keyPressEvent(e);
     return;
   }
 }
@@ -2675,7 +3048,6 @@ void SimRendererWidget::beginTool(Tool t) {
                        ? QVector3D::dotProduct(startWorld_ - o, fwd) / denom
                        : 0.0f;
   planeHit0_ = o + d * tt;
-  setMouseTracking(true);
   update();
 }
 
@@ -2723,7 +3095,6 @@ void SimRendererWidget::commitTool(bool confirm) {
     return;
   tool_ = Tool::None;
   axisLock_ = -1;
-  setMouseTracking(false);
   if (confirm && selected_ >= 0) {
     emit motorEdited(selected_, motorPos_[selected_], motorAxis_[selected_]);
   } else if (selected_ >= 0) { // cancelled: restore the working copy
@@ -2828,7 +3199,6 @@ void SimRendererWidget::beginObsTool(Tool t) {
                        ? QVector3D::dotProduct(obsStartPos_ - o, fwd) / denom
                        : 0.0f;
   obsPlaneHit0_ = o + d * tt;
-  setMouseTracking(true);
   update();
 }
 
@@ -2880,7 +3250,6 @@ void SimRendererWidget::commitObsTool(bool confirm) {
     return;
   obsTool_ = Tool::None;
   obsAxis_ = -1;
-  setMouseTracking(false);
   if (selObs_ >= 0 && selObs_ < obstacles_.size()) {
     if (confirm) {
       const vsim::Obstacle &o = obstacles_[selObs_];

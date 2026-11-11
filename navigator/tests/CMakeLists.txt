@@ -221,6 +221,25 @@ navigator_test(tst_dronemodel
     ${SRC}/vsim/DroneModel.cpp)
 target_include_directories(tst_dronemodel PRIVATE ${SRC}/vsim)
 
+# ---- 3D sim view survives its GL context being recreated ------------------
+# Needs a real GL platform (xcb on an Xvfb, LIBGL_ALWAYS_SOFTWARE=1): it skips on
+# the offscreen platform ctest uses, which crashes QOpenGLWidget/QOpenGLWindow.
+if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
+  find_package(Qt6 REQUIRED COMPONENTS OpenGL OpenGLWidgets)
+  navigator_test(tst_sim_gl_context
+      tst_sim_gl_context.cpp
+      ${SRC}/vsim/SimRendererWidget.cpp ${SRC}/vsim/SimRendererWidget.h
+      ${SRC}/ui/widgets/SimHudWidget.cpp ${SRC}/ui/widgets/SimHudWidget.h
+      ${SRC}/core/Units.cpp
+      ${SRC}/vsim/DroneModel.cpp)
+  target_include_directories(tst_sim_gl_context PRIVATE ${SRC}/vsim ${SRC}/ui/widgets ${VAYU_SITL_SDK})
+  target_link_libraries(tst_sim_gl_context PRIVATE Qt6::OpenGL Qt6::OpenGLWidgets)
+  if(NAVIGATOR_SIM_GRASS) # same renderer configuration as the app
+    target_sources(tst_sim_gl_context PRIVATE ${SRC}/vsim/GpuGrass.cpp)
+    target_compile_definitions(tst_sim_gl_context PRIVATE VAYU_SIM_GRASS=1)
+  endif()
+endif()
+
 # ---- World tab preset wiring (headless widget test) ------------------------
 if(NAVIGATOR_SITL)
   navigator_test(tst_worldeditor
