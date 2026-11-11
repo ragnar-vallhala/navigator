@@ -80,6 +80,20 @@ public:
            w_.m_spawnResetPending;
   }
   void worldMode() { w_.setMode(1); } // the World tab: free-roam camera
+  // The deck the vehicle should rest on at the home pad, from the live terrain
+  // sampler (NOT from the widget's cached pad list), and what the widget
+  // itself thinks the landing surface there is.
+  float trueDeckZ() const {
+    const float g = w_.m_terrainHeightAt ? w_.m_terrainHeightAt(0.0f, 0.0f)
+                                         : 0.0f;
+    return -g - (w_.m_terrainHeightAt ? vsim::SimRendererWidget::kHelipadDeckM
+                                      : 0.0f);
+  }
+  float widgetPadZ() const {
+    return w_.landingSurfaceZ(w_.m_homePad.x(), w_.m_homePad.y());
+  }
+  float homePadTerrain() const { return w_.m_homePad.z(); }
+  void persist() { w_.persistWorld(w_.m_worldEditor->config()); }
   void start() { w_.startInAppSim(); }
   void stop() { w_.stopInAppSim(); }
   // Change the world the way the World tab does.
@@ -127,6 +141,12 @@ float altAbove(const SimulatorWidgetTestAccess &a) {
   const QVector3D p = a.shownPos();
   const float g = a.hasGround() ? a.groundAt(p.x(), p.y()) : 0.0f;
   return -p.z() - g;
+}
+
+// Metres above the home pad's deck (up = -z), the deck taken from the live
+// terrain sampler rather than from the widget's own pad bookkeeping.
+float aboveDeck(const SimulatorWidgetTestAccess &a) {
+  return a.trueDeckZ() - a.shownPos().z();
 }
 
 // Metres above the new ground at the camera's own position.
@@ -180,6 +200,7 @@ class TstWorldChangeFloor : public QObject {
   SimulatorWidget *w_ = nullptr;
   SimulatorWidgetTestAccess *a_ = nullptr;
   bool gl_ = false;
+  QList<SimulatorWidget *> restored_;
 
 private slots:
   void initTestCase() {
@@ -200,6 +221,7 @@ private slots:
       a_->stop();
     delete a_;
     delete w_;
+    qDeleteAll(restored_);
   }
 
   // Sim Stopped: every world change parks the vehicle on the new ground.
@@ -229,6 +251,54 @@ private slots:
     QVERIFY2(alt < 3.0f, "vehicle is not parked at the home pad");
   }
 
+  // A launch with a saved world: the widget is built from QSettings (the
+  // restore path) and the vehicle must be parked ON the home pad's deck -- not
+  // at the terrain under it, which is inside the deck (the deck stands
+  // kHelipadDeckM above the ground). Stopped only: the engine module is
+  // one-shot per process, so the Running half is in runningChanges... below.
+  void restoredWorldParksOnPad_data() {
+    QTest::addColumn<int>("which");
+    QTest::newRow("no terrain") << 0;
+    QTest::newRow("alpine arena") << 1;
+    QTest::newRow("endless meadow") << 2;
+  }
+  void restoredWorldParksOnPad() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    QFETCH(int, which);
+    // Save the world through the first widget (it persists like the World tab).
+    a_->changeWorld([which](vsim::WorldConfig &c) {
+      if (which == 0) {
+        c.worldPreset.clear();
+        c.proceduralBiome.clear();
+        c.worldMeshPath.clear();
+      } else if (which == 1) {
+        QVERIFY(vsim::applyWorldPreset(c, QStringLiteral("alpine"), 3));
+      } else {
+        c.worldPreset.clear();
+        c.proceduralBiome = QStringLiteral("endless");
+        c.proceduralSeed = 7;
+      }
+    });
+    a_->persist();
+    pump(300);
+
+    // A second widget restores it, as the next app launch does. Kept alive to
+    // the end: destroying a widget shuts the one-shot engine module down.
+    auto *b = new SimulatorWidget();
+    restored_.push_back(b);
+    SimulatorWidgetTestAccess ab(*b);
+    b->resize(1200, 800);
+    b->show();
+    QVERIFY(QTest::qWaitForWindowExposed(b));
+    pump(500);
+    const float above = aboveDeck(ab);
+    qInfo("restored (%s): parked pos.z=%.3f deck.z=%.3f above deck=%.3f",
+          QTest::currentDataTag(), ab.shownPos().z(), ab.trueDeckZ(), above);
+    QVERIFY2(above >= 0.0f, "parked vehicle is inside the helipad");
+    QVERIFY2(above < 1.0f, "parked vehicle is not on the home pad");
+  }
+
   // Sim Running against the real engine: after each change (and the collision
   // build it triggers) the vehicle ends up on the new ground, at rest.
   void runningChangesPlaceVehicleOnGround() {
@@ -241,8 +311,11 @@ private slots:
     QVERIFY(a_->running());
     QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 20000));
     pump(3000); // settle on the pad
-    qInfo("running: initial alt=%.2f", altAbove(*a_));
+    qInfo("running: initial alt=%.2f above deck=%.2f", altAbove(*a_),
+          aboveDeck(*a_));
     QVERIFY(altAbove(*a_) >= -0.05f);
+    // On the pad deck, not sunk through it to the terrain under it.
+    QVERIFY2(aboveDeck(*a_) >= -0.05f, "sank into the helipad after Start");
 
     const QVector<Change> cs = changes();
     for (int i = 1; i < cs.size(); ++i) {
@@ -255,6 +328,9 @@ private slots:
             p.y(), p.z(), alt);
       QVERIFY2(alt >= -0.05f,
                qPrintable(QStringLiteral("below ground after '%1'")
+                              .arg(QString::fromLatin1(cs[i].name))));
+      QVERIFY2(aboveDeck(*a_) >= -0.05f,
+               qPrintable(QStringLiteral("inside the helipad after '%1'")
                               .arg(QString::fromLatin1(cs[i].name))));
       // Respawned at the home pad (like Reset), not left hanging at the old
       // world's altitude.
