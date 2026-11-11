@@ -84,7 +84,7 @@ void AdsBackend::addPanel(const QString &id, const QString &title,
                           QWidget *w) {
   if (find(id))
     return;
-  m_panels.push_back({id, title, w, nullptr});
+  m_panels.push_back({id, title, false, w, nullptr});
   // A Panels-menu action that stays valid across rebuilds.
   auto *a = new QAction(title, m_host);
   a->setCheckable(true);
@@ -95,6 +95,21 @@ void AdsBackend::addPanel(const QString &id, const QString &title,
       hidePanel(id);
   });
   m_actions.insert(id, a);
+}
+
+void AdsBackend::setPanelFixed(const QString &id, bool fixed) {
+  Panel *p = find(id);
+  if (!p)
+    return;
+  p->fixed = fixed;
+  applyFixed(*p);
+}
+
+void AdsBackend::applyFixed(Panel &p) {
+  if (!p.dock)
+    return;
+  p.dock->setFeature(ads::CDockWidget::DockWidgetFloatable, !p.fixed);
+  p.dock->setFeature(ads::CDockWidget::DockWidgetMovable, !p.fixed);
 }
 
 QStringList AdsBackend::panelIds() const {
@@ -125,6 +140,8 @@ void AdsBackend::rebuild() {
     auto *dw = new ads::CDockWidget(m_dm, p.title);
     dw->setObjectName(p.id);
     dw->setFeature(ads::CDockWidget::DockWidgetClosable, true);
+    p.dock = dw;
+    applyFixed(p);
     if (p.widget)
       dw->setWidget(p.widget, ads::CDockWidget::ForceNoScrollArea);
     p.dock = dw;
@@ -225,7 +242,7 @@ void AdsBackend::applySpec(const LayoutSpec &spec) {
     ads::CDockWidget *first = nullptr;
     for (const QString &id : f.panels) {
       Panel *p = find(id);
-      if (!p || !p->dock)
+      if (!p || !p->dock || p->fixed) // a fixed panel never floats
         continue;
       if (!first) {
         first = p->dock;
@@ -263,6 +280,7 @@ PanelState AdsBackend::panelState(const QString &id) const {
   if (!p)
     return s;
   s.known = true;
+  s.fixed = p->fixed;
   if (!p->dock || p->dock->isClosed() || !p->dock->dockAreaWidget())
     return s;
   s.visible = true;
@@ -296,7 +314,7 @@ void AdsBackend::hidePanel(const QString &id) {
 
 void AdsBackend::floatPanel(const QString &id) {
   Panel *p = find(id);
-  if (!p || !p->dock)
+  if (!p || !p->dock || p->fixed)
     return;
   if (!p->dock->dockAreaWidget() || p->dock->isClosed())
     showPanel(id);

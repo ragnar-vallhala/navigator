@@ -440,6 +440,17 @@ if(NAVIGATOR_WORKSPACE_MOCK)
     add_subdirectory(tools/workspace_mock)
 endif()
 
+# The dock host in the real window (src/ui/main/DockShell). Compiled in only when
+# the docking library was found above; it is used only when the switch is on
+# (env NAVIGATOR_DOCKING=1 or Window > Dockable layout), so a build with it
+# behaves like one without it until then.
+if(TARGET navigator_workspace)
+    target_sources(Navigator PRIVATE
+        src/ui/main/DockShell.cpp src/ui/main/DockShell.h)
+    target_compile_definitions(Navigator PRIVATE NAVIGATOR_HAS_DOCKING=1)
+    target_link_libraries(Navigator PRIVATE navigator_workspace)
+endif()
+
 # -------------------------------------------------------
 # Unit tests (QtTest + ctest). On by default; -DNAVIGATOR_BUILD_TESTS=OFF
 # to skip. Run with `ctest` from the build dir.

@@ -360,6 +360,16 @@ if(TARGET navigator_workspace)
     target_link_libraries(tst_workspace_manager PRIVATE navigator_workspace)
 endif()
 
+# The dock host of the main window (DockShell): ids, built-in workspaces, the
+# switch, showPanel, the pinned attitude panel. Offscreen, no real pages.
+if(TARGET navigator_workspace)
+    navigator_test(tst_dock_shell tst_dock_shell.cpp
+        ${SRC}/ui/main/DockShell.cpp ${SRC}/ui/main/DockShell.h)
+    target_include_directories(tst_dock_shell PRIVATE ${SRC}/ui/main)
+    target_compile_definitions(tst_dock_shell PRIVATE NAVIGATOR_HAS_DOCKING=1)
+    target_link_libraries(tst_dock_shell PRIVATE navigator_workspace)
+endif()
+
 # QOpenGLWidget inside the dock layer: skips on "offscreen" (see the file).
 if(TARGET navigator_workspace)
     navigator_test(tst_workspace_gl tst_workspace_gl.cpp
