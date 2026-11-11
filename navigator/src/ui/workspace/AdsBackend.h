@@ -60,7 +60,7 @@ private:
   struct Panel {
     QString id, title;
     QPointer<QWidget> widget;
-    ads::CDockWidget *dock = nullptr;
+    QPointer<ads::CDockWidget> dock; // a child of m_dm: dies with it
   };
   void rebuild();
   Panel *find(const QString &id);
@@ -68,8 +68,10 @@ private:
   ads::CDockAreaWidget *place(const LayoutNode &n, ads::CDockAreaWidget *anchor,
                               int dir, bool root);
 
-  QMainWindow *m_host;
-  ads::CDockManager *m_dm = nullptr;
+  // The host's widget tree owns the host's children, so either may be deleted
+  // before this backend is: hold them weakly and skip what is already gone.
+  QPointer<QMainWindow> m_host;
+  QPointer<ads::CDockManager> m_dm;
   std::vector<Panel> m_panels;
   // View actions outlive a rebuild (menus hold them); they forward to the
   // current dock.

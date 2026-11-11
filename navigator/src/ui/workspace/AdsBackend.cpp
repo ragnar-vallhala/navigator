@@ -42,6 +42,9 @@ AdsBackend::AdsBackend(QMainWindow *host) : m_host(host) {
 }
 
 AdsBackend::~AdsBackend() {
+  // If the host was deleted first, Qt has already deleted the manager and
+  // every dock (and the panel widgets inside them): every pointer below is
+  // then null and there is nothing left to tear down.
   // Hand the panels back before the manager (their parent) goes away.
   for (Panel &p : m_panels)
     if (p.dock && p.widget) {
@@ -55,8 +58,8 @@ AdsBackend::~AdsBackend() {
     // the host is still whole; otherwise deleting the manager is enough.
     if (m_host && m_host->layout())
       m_host->takeCentralWidget();
-    delete m_dm;
-    m_dm = nullptr;
+    delete m_dm.data();
+    m_dm.clear();
   }
   for (Panel &p : m_panels) // the backend owns the panel widgets
     delete p.widget.data();
@@ -85,7 +88,7 @@ void AdsBackend::addPanel(const QString &id, const QString &title,
   // A Panels-menu action that stays valid across rebuilds.
   auto *a = new QAction(title, m_host);
   a->setCheckable(true);
-  QObject::connect(a, &QAction::triggered, m_host, [this, id](bool on) {
+  QObject::connect(a, &QAction::triggered, m_host.data(), [this, id](bool on) {
     if (on)
       showPanel(id);
     else
@@ -102,6 +105,8 @@ QStringList AdsBackend::panelIds() const {
 }
 
 void AdsBackend::rebuild() {
+  if (!m_host) // the window is gone: nothing to build into
+    return;
   for (Panel &p : m_panels) {
     if (p.dock && p.widget) {
       p.dock->takeWidget();
@@ -111,8 +116,8 @@ void AdsBackend::rebuild() {
   }
   if (m_dm) {
     m_host->takeCentralWidget();
-    delete m_dm; // also deletes the docks and any floating windows
-    m_dm = nullptr;
+    delete m_dm.data(); // also deletes the docks and any floating windows
+    m_dm.clear();
   }
   m_dm = new ads::CDockManager(m_host);
   m_host->setCentralWidget(m_dm);
@@ -202,12 +207,14 @@ ads::CDockAreaWidget *AdsBackend::place(const LayoutNode &n,
 
 void AdsBackend::applySpec(const LayoutSpec &spec) {
   rebuild();
+  if (!m_dm)
+    return;
   m_pending.clear();
   place(spec.root, nullptr, ads::CenterDockWidgetArea, true);
   // The splitters only take proportions once laid out: set them again then.
   QPointer<ads::CDockManager> dm = m_dm;
   auto pending = m_pending;
-  QTimer::singleShot(0, m_host, [dm, pending] {
+  QTimer::singleShot(0, m_host.data(), [dm, pending] {
     if (!dm)
       return;
     for (const auto &p : pending)
@@ -242,7 +249,7 @@ QByteArray AdsBackend::saveState() const {
 
 bool AdsBackend::restoreState(const QByteArray &state) {
   rebuild();
-  if (state.isEmpty())
+  if (!m_dm || state.isEmpty())
     return false;
   const bool ok = m_dm->restoreState(state, kStateVersion);
   if (!ok)
@@ -271,7 +278,7 @@ PanelState AdsBackend::panelState(const QString &id) const {
 
 void AdsBackend::showPanel(const QString &id) {
   Panel *p = find(id);
-  if (!p || !p->dock)
+  if (!p || !p->dock || !m_dm)
     return;
   if (!p->dock->dockAreaWidget())
     m_dm->addDockWidget(ads::RightDockWidgetArea, p->dock);
@@ -300,7 +307,7 @@ void AdsBackend::floatPanel(const QString &id) {
 void AdsBackend::tabPanel(const QString &id, const QString &ontoId) {
   Panel *p = find(id);
   Panel *o = find(ontoId);
-  if (!p || !o || !p->dock || !o->dock)
+  if (!p || !o || !p->dock || !o->dock || !m_dm)
     return;
   if (!o->dock->dockAreaWidget())
     showPanel(ontoId);

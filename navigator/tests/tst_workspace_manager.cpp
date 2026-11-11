@@ -23,6 +23,7 @@
 
 #include <QLabel>
 #include <QMainWindow>
+#include <QPointer>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -100,6 +101,26 @@ private slots:
     QVERIFY(!f.wm->remove("Fly"));
     QVERIFY(!f.wm->rename("Fly", "Mine"));
     QVERIFY(f.wm->userNames().isEmpty());
+  }
+
+  // The manager may outlive the window (it is not always a child of it). The
+  // host then takes the dock manager and every dock with it; the backend must
+  // notice and neither touch the dead host nor delete the manager twice.
+  void hostDeletedBeforeManager() {
+    auto *win = new QMainWindow;
+    win->resize(900, 600);
+    auto *wm = new WorkspaceManager(win, std::make_unique<AdsBackend>(win),
+                                    nullptr);
+    wm->registerPanels(panels());
+    wm->setBuiltins(builtins());
+    wm->setScreenProvider([] { return QList<QRect>{QRect(0, 0, 1600, 900)}; });
+    win->show();
+    QVERIFY(wm->load("Fly"));
+    QPointer<QWidget> dockManager = win->centralWidget();
+    QVERIFY(dockManager); // the layout really lives under the host
+    delete win;           // the host goes first, taking the dock manager along
+    QVERIFY(dockManager.isNull());
+    delete wm; // must not crash: no dead-host call, no double delete
   }
 
   void saveLoadRestoresDockState() {
