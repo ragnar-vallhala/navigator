@@ -85,6 +85,18 @@ struct Fixture {
   static constexpr int kMinFrames = 3;
   static constexpr int kDeadlineMs = 8000;
   static constexpr int kStepMs = 20;
+  // Wait for the first frames, so GL/context start-up (1+ s on a cold CI
+  // runner) does not land in the first measured step. False = never rendered.
+  static constexpr int kWarmFrames = 2;
+  static constexpr int kWarmDeadlineMs = 15000;
+  bool warmUp() {
+    QElapsedTimer clock;
+    clock.start();
+    while (frames() < kWarmFrames && clock.elapsed() < kWarmDeadlineMs)
+      QTest::qWait(kStepMs);
+    qInfo("warm-up: %d frames in %lld ms", frames(), static_cast<long long>(clock.elapsed()));
+    return frames() >= kWarmFrames;
+  }
   bool renders(const char *what) {
     const int before = frames();
     QElapsedTimer clock;
@@ -130,6 +142,8 @@ private slots:
     g_glWarnings = 0;
     Fixture f(window);
     auto *b = f.wm->backend();
+    if (!f.warmUp())
+      QFAIL("the GL view never produced a first frame (stalled at start-up)");
     QVERIFY(f.renders("docked"));
     b->floatPanel("gl");
     QVERIFY(b->panelState("gl").floating);
@@ -152,6 +166,10 @@ private slots:
     f.wm->resetLayout();
     QVERIFY(f.renders("reset"));
     qInstallMessageHandler(g_prev);
+    // Informational only, never asserted: a QOpenGLWidget re-runs initializeGL()
+    // on every re-parent, a window container does not.
+    qInfo("GL re-init (%s): init %d, ctx-destroyed %d", window ? "window container" : "QOpenGLWidget",
+          f.inits(), f.destroyed());
     qInfo("GL presentation warnings (%s): %d", window ? "window container" : "QOpenGLWidget", g_glWarnings);
     warnings = g_glWarnings;
   }
@@ -163,17 +181,24 @@ private slots:
     QCOMPARE(w, 0);
   }
 
-  // A QOpenGLWidget under ADS re-runs initializeGL() on every re-parent and the
-  // main window then stops presenting (a screenshot shows stale pixels and a
-  // ghost of the floating window; also with Qt::AA_ShareOpenGLContexts and with
-  // a window manager). Plain QDockWidget with the same panel is clean, and ADS
-  // 5.1.1 shows it in a 30-line program with no WorkspaceManager. Flip this
-  // when it is fixed upstream.
+  // A QOpenGLWidget under ADS re-runs initializeGL() on every re-parent (see
+  // the init / ctx-destroyed counts logged above), which is why the window
+  // container stays the default. On Qt 6.4.2 the main window then also stops
+  // presenting (a screenshot shows stale pixels and a ghost of the floating
+  // window; also with Qt::AA_ShareOpenGLContexts and with a window manager;
+  // plain QDockWidget is clean, ADS 5.1.1 shows it in a 30-line program).
+  // Newer Qt (6.10 on the CI runner) does not show the symptom, so this is
+  // behaviour-based: an expected failure only while the warnings appear.
   void openGlWidgetStopsPresenting() {
     int w = -1;
     runSequence(false, w);
-    QEXPECT_FAIL("", "ADS + QOpenGLWidget: main window stops presenting (Qt 6.4.2, xcb, software GL)", Continue);
-    QCOMPARE(w, 0);
+    if (w > 0) {
+      QEXPECT_FAIL("", "ADS + QOpenGLWidget: main window stops presenting (Qt 6.4.2, xcb, software GL)", Continue);
+      QCOMPARE(w, 0);
+    } else {
+      qInfo("presentation symptom not reproduced on this Qt (QOpenGLWidget)");
+      QCOMPARE(w, 0);
+    }
   }
 };
 
