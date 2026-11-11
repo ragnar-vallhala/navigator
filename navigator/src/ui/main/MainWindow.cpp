@@ -378,6 +378,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
                       .arg(sim ? "sim" : "firmware"));
               Notify::ok(this, sim ? tr("Applied gains to sim")
                                    : tr("Applied gains to firmware"));
+              m_simulatorWidget->notifyPidGainsSent();
               return;
             }
 #ifdef NAVIGATOR_HAS_SITL

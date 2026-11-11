@@ -42,6 +42,15 @@ private slots:
     QVERIFY(s.shouldWarn(true));
     QVERIFY(!s.shouldWarn(false)); // a tuned preset clears the warning
   }
+
+  void refusedApplyKeepsWarning() {
+    CustomTuneState s;
+    // Apply requested but refused (disconnected/replay): nobody confirms.
+    QVERIFY(s.shouldWarn(true));
+    QVERIFY(!s.applied());
+    s.onGainsApplied(); // MainWindow confirmed the send
+    QVERIFY(!s.shouldWarn(true));
+  }
 };
 
 QTEST_MAIN(TstCustomVehicleWarning)

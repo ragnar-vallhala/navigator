@@ -186,6 +186,11 @@ public:
   void stopInAppSim();
   void stopAutotune();
 
+  // MainWindow calls this after it actually sent the proposed gains (live FC
+  // or running sim). A refused Apply (no link, sim stopped, replay) does not,
+  // so the Custom-vehicle notice stays.
+  void notifyPidGainsSent();
+
   // Keep Start disabled until the app is restarted, showing `reason` as its
   // tooltip and in the status line. For after "Reset Firmware Settings": the
   // engine module caches the old settings in RAM and is never unloaded, so a

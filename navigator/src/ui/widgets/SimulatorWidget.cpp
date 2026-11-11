@@ -2170,11 +2170,14 @@ void SimulatorWidget::applyProposedGains() {
   // MainWindow turns these into CMD_SET_PID frames and sends them over the
   // live link (and refuses if disconnected or in replay).
   emit applyPidGainsRequested(cmds);
-  m_customTune.onGainsApplied();
-  updateCustomWarning(false);
   m_tuneLog->appendPlainText(
       tr("[apply] requested firmware gain update — %1 PID slot(s)")
           .arg(cmds.size()));
+}
+
+void SimulatorWidget::notifyPidGainsSent() {
+  m_customTune.onGainsApplied();
+  updateCustomWarning(false);
 }
 
 void SimulatorWidget::updateHud(const vsim::SimSnapshot &s) {
