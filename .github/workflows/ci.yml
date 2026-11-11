@@ -224,16 +224,19 @@ jobs:
               --args navigator/build-ws/tests/tst_workspace_manager || true
       - name: tst_workspace_gl (xcb on Xvfb, software GL)
         # The GL test needs a real platform plugin and skips itself under
-        # offscreen. This step has not been run on a GitHub runner yet (only on
-        # a developer machine), so it does not fail the job until it has; drop
-        # continue-on-error once it has been green for a while.
+        # offscreen. It is run as a binary, not through ctest: navigator_test()
+        # pins QT_QPA_PLATFORM=offscreen on every ctest case (so this step's
+        # xcb was overridden and the test only ever skipped), and ctest hides
+        # a QtTest skip as a pass. Run directly, the log shows PASS or SKIP.
+        # It has not been green on a GitHub runner yet, so it does not fail the
+        # job until it has; drop continue-on-error once it has been green.
         continue-on-error: true
         env:
           QT_QPA_PLATFORM: xcb
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: |
           xvfb-run -a -s "-screen 0 1280x800x24 +extension GLX" \
-            ctest --test-dir navigator/build-ws --output-on-failure -R tst_workspace_gl
+            navigator/build-ws/tests/tst_workspace_gl
 
   # The GCS-only Windows build (NAVIGATOR_SITL=OFF: the SITL bridge needs a
   # POSIX host) on MSYS2 UCRT64, the toolchain tools/windows/deploy-navigator-
