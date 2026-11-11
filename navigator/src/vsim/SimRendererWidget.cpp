@@ -460,6 +460,16 @@ SimRendererWidget::SimRendererWidget(QWindow *parent)
   setFormat(f);
 }
 
+void SimRendererWidget::setDownCam(bool on) {
+  downCam_ = on;
+  if (!isValid() && !handle()) { // format is fixed once the window is created
+    QSurfaceFormat f = format();
+    f.setSwapInterval(on ? 0 : QSurfaceFormat::defaultFormat().swapInterval());
+    setFormat(f);
+  }
+  update();
+}
+
 void SimRendererWidget::setHudWidget(QWidget *w) {
   if (hud_)
     disconnect(hud_, nullptr, this, nullptr);

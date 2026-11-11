@@ -256,11 +256,11 @@ public:
 
   // Bird's-eye "down-cam": sit a fixed height above the drone and look straight
   // down (NED +Z), north up. Used by the Down-Cam PiP. Takes precedence over
-  // fpv/orbit while on.
-  void setDownCam(bool on) {
-    downCam_ = on;
-    update();
-  }
+  // fpv/orbit while on. The down-cam does not wait for vsync (swap interval 0):
+  // every GL window on the one GUI thread that waits makes the frames serialize
+  // (3 waits = 20 Hz at 60 Hz), so only the main view paces. Call before the
+  // window is created/shown; the swap interval cannot change afterwards.
+  void setDownCam(bool on);
   bool downCam() const { return downCam_; }
 
   // Free-fly camera: WASD/QE to move, left-drag to look, NOT locked to the
