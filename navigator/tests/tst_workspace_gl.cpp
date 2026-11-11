@@ -19,6 +19,7 @@
 // QT_QPA_PLATFORM=xcb on an Xvfb (LIBGL_ALWAYS_SOFTWARE=1); on "offscreen"
 // (ctest's default) it skips, because QOpenGLWidget crashes there.
 #include "AdsBackend.h"
+#include "AttitudePanel.h"
 #include "AttitudeWidget.h"
 #include "Drone3DWidget.h"
 #include "GlPanel.h"
@@ -146,16 +147,31 @@ private slots:
     warnings = g_glWarnings;
   }
 
-  // The attitude panel of the real window: the real AttitudeWidget and
-  // Drone3DWidget inside docks. Workspace switches, a reset and a restore (what
+  // The attitude panel of the docked window: the real AttitudeDockedWidget and
+  // Drone3DDockedWidget inside docks. Workspace switches, a reset and a restore (what
   // a startup does) rebuild the dock manager; each widget must keep its one GL
   // context (initializeGL once, no context destroyed).
+  // The legacy window (dock host off) keeps the QOpenGLWidget views it always
+  // had; only the dock host gets the window-container views.
+  void legacyPanelUsesQOpenGLWidgets() {
+    AttitudePanel legacy(nullptr, false);
+    QVERIFY(qobject_cast<QOpenGLWidget *>(legacy.stack()->widget(0)));
+    QVERIFY(qobject_cast<QOpenGLWidget *>(legacy.stack()->widget(1)));
+    QVERIFY(!legacy.docked());
+    AttitudePanel docked(nullptr, true);
+    QVERIFY(docked.docked());
+    QVERIFY(!qobject_cast<QOpenGLWidget *>(docked.stack()->widget(0)));
+    QVERIFY(!qobject_cast<QOpenGLWidget *>(docked.stack()->widget(1)));
+    QVERIFY(dynamic_cast<GlPaintHost *>(docked.stack()->widget(0)));
+    QVERIFY(dynamic_cast<GlPaintHost *>(docked.stack()->widget(1)));
+  }
+
   void realAttitudeWidgetsKeepGlContext() {
     QMainWindow win;
     win.resize(1000, 700);
     auto *wm = new WorkspaceManager(&win, std::make_unique<AdsBackend>(&win), &win);
-    auto *att = new AttitudeWidget;
-    auto *d3 = new Drone3DWidget;
+    auto *att = new AttitudeDockedWidget;
+    auto *d3 = new Drone3DDockedWidget;
     PanelRegistry r;
     r.add("att", "Att", [att]() -> QWidget * { return att; });
     r.add("d3", "3D", [d3]() -> QWidget * { return d3; });

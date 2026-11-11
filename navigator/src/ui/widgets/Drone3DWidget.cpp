@@ -75,18 +75,36 @@ float easeAngle(float cur, float target, float a) {
 
 } // namespace
 
-Drone3DWidget::Drone3DWidget(QWidget *parent) : GlPaintHost(parent) {
+bool Drone3DScene::setTarget(float roll, float pitch, float yaw) {
+  m_targetRoll = roll;
+  m_targetPitch = pitch;
+  m_targetYaw = yaw;
+  if (!m_haveTarget) {
+    m_haveTarget = true;
+    m_roll = roll;
+    m_pitch = pitch;
+    m_yaw = yaw;
+    return true;
+  }
+  return false;
+}
+
+void Drone3DScene::tick() {
+  m_propPhase += 9.0f;
+  // Ease the displayed attitude toward the latest target so bursty / low-rate
+  // telemetry renders as smooth motion instead of stepping.
+  m_roll = easeAngle(m_roll, m_targetRoll, kSmooth);
+  m_pitch = easeAngle(m_pitch, m_targetPitch, kSmooth);
+  m_yaw = easeAngle(m_yaw, m_targetYaw, kSmooth);
+}
+
+Drone3DWidget::Drone3DWidget(QWidget *parent) : QOpenGLWidget(parent) {
   setMinimumSize(260, 260);
   // Gentle prop spin so the airframe reads as "live", as in the mockup.
   m_spinTimer = new QTimer(this);
   m_spinTimer->setInterval(33); // ~30 fps
   connect(m_spinTimer, &QTimer::timeout, this, [this] {
-    m_propPhase += 9.0f;
-    // Ease the displayed attitude toward the latest target so bursty / low-rate
-    // telemetry renders as smooth motion instead of stepping.
-    m_roll = easeAngle(m_roll, m_targetRoll, kSmooth);
-    m_pitch = easeAngle(m_pitch, m_targetPitch, kSmooth);
-    m_yaw = easeAngle(m_yaw, m_targetYaw, kSmooth);
+    m_scene.tick();
     update();
   });
 }
@@ -99,38 +117,66 @@ void Drone3DWidget::setAttitude(float roll, float pitch, float yaw) {
   // Set the target only — the ~30 Hz spin timer eases the displayed attitude
   // toward it and repaints. Snap on the first sample so the airframe doesn't
   // sweep up from level on connect. See docs/ui-rendering-decoupling.md.
-  m_targetRoll = roll;
-  m_targetPitch = pitch;
-  m_targetYaw = yaw;
-  if (!m_haveTarget) {
-    m_haveTarget = true;
-    m_roll = roll;
-    m_pitch = pitch;
-    m_yaw = yaw;
-  }
+  m_scene.setTarget(roll, pitch, yaw);
 }
 
 void Drone3DWidget::showEvent(QShowEvent *event) {
-  GlPaintHost::showEvent(event);
+  QOpenGLWidget::showEvent(event);
   m_spinTimer->start();
 }
 
 void Drone3DWidget::hideEvent(QHideEvent *event) {
-  GlPaintHost::hideEvent(event);
+  QOpenGLWidget::hideEvent(event);
   m_spinTimer->stop(); // don't burn CPU while the 3D view is hidden
 }
 
-void Drone3DWidget::paintScene(QPainter &p) {
+void Drone3DWidget::paintEvent(QPaintEvent *) {
+  QPainter p(this);
+  m_scene.paint(p, width(), height());
+}
+
+Drone3DDockedWidget::Drone3DDockedWidget(QWidget *parent)
+    : GlPaintHost(parent) {
+  setMinimumSize(260, 260);
+  m_spinTimer = new QTimer(this);
+  m_spinTimer->setInterval(33); // ~30 fps
+  connect(m_spinTimer, &QTimer::timeout, this, [this] {
+    m_scene.tick();
+    update();
+  });
+}
+
+void Drone3DDockedWidget::setAttitude(const AttitudeData &att) {
+  setAttitude(att.roll, att.pitch, att.yaw);
+}
+
+void Drone3DDockedWidget::setAttitude(float roll, float pitch, float yaw) {
+  m_scene.setTarget(roll, pitch, yaw);
+}
+
+void Drone3DDockedWidget::showEvent(QShowEvent *event) {
+  GlPaintHost::showEvent(event);
+  m_spinTimer->start();
+}
+
+void Drone3DDockedWidget::hideEvent(QHideEvent *event) {
+  GlPaintHost::hideEvent(event);
+  m_spinTimer->stop();
+}
+
+void Drone3DDockedWidget::paintScene(QPainter &p) {
+  m_scene.paint(p, width(), height());
+}
+
+void Drone3DScene::paint(QPainter &p, int w, int h) {
   p.setRenderHint(QPainter::Antialiasing);
 
-  const int w = width();
-  const int h = height();
 
   // Background: radial vignette matching the mockup's .adi3d.
   QRadialGradient bg(w * 0.5, h * 0.30, qMax(w, h) * 0.78);
   bg.setColorAt(0.0, QColor(0x1c, 0x25, 0x33));
   bg.setColorAt(1.0, QColor(0x0c, 0x0f, 0x16));
-  p.fillRect(rect(), bg);
+  p.fillRect(QRect(0, 0, w, h), bg);
 
   const QPointF center(w * 0.5, h * 0.50);
   const float scale = qMin(w, h) * 0.30f;

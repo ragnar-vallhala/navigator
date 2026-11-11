@@ -697,7 +697,7 @@ void MainWindow::buildUi() {
   auto *topSplitter = m_topSplitter;
 
   // ---- Attitude group (view3d) with the roll/pitch/yaw numbers inside ----
-  auto *attPanel = new AttitudePanel(m_homeWidget);
+  auto *attPanel = new AttitudePanel(m_homeWidget, m_dock != nullptr);
   m_attPanel = attPanel;
   m_statusLabel = attPanel->statusLabel();
   m_attStack = attPanel->stack();

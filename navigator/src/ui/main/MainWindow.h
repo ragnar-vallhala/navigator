@@ -192,7 +192,7 @@ private:
   bool m_haveBaroRef = false;
   // BATTERY → gauge/field: pack-or-not, latched cell count, percent.
   battery::Estimator m_battery;
-  AttitudeWidget *m_attitude = nullptr;
+  AttitudeSink *m_attitude = nullptr;
   LogPanel *m_logPanel = nullptr;
   FaultsPanel *m_faultsPanel = nullptr;
   QTabWidget *m_bottomTabs = nullptr;
@@ -209,7 +209,7 @@ private:
 #endif
   QStackedWidget *m_stackedWidget = nullptr;
   QStackedWidget *m_attStack = nullptr;
-  Drone3DWidget *m_drone3d = nullptr;
+  AttitudeSink *m_drone3d = nullptr;
   QWidget *m_homeWidget = nullptr;
   QWidget *m_attPanel = nullptr; // AttitudePanel (panel id view3d)
   DockShell *m_dock = nullptr;   // non-null only when the dock host is on

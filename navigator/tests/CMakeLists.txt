@@ -392,7 +392,9 @@ if(TARGET navigator_workspace)
     navigator_test(tst_workspace_gl tst_workspace_gl.cpp
         ${CMAKE_SOURCE_DIR}/tools/workspace_mock/GlPanel.h
         ${SRC}/ui/widgets/AttitudeWidget.cpp
-        ${SRC}/ui/widgets/Drone3DWidget.cpp)
+        ${SRC}/ui/widgets/Drone3DWidget.cpp
+        ${SRC}/ui/widgets/AttitudePanel.cpp
+        ${SRC}/core/Theme.cpp)
     target_include_directories(tst_workspace_gl PRIVATE
         ${CMAKE_SOURCE_DIR}/tools/workspace_mock
         ${SRC}/ui/widgets ${SRC}/core)

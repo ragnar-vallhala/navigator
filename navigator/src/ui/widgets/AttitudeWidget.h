@@ -17,7 +17,10 @@
 #pragma once
 
 #include "Types.h"
+#include "AttitudeSink.h"
 #include "GlPaintHost.h"
+#include <QOpenGLFunctions>
+#include <QOpenGLWidget>
 
 class QTimer;
 
@@ -27,23 +30,14 @@ class QTimer;
  * Displays a sky/ground split rotated by roll with a pitch offset,
  * compass heading (yaw) in a bottom strip, and wing level markers.
  */
-class AttitudeWidget : public GlPaintHost {
-  Q_OBJECT
-
+// The drawing and the eased angles of the artificial horizon, shared by both
+// views below (one implementation of the picture).
+class AttitudeScene {
 public:
-  explicit AttitudeWidget(QWidget *parent = nullptr);
-
-  QSize minimumSizeHint() const override { return {260, 260}; }
-  QSize sizeHint() const override { return {320, 320}; }
-
-public slots:
-  void setAttitude(const AttitudeData &att);
-  void setAttitude(float roll, float pitch, float yaw);
-
-protected:
-  void paintScene(QPainter &p) override;
-  void showEvent(QShowEvent *event) override;
-  void hideEvent(QHideEvent *event) override;
+  // Set the target; true when this was the first sample (snapped, repaint now).
+  bool setTarget(float roll, float pitch, float yaw);
+  void tick(); // ease the displayed angles toward the target (one frame)
+  void paint(QPainter &p, int W, int H);
 
 private:
   // Banked-horizon ADI (mockup style): the sky/ground horizon tilts with roll
@@ -56,7 +50,7 @@ private:
   void drawAircraftRef(QPainter &p, const QRectF &adi);
   void drawHeadingTape(QPainter &p, const QRectF &tape);
 
-  // Displayed angles are eased toward the latest target each frame (m_smoothTimer)
+  // Displayed angles are eased toward the latest target each frame
   // so bursty / low-rate telemetry renders as smooth motion instead of snapping.
   float m_roll = 0.0f;
   float m_pitch = 0.0f;
@@ -65,5 +59,55 @@ private:
   float m_targetPitch = 0.0f;
   float m_targetYaw = 0.0f;
   bool m_haveTarget = false; // snap to the first sample, ease after that
+};
+
+class AttitudeWidget : public QOpenGLWidget,
+                       public AttitudeSink,
+                       protected QOpenGLFunctions {
+  Q_OBJECT
+
+public:
+  explicit AttitudeWidget(QWidget *parent = nullptr);
+
+  QSize minimumSizeHint() const override { return {260, 260}; }
+  QSize sizeHint() const override { return {320, 320}; }
+
+public slots:
+  void setAttitude(const AttitudeData &att) override;
+  void setAttitude(float roll, float pitch, float yaw) override;
+
+protected:
+  void initializeGL() override;
+  void resizeGL(int w, int h) override;
+  void paintGL() override;
+  void showEvent(QShowEvent *event) override;
+  void hideEvent(QHideEvent *event) override;
+
+private:
+  AttitudeScene m_scene;
+  QTimer *m_smoothTimer = nullptr;
+};
+
+// The same view for the dock host: a QOpenGLWindow in a window container
+// (GlPaintHost), which keeps one GL context while ADS re-parents the panel.
+class AttitudeDockedWidget : public GlPaintHost, public AttitudeSink {
+  Q_OBJECT
+
+public:
+  explicit AttitudeDockedWidget(QWidget *parent = nullptr);
+
+  QSize minimumSizeHint() const override { return {260, 260}; }
+  QSize sizeHint() const override { return {320, 320}; }
+
+  void setAttitude(const AttitudeData &att) override;
+  void setAttitude(float roll, float pitch, float yaw) override;
+
+protected:
+  void paintScene(QPainter &p) override;
+  void showEvent(QShowEvent *event) override;
+  void hideEvent(QHideEvent *event) override;
+
+private:
+  AttitudeScene m_scene;
   QTimer *m_smoothTimer = nullptr;
 };
