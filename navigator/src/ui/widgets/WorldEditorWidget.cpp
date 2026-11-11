@@ -169,6 +169,13 @@ vsim::WorldConfig worldFromJson(const QJsonObject &root) {
   }
   const QJsonObject pg = root.value("procedural").toObject();
   w.proceduralBiome = pg.value("biome").toString(w.proceduralBiome);
+  // The finite "meadow" arena is gone: old saves stream as the endless biome
+  // and keep the meadow ground cover (palette set below, 0 = not chosen).
+  const bool legacyMeadow = w.proceduralBiome.compare(
+                                QStringLiteral("meadow"),
+                                Qt::CaseInsensitive) == 0;
+  if (legacyMeadow)
+    w.proceduralBiome = QStringLiteral("endless");
   w.proceduralSeed = static_cast<quint32>(
       pg.value("seed").toDouble(static_cast<double>(w.proceduralSeed)));
   w.proceduralSizeM = pg.value("size_m").toDouble(w.proceduralSizeM);
@@ -180,6 +187,8 @@ vsim::WorldConfig worldFromJson(const QJsonObject &root) {
   w.worldPreset = pg.value("preset").toString(w.worldPreset);
   w.field.shape = pg.value("shape").toInt(w.field.shape);
   w.field.palette = pg.value("palette").toInt(w.field.palette);
+  if (legacyMeadow && w.field.palette == 0)
+    w.field.palette = vsim::procgen::kPalMeadow;
   w.field.mountainBias =
       pg.value("mountain_bias").toDouble(w.field.mountainBias);
   w.field.flatRadiusM = pg.value("flat_radius_m").toDouble(w.field.flatRadiusM);
@@ -327,11 +336,11 @@ void WorldEditorWidget::buildProceduralSection(QVBoxLayout *root) {
   auto *form = new QFormLayout();
   procBiome_ = new QComboBox(body);
   procBiome_->addItem(tr("None (use world mesh)"), QString());
-  procBiome_->addItem(tr("Meadow (finite arena)"), QStringLiteral("meadow"));
-  procBiome_->addItem(tr("Endless meadow (streaming)"),
-                      QStringLiteral("endless"));
+  procBiome_->addItem(tr("Procedural (endless)"), QStringLiteral("endless"));
   // Preset-only biomes (hills/alpine/...) are not listed: picking one here
-  // would mesh with meadow defaults. They come from the World preset combo.
+  // would stream with the default terrain. They come from the World preset
+  // combo. Every procedural world streams endlessly; only an imported mesh is
+  // finite.
 
   procPreset_ = new QComboBox(body);
   procPreset_->addItem(tr("Custom"), QString());
@@ -348,21 +357,9 @@ void WorldEditorWidget::buildProceduralSection(QVBoxLayout *root) {
   procSeed_->setValue(static_cast<int>(cfg_.proceduralSeed));
   procSeed_->setToolTip(tr("Random seed — change it for a different world."));
 
-  procSizeM_ =
-      spin(16.0, 4096.0, 0, 16.0, cfg_.proceduralSizeM, QStringLiteral(" m"));
-  procSizeM_->setToolTip(tr("Square world extent in metres."));
-
-  procResolution_ = new QSpinBox(body);
-  procResolution_->setRange(2, 1024);
-  procResolution_->setValue(cfg_.proceduralResolution);
-  procResolution_->setToolTip(
-      tr("Grid samples per side (higher = finer terrain, more triangles)."));
-
   form->addRow(tr("World preset:"), procPreset_);
   form->addRow(tr("Biome:"), procBiome_);
   form->addRow(tr("Seed:"), procSeed_);
-  form->addRow(tr("Size:"), procSizeM_);
-  form->addRow(tr("Resolution:"), procResolution_);
   col->addLayout(form);
 
   // Pull the four widgets into cfg_ (no regen — that's the button's job).
@@ -371,8 +368,6 @@ void WorldEditorWidget::buildProceduralSection(QVBoxLayout *root) {
       return;
     cfg_.proceduralBiome = procBiome_->currentData().toString();
     cfg_.proceduralSeed = static_cast<quint32>(procSeed_->value());
-    cfg_.proceduralSizeM = static_cast<float>(procSizeM_->value());
-    cfg_.proceduralResolution = procResolution_->value();
   };
 
   // Changing the biome regenerates immediately (it switches the whole world
@@ -409,10 +404,6 @@ void WorldEditorWidget::buildProceduralSection(QVBoxLayout *root) {
             emit worldMeshChanged();
           });
   connect(procSeed_, QOverload<int>::of(&QSpinBox::valueChanged), this,
-          [pull] { pull(); });
-  connect(procSizeM_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-          this, [pull] { pull(); });
-  connect(procResolution_, QOverload<int>::of(&QSpinBox::valueChanged), this,
           [pull] { pull(); });
 
   {
@@ -623,7 +614,7 @@ void WorldEditorWidget::buildProceduralTuningSection(QVBoxLayout *root) {
   auto *hint =
       new QLabel(tr("Live knobs for the Endless biome — edit, then press "
                     "Generate above to "
-                    "apply. (Seed and size are in the section above.)"),
+                    "apply. (Seed is in the section above.)"),
                  body);
   hint->setWordWrap(true);
   hint->setStyleSheet(
@@ -1100,10 +1091,6 @@ void WorldEditorWidget::syncProcToUi() {
   }
   if (procSeed_)
     procSeed_->setValue(static_cast<int>(cfg_.proceduralSeed));
-  if (procSizeM_)
-    procSizeM_->setValue(cfg_.proceduralSizeM);
-  if (procResolution_)
-    procResolution_->setValue(cfg_.proceduralResolution);
   for (auto &f : procKnobSyncers_)
     f(); // refresh the tuning knobs from cfg_
   procSyncing_ = false;

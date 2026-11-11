@@ -50,14 +50,30 @@ const PresetData &cached(const std::string &id, uint32_t seed) {
   return it->second;
 }
 
+// The 2x2 streamed chunks around the origin: the surface the layout is seated
+// on (every world streams on the kStreamChunk* lattice; there is no arena).
+ProcMesh meshLayoutArea(const TerrainField &f) {
+  ProcMesh all;
+  for (int cy = -1; cy <= 0; ++cy)
+    for (int cx = -1; cx <= 0; ++cx) {
+      const ProcMesh m =
+          meshFieldChunk(f, cx, cy, kStreamChunkM, kStreamChunkRes);
+      all.positions.insert(all.positions.end(), m.positions.begin(),
+                           m.positions.end());
+      all.normals.insert(all.normals.end(), m.normals.begin(),
+                         m.normals.end());
+      all.colors.insert(all.colors.end(), m.colors.begin(), m.colors.end());
+    }
+  return all;
+}
+
 const ProcMesh &cachedMesh(const std::string &id, uint32_t seed) {
   static std::map<std::pair<std::string, uint32_t>, ProcMesh> c;
   auto key = std::make_pair(id, seed);
   auto it = c.find(key);
   if (it == c.end()) {
     const PresetData &d = cached(id, seed);
-    it = c.emplace(key, meshArena(TerrainField(d.field), d.sizeM, d.resolution))
-             .first;
+    it = c.emplace(key, meshLayoutArea(TerrainField(d.field))).first;
   }
   return it->second;
 }
@@ -163,7 +179,7 @@ void TstWorldPresets::unknownIdRejected() {
   WindPresetData w;
   QVERIFY(!buildWindPreset("nope", 1, w));
   QVERIFY(buildWorldPreset("meadow", 5, d));
-  QCOMPARE(d.biome, std::string("meadow"));
+  QCOMPARE(d.biome, std::string("endless")); // streamed like every world
 }
 
 void TstWorldPresets::deterministicAndSeedSensitive() {
@@ -173,7 +189,6 @@ void TstWorldPresets::deterministicAndSeedSensitive() {
     const PresetData &b = cached(id, 12);
     QVERIFY2(sameObstacles(a, a2), id.c_str());
     QCOMPARE(a.sizeM, a2.sizeM);
-    QCOMPARE(a.resolution, a2.resolution);
     // Terrain samples: equal for equal seed, different for another seed
     // (flat/yard/racing are near-flat, so compare at a coarse tolerance too).
     const TerrainField fa(a.field), fa2(a2.field), fb(b.field);
@@ -195,10 +210,10 @@ void TstWorldPresets::terrainFiniteAndBounded() {
     const TerrainField f(d.field);
     QVERIFY(!m.empty());
     QCOMPARE(m.positions.size() % 3, size_t(0));
-    const int cr = arenaChunkRes(d.resolution);
+    const int cr = kStreamChunkRes;
     QCOMPARE(m.triangleCount(), size_t(4) * cr * cr * 2);
     float lo = 1e9f, hi = -1e9f;
-    const float half = d.sizeM * 0.5f + 1e-3f;
+    const float half = kStreamChunkM + 1e-3f;
     for (const PgVec3 &p : m.positions) {
       QVERIFY(std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z));
       QVERIFY(std::fabs(p.x) <= half && std::fabs(p.y) <= half);
@@ -207,8 +222,8 @@ void TstWorldPresets::terrainFiniteAndBounded() {
     }
     QVERIFY2(lo >= -1e-4f, id.c_str());
     QVERIFY2(hi <= d.field.heightM * 1.001f + 1e-3f, id.c_str());
-    qInfo("%-7s size %3.0f m  res %d  elevation %.1f .. %.1f m  obstacles %zu",
-          id.c_str(), d.sizeM, d.resolution, lo, hi, d.obstacles.size());
+    qInfo("%-7s layout %3.0f m  elevation %.1f .. %.1f m  obstacles %zu",
+          id.c_str(), d.sizeM, lo, hi, d.obstacles.size());
   }
 }
 
@@ -221,7 +236,7 @@ void TstWorldPresets::slopeCapRespected() {
     const PresetData &d = cached(id, 21);
     const ProcMesh &m = cachedMesh(id, 21);
     const TerrainField f(d.field);
-    const float step = arenaChunkM(d.sizeM) / arenaChunkRes(d.resolution);
+    const float step = kStreamChunkM / kStreamChunkRes;
     const float cap = d.field.maxSlope * 1.05f; // float slack
     size_t edges = 0, over = 0;
     float worst = 0.0f;
@@ -250,14 +265,14 @@ void TstWorldPresets::spawnOnMeshAndPadFlat() {
     const PresetData &d = cached(id, 21);
     const ProcMesh &m = cachedMesh(id, 21);
     const TerrainField f(d.field);
-    const float cm = arenaChunkM(d.sizeM);
-    const int cr = arenaChunkRes(d.resolution);
+    const float cm = kStreamChunkM;
+    const int cr = kStreamChunkRes;
     // The spawn height must land on the mesh's own triangles (the surface the
     // physics collides with), at the origin and around it.
     const float pts[5][2] = {{0, 0}, {1.3f, -0.7f}, {-2.1f, 3.4f}, {5, 5}, {-4, 6}};
     for (const auto &pt : pts) {
       const float x = pt[0], y = pt[1];
-      const float h = arenaSurfaceHeight(f, d.sizeM, d.resolution, x, y);
+      const float h = streamSurfaceHeight(f, x, y);
       QVERIFY(std::isfinite(h));
       bool hit = false;
       for (size_t t = 0; t + 2 < m.positions.size() && !hit; t += 3) {
@@ -312,7 +327,7 @@ void TstWorldPresets::obstaclesClearOfSpawnAndSeated() {
           continue; // tree crowns float on their trunks by design
         // Seated: the shape's base is not above the local surface (no floating
         // gap) and its top is above it.
-        const float g = arenaSurfaceHeight(f, d.sizeM, d.resolution, o.x, o.y);
+        const float g = streamSurfaceHeight(f, o.x, o.y);
         const float base = -(o.zc + o.sz * 0.5f), top = -(o.zc - o.sz * 0.5f);
         if (o.type == 2 || id != "racing") {
           QVERIFY2(base <= g + 0.02f, (id + ": obstacle floats above ground").c_str());
@@ -355,7 +370,7 @@ void TstWorldPresets::openPresetsGetMarkerPoles() {
         QVERIFY2(o.sz >= kMarkerPoleH, id);
         QVERIFY2(std::hypot(o.x, o.y) >= kSpawnClearM + o.sx - 1e-3f, id);
         QVERIFY2(std::fabs(o.x) <= half && std::fabs(o.y) <= half, id);
-        const float g = arenaSurfaceHeight(f, d.sizeM, d.resolution, o.x, o.y);
+        const float g = streamSurfaceHeight(f, o.x, o.y);
         QVERIFY2(-(o.zc + o.sz * 0.5f) <= g + 0.02f, id); // base not floating
         QVERIFY2(-(o.zc - o.sz * 0.5f) > g, id);          // not buried
       }
