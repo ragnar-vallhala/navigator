@@ -394,7 +394,25 @@ private slots:
           return std::hypot(p.x() - x, p.y() - y) < 30.0f && !a_->shipBusy();
         },
         60000));
-    pump(6000); // fall (8 m) and settle
+    // Fall (8 m) and settle, sampling the pose so a failure shows whether the
+    // vehicle was still falling, resting on the engine's z=0 floor, or lifted.
+    QString trace;
+    {
+      QElapsedTimer tl;
+      tl.start();
+      qint64 next = 0;
+      while (tl.elapsed() < 6000) {
+        pump(20);
+        if (tl.elapsed() >= next) {
+          next += 500;
+          trace += QStringLiteral(" t=%1:z=%2,vz=%3,busy=%4")
+                       .arg(tl.elapsed())
+                       .arg(a_->lastPos().z(), 0, 'f', 1)
+                       .arg(a_->lastVel().z(), 0, 'f', 1)
+                       .arg(a_->shipBusy() ? 1 : 0);
+        }
+      }
+    }
     const QVector3D p = a_->lastPos();
     const float g = a_->groundAt(p.x(), p.y());
     const float alt = -p.z() - g;
@@ -413,6 +431,8 @@ private slots:
           "vz=%.2f chunks=%zu pads=%zu rss=%ld MB",
           qPrintable(preset), dist, p.x(), p.y(), p.z(), g, alt,
           a_->lastVel().z(), a_->chunksCached(), a_->pads().size(), rssMb);
+    if (alt < -0.3f)
+      qWarning("pose trace after the teleport:%s", qPrintable(trace));
     QVERIFY2(alt >= -0.3f, "vehicle fell through the terrain far from origin");
     QVERIFY2(alt < 3.0f, "vehicle did not come to rest on the terrain");
     // (Vertical speed is only logged: a vehicle at rest on a steep dune can
