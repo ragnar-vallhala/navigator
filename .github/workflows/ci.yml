@@ -84,12 +84,32 @@ jobs:
         with:
           submodules: recursive
       - name: Install Qt6 + assimp
+        # The runner's apt mirror has hung this step for 30+ minutes more than
+        # once (cancel + rerun fixed it): bound every attempt and retry.
+        timeout-minutes: 20
         run: |
-          sudo apt-get update
+          apt_retry() { # bounded attempts: a hung mirror must not eat the job
+            for a in 1 2 3; do
+              sudo timeout -k 10 300 apt-get -o Acquire::Retries=3 \
+                -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+                -o DPkg::Lock::Timeout=120 "$@" && return 0
+              echo "apt-get $1 failed or timed out (attempt $a), retrying"
+              # a killed install leaves dpkg interrupted
+              sudo dpkg --configure -a || true
+              # the runner could not resolve the default Ubuntu mirror
+              # hostnames (DNS): retry through a different mirror
+              sudo sed -i -E 's#(mirror\+file:/etc/apt/apt-mirrors\.txt|https?://(azure\.archive|security|archive)\.ubuntu\.com/ubuntu/?)#http://mirrors.edge.kernel.org/ubuntu/#g' \
+                /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list \
+                /etc/apt/sources.list 2>/dev/null || true
+              sleep 10
+            done
+            return 1
+          }
+          apt_retry update
           # libpulse-dev is optional to the build (find_library, degrades
           # gracefully) but is installed so CI compiles the same audio path a
           # developer machine does, rather than a variant nobody runs.
-          sudo apt-get install -y cmake clang-tidy-18 jq \
+          apt_retry install -y cmake clang-tidy-18 jq \
             qt6-base-dev qt6-base-dev-tools qt6-serialport-dev \
             libgl1-mesa-dev libassimp-dev libpulse-dev python3-numpy \
             xvfb libgl1-mesa-dri libxkbcommon-x11-0 libxcb-icccm4 \
@@ -284,9 +304,27 @@ jobs:
         with:
           submodules: recursive
       - name: Install Qt6 + private headers + Xvfb
+        timeout-minutes: 20
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build python3-numpy \
+          apt_retry() { # bounded attempts: a hung mirror must not eat the job
+            for a in 1 2 3; do
+              sudo timeout -k 10 300 apt-get -o Acquire::Retries=3 \
+                -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+                -o DPkg::Lock::Timeout=120 "$@" && return 0
+              echo "apt-get $1 failed or timed out (attempt $a), retrying"
+              # a killed install leaves dpkg interrupted
+              sudo dpkg --configure -a || true
+              # the runner could not resolve the default Ubuntu mirror
+              # hostnames (DNS): retry through a different mirror
+              sudo sed -i -E 's#(mirror\+file:/etc/apt/apt-mirrors\.txt|https?://(azure\.archive|security|archive)\.ubuntu\.com/ubuntu/?)#http://mirrors.edge.kernel.org/ubuntu/#g' \
+                /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list \
+                /etc/apt/sources.list 2>/dev/null || true
+              sleep 10
+            done
+            return 1
+          }
+          apt_retry update
+          apt_retry install -y cmake ninja-build python3-numpy \
             qt6-base-dev qt6-base-private-dev qt6-base-dev-tools \
             qt6-serialport-dev libgl1-mesa-dev libassimp-dev libpulse-dev \
             xvfb libgl1-mesa-dri libxkbcommon-x11-0 libxcb-icccm4 \
