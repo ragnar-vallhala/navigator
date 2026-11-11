@@ -23,9 +23,10 @@
 // *meshed* surface (surfaceHeight), the same one the physics collides with, and
 // kept clear of the spawn at the origin.
 //
-// Finite arenas: every preset except "meadow" (the original TerrainGen arena)
-// is a square arena of PresetData::sizeM centred on the origin, meshed from the
-// TerrainField as 2x2 chunks (meshArena) so the origin is a lattice node.
+// Endless worlds: every preset is streamed (ChunkStreamer) from its TerrainField
+// on the kStreamChunk* lattice, so the terrain has no edge. PresetData::sizeM is
+// only the extent over which the obstacle layout (gates, yard, trees, markers)
+// is scattered around the spawn.
 #pragma once
 
 #include "Flora.h"
@@ -64,7 +65,6 @@ struct PresetData {
   FieldParams field; // seed already applied
   FloraParams flora;
   float sizeM = 256.0f;
-  int resolution = 192;
   std::vector<PgObstacle> obstacles;
   std::vector<RaceGate> gates; // racing only
   float propDiameterM = 0.0f;  // largest prop the layout was sized for
@@ -99,16 +99,6 @@ inline bool presetNeedsReapply(const std::string &appliedId,
                                uint32_t seed) {
   return !id.empty() && (id != appliedId || seed != appliedSeed);
 }
-
-// Arena meshing: chunk geometry shared by the mesh, the spawn height and the
-// minimap so they all use one lattice.
-inline float arenaChunkM(float sizeM) { return sizeM * 0.5f; }
-inline int arenaChunkRes(int resolution) {
-  return resolution / 2 < 2 ? 2 : resolution / 2;
-}
-ProcMesh meshArena(const TerrainField &f, float sizeM, int resolution);
-float arenaSurfaceHeight(const TerrainField &f, float sizeM, int resolution,
-                         float wx, float wy);
 
 // Wind presets: "off", "calm", "breezy", "gusty". The heading is derived from
 // the seed (deterministic); magnitudes are fixed per preset.

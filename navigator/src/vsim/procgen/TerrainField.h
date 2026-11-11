@@ -129,4 +129,13 @@ ProcMesh meshFieldChunk(const TerrainField &f, int cx, int cy, float chunkM,
 float surfaceHeight(const TerrainField &f, float wx, float wy, float chunkM,
                     int res);
 
+// The one chunk lattice every procedural world is streamed on (ChunkStreamer's
+// defaults). Anything that must rest on the streamed surface without a streamer
+// at hand (preset obstacle layout) samples it via streamSurfaceHeight().
+inline constexpr float kStreamChunkM = 192.0f;
+inline constexpr int kStreamChunkRes = 100;
+inline float streamSurfaceHeight(const TerrainField &f, float wx, float wy) {
+  return surfaceHeight(f, wx, wy, kStreamChunkM, kStreamChunkRes);
+}
+
 } // namespace vsim::procgen
