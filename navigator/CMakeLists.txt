@@ -88,6 +88,9 @@ set(GCS_SOURCES
     src/ui/widgets/VGauge.cpp
     src/ui/widgets/LogPanel.cpp
     src/ui/widgets/FaultsPanel.cpp
+    src/ui/widgets/AttitudePanel.cpp
+    src/ui/widgets/NumbersPanel.cpp
+    src/ui/widgets/LogsPanel.cpp
     src/core/FaultsModel.cpp
     src/core/crc.cpp
     src/core/CommandRegistry.cpp
@@ -147,6 +150,10 @@ set(GCS_HEADERS
     src/ui/widgets/ImuPanel.h
     src/ui/widgets/LogPanel.h
     src/ui/widgets/FaultsPanel.h
+    src/ui/widgets/AttitudePanel.h
+    src/ui/widgets/NumbersPanel.h
+    src/ui/widgets/LogsPanel.h
+    src/ui/widgets/HomePanelIds.h
     src/core/FaultsModel.h
     src/core/Types.h
     src/core/crc.h
@@ -212,6 +219,11 @@ set(GCS_SITL_SOURCES
     src/autotune/SysId.cpp
     src/autotune/AutotuneWorker.cpp
     src/ui/widgets/SimulatorWidget.cpp
+    src/ui/widgets/SimViewPanel.cpp
+    src/ui/widgets/SimVehiclePanel.cpp
+    src/ui/widgets/SimWorldPanel.cpp
+    src/ui/widgets/SimControlsPanel.cpp
+    src/ui/widgets/SimAutotunePanel.cpp
     src/ui/widgets/GeometryEditorWidget.cpp
     src/ui/widgets/WorldEditorWidget.cpp
     src/ui/widgets/ContourMinimapWidget.cpp
@@ -249,6 +261,12 @@ set(GCS_SITL_HEADERS
     src/autotune/SysId.h
     src/autotune/AutotuneWorker.h
     src/ui/widgets/SimulatorWidget.h
+    src/ui/widgets/SimPanelsCommon.h
+    src/ui/widgets/SimViewPanel.h
+    src/ui/widgets/SimVehiclePanel.h
+    src/ui/widgets/SimWorldPanel.h
+    src/ui/widgets/SimControlsPanel.h
+    src/ui/widgets/SimAutotunePanel.h
     src/ui/widgets/PendingCommand.h
     src/ui/widgets/CommandRetrier.h
     src/ui/widgets/PanelWidgets.h

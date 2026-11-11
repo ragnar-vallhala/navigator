@@ -21,6 +21,9 @@
 #include "../protocol/CommandCodec.h"
 #include "../replay/ReplaySource.h"
 #include "../ui/widgets/AboutDialog.h"
+#include "../ui/widgets/AttitudePanel.h"
+#include "../ui/widgets/LogsPanel.h"
+#include "../ui/widgets/NumbersPanel.h"
 #include "../ui/widgets/CommandPalette.h"
 #include "../ui/widgets/RecentViewsOverlay.h"
 #include "../ui/widgets/ReplayBar.h"
@@ -381,6 +384,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
                       .arg(sim ? "sim" : "firmware"));
               Notify::ok(this, sim ? tr("Applied gains to sim")
                                    : tr("Applied gains to firmware"));
+              m_simulatorWidget->notifyPidGainsSent();
               return;
             }
 #ifdef NAVIGATOR_HAS_SITL
@@ -578,117 +582,33 @@ void MainWindow::buildUi() {
   rootVBox->setSpacing(8);
   rootVBox->setContentsMargins(8, 8, 8, 8);
 
+  // Each piece of the home page is a self-contained panel (ids in
+  // HomePanelIds.h); this only assembles them into the splitters.
+
   // ---- Top row: attitude + attitude labels + IMU panel ----
   m_topSplitter = new QSplitter(Qt::Horizontal, m_homeWidget);
   m_topSplitter->setObjectName("HomeTopSplitter");
   auto *topSplitter = m_topSplitter;
 
-  // ---- Attitude group ----
-  auto *attGroup = new QGroupBox("Attitude", m_homeWidget);
-  auto *attLayout = new QVBoxLayout(attGroup);
+  // ---- Attitude group (view3d) with the roll/pitch/yaw numbers inside ----
+  auto *attPanel = new AttitudePanel(m_homeWidget);
+  m_statusLabel = attPanel->statusLabel();
+  m_attStack = attPanel->stack();
+  m_attitude = attPanel->attitude();
+  m_drone3d = attPanel->drone3d();
+  m_flightModeLabel = attPanel->flightModeLabel();
+  connect(attPanel, &AttitudePanel::view3dToggled, this,
+          &MainWindow::onToggle3d);
 
-  // Header: 2D / 3D segmented toggle at the top right (mockup .tt).
-  auto *headerLayout = new QHBoxLayout();
-  headerLayout->addStretch();
-  auto *btn2d = new QPushButton("2D", attGroup);
-  auto *btn3d = new QPushButton("3D", attGroup);
-  auto *viewGroup = new QButtonGroup(this);
-  viewGroup->setExclusive(true);
-  for (auto *b : {btn2d, btn3d}) {
-    b->setObjectName("ToggleButton");
-    b->setCheckable(true);
-    // Fixed height only; let the width follow the text + padding so the label
-    // is never clipped (was setFixedSize, which cropped "2D"/"3D").
-    b->setFixedHeight(22);
-    b->setMinimumWidth(38);
-    b->setCursor(Qt::PointingHandCursor);
-  }
-  btn2d->setChecked(true);
-  btn2d->setToolTip(tr("2D HUD"));
-  btn3d->setToolTip(tr("3D airframe view"));
-  viewGroup->addButton(btn2d, 0);
-  viewGroup->addButton(btn3d, 1);
-  connect(viewGroup, &QButtonGroup::idClicked, this,
-          [this](int id) { onToggle3d(id == 1); });
-  headerLayout->addWidget(btn2d);
-  headerLayout->addWidget(btn3d);
-  attLayout->addLayout(headerLayout);
-
-  // Firmware system-state pill — ABOVE the ADI (mockup .state-bar). Shows
-  // ARMED / STANDBY / FAILSAFE as status packets arrive; starts muted so it
-  // doesn't compete with the status-bar connection pill (FR-UX-05).
-  m_statusLabel = new QLabel("—", attGroup);
-  m_statusLabel->setAlignment(Qt::AlignCenter);
-  m_statusLabel->setStyleSheet(
-      QString("font-size: 16px; font-weight: bold; color: %1; "
-              "background: %2; border: 1px solid %3; "
-              "border-radius: 4px; padding: 4px; margin-bottom: 6px;")
-          .arg(Theme::hex(Theme::kTextDim), Theme::hex(Theme::kBg),
-               Theme::hex(Theme::kBorder)));
-  attLayout->addWidget(m_statusLabel);
-
-  m_attStack = new QStackedWidget(attGroup);
-  m_attitude = new AttitudeWidget(m_attStack);
-  m_drone3d = new Drone3DWidget(m_attStack);
-  m_attStack->addWidget(m_attitude);
-  m_attStack->addWidget(m_drone3d);
-  attLayout->addWidget(m_attStack, 1);
-
-  // Flight-mode pill: STABILISE / ACRO + source (RC switch or GCS override),
-  // driven by SYSTEM_ORIGIN_FLIGHT_MODE telemetry just like the state pill above.
-  m_flightModeLabel = new QLabel("—", attGroup);
-  m_flightModeLabel->setAlignment(Qt::AlignCenter);
-  m_flightModeLabel->setStyleSheet(
-      QString("font-size: 13px; font-weight: bold; color: %1; "
-              "background: %2; border: 1px solid %3; "
-              "border-radius: 4px; padding: 3px; margin-bottom: 8px;")
-          .arg(Theme::hex(Theme::kTextDim), Theme::hex(Theme::kBg),
-               Theme::hex(Theme::kBorder)));
-  attLayout->addWidget(m_flightModeLabel);
-
-  // Numeric roll/pitch/yaw labels in a horizontal line
-  auto *numHBox = new QHBoxLayout;
-  numHBox->setContentsMargins(10, 0, 10, 5);
-  numHBox->setSpacing(20);
-
-  const char *lblNames[] = {"Roll", "Pitch", "Yaw"};
-  QLabel **lblPtrs[] = {&m_rollLabel, &m_pitchLabel, &m_yawLabel};
-  const char *colors[] = {"#FF6B6B", "#4ECDC4", "#FFE66D"};
-
-  for (int i = 0; i < 3; ++i) {
-    auto *container = new QWidget(attGroup);
-    auto *vbox = new QVBoxLayout(container);
-    vbox->setContentsMargins(0, 0, 0, 0);
-    vbox->setSpacing(2);
-
-    auto *title = new QLabel(QString("<b>%1</b>").arg(lblNames[i]), container);
-    title->setStyleSheet(QString("color: %1; font-size: 11px;").arg(colors[i]));
-    title->setAlignment(Qt::AlignCenter);
-
-    *lblPtrs[i] = new QLabel("0.00°", container);
-    (*lblPtrs[i])
-        ->setStyleSheet(
-            QString("color: %1; font-size: 16px; font-weight: bold; "
-                    "font-family: Monospace;")
-                .arg(colors[i]));
-    (*lblPtrs[i])->setAlignment(Qt::AlignCenter);
-
-    QLabel **stdPtrs[] = {&m_rollStd, &m_pitchStd, &m_yawStd};
-    *stdPtrs[i] = new QLabel("± σ 0.000", container);
-    (*stdPtrs[i])
-        ->setStyleSheet(QString(
-            "color: #888888; font-size: 10px; font-family: Monospace;"));
-    (*stdPtrs[i])->setAlignment(Qt::AlignCenter);
-
-    vbox->addWidget(title);
-    vbox->addWidget(*lblPtrs[i]);
-    vbox->addWidget(*stdPtrs[i]);
-    // Equal-stretch columns: each label is centred in its own third, so the
-    // three stay evenly spread + column-aligned as the panel is resized.
-    numHBox->addWidget(container, 1);
-  }
-  attLayout->addLayout(numHBox);
-  topSplitter->addWidget(attGroup);
+  auto *numbers = new NumbersPanel(attPanel);
+  m_rollLabel = numbers->rollLabel();
+  m_pitchLabel = numbers->pitchLabel();
+  m_yawLabel = numbers->yawLabel();
+  m_rollStd = numbers->rollStd();
+  m_pitchStd = numbers->pitchStd();
+  m_yawStd = numbers->yawStd();
+  attPanel->bodyLayout()->addWidget(numbers);
+  topSplitter->addWidget(attPanel);
 
   // ---- IMU Panel ----
   m_imuPanel = new ImuPanel(m_homeWidget);
@@ -697,30 +617,14 @@ void MainWindow::buildUi() {
   topSplitter->setStretchFactor(0, 1);
   topSplitter->setStretchFactor(1, 2);
 
-  // ---- Bottom: Log panel ----
-  m_logPanel = new LogPanel(m_homeWidget);
-  m_logPanel->setMinimumHeight(180);
-
-  // ---- Vertical splitter: attitude+imu / log ----
+  // ---- Vertical splitter: attitude+imu / (Log | Faults) ----
   m_vSplitter = new QSplitter(Qt::Vertical, m_homeWidget);
   m_vSplitter->setObjectName("HomeVSplitter");
   m_vSplitter->addWidget(topSplitter);
-  // Log and Faults share the bottom slot as tabs: the faults list is persistent
-  // but low-traffic, so it must not cost the log any height; the tab title
-  // carries the unacknowledged count so a raised fault is visible from Log.
-  m_faultsPanel = new FaultsPanel(m_homeWidget);
-  m_bottomTabs = new QTabWidget(m_homeWidget);
-  m_bottomTabs->setObjectName("HomeBottomTabs");
-  m_bottomTabs->setMinimumHeight(180);
-  m_bottomTabs->addTab(m_logPanel, tr("Log"));
-  m_bottomTabs->addTab(m_faultsPanel, m_faultsPanel->title());
-  connect(m_faultsPanel, &FaultsPanel::countsChanged, this, [this] {
-    const int i = m_bottomTabs->indexOf(m_faultsPanel);
-    m_bottomTabs->setTabText(i, m_faultsPanel->title());
-    m_bottomTabs->tabBar()->setTabTextColor(
-        i, m_faultsPanel->needsAttention() ? m_faultsPanel->badgeColor()
-                                           : QColor());
-  });
+  auto *logs = new LogsPanel(m_homeWidget);
+  m_bottomTabs = logs;
+  m_logPanel = logs->logPanel();
+  m_faultsPanel = logs->faultsPanel();
   m_vSplitter->addWidget(m_bottomTabs);
   m_vSplitter->setStretchFactor(0, 3);
   m_vSplitter->setStretchFactor(1, 1);

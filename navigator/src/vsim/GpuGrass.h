@@ -23,6 +23,14 @@
 // draw then renders exactly that many instances — the CPU never touches a blade,
 // so there is no scatter cost, no instance storage, and no upload hitches.
 //
+// Ground cover: the terrain mesh keeps grass off tracks, ponds, rock and bare
+// patches (procgen::GroundCover::grass, via TerrainField::grassFactor). The
+// shader has no copy of that layer; instead the CPU evaluates the SAME
+// grassFactor over a world-anchored tile around the camera (on a worker thread,
+// rebuilt only when the camera leaves the tile's safe zone), uploads it as an R8
+// texture per ring and the compute pass multiplies the blade density by it. So
+// the CPU flora path and this one use one definition of where grass may grow.
+//
 // Requires GL 4.3+ (compute + SSBO + indirect). init() returns false otherwise
 // and the renderer falls back to the CPU flora path.
 #pragma once
@@ -36,7 +44,9 @@
 #include "procgen/Flora.h" // procgen::GrassLook
 
 #include <cstdint>
+#include <future>
 #include <memory>
+#include <vector>
 
 class QOpenGLExtraFunctions;
 
@@ -59,7 +69,33 @@ public:
     int grid = 768;     // candidates per side
     float falloffStart = 55.0f, falloffEnd = 90.0f; // distance density fade [m]
     procgen::GrassLook look; // live shading knobs (drive draw/compute uniforms)
+    // The world's full field (palette, shape, colour bands...) for the ground-
+    // cover mask. Its seed/height/noise members are overridden by the mirrored
+    // values above so the mask always sees the surface the blades sit on.
+    procgen::FieldParams field;
+    // false: the first mask of each ring is built on the calling thread (tests,
+    // deterministic captures). true: built on a worker and that ring draws
+    // nothing until it lands, so blades never show up on tracks meanwhile.
+    bool asyncMask = true;
   };
+
+  // One blade as the compute pass writes it (3 x vec4).
+  struct Blade {
+    float x, y, negH, yaw, height, flower, bend, pad0, r, g, b, pad1;
+  };
+  // Blades the last render() put in `ring`'s buffer (debug readback, stalls the
+  // GPU: tests only). Empty if not ready.
+  std::vector<Blade> readBlades(QOpenGLExtraFunctions *gl, int ring) const;
+
+  // Where grass may grow at (wx, wy): grassFactor() on the terrain at that point,
+  // with the slope taken over +-tm like the GPU's height texture. 0..1.
+  static float maskAt(const procgen::TerrainField &f, float wx, float wy,
+                      float tm);
+  // n x n R8 tile of maskAt() over the square [minX, minX+size)^2, texel (i, j)
+  // centred at min + (i+0.5)*size/n (row j = y), the layout the shader samples.
+  static std::vector<uint8_t> buildMask(const procgen::FieldParams &field,
+                                        float minX, float minY, float size,
+                                        int n);
 
   ~GpuGrass(); // GL objects must have been release()d with a current context
   bool init(QOpenGLExtraFunctions *gl); // false if compute unsupported
@@ -88,7 +124,26 @@ public:
 private:
   void buildBlade(QOpenGLExtraFunctions *gl, int ring, int segments);
 
+  struct MaskTile { // one ring's ground-cover tile (world-anchored)
+    unsigned int tex = 0;
+    bool valid = false;
+    float minX = 0, minY = 0, size = 0, cx = 0, cy = 0;
+    unsigned int gen = 0;
+    struct Built {
+      std::vector<uint8_t> data;
+      float minX, minY, size, cx, cy;
+    };
+    std::future<Built> pending;
+    unsigned int pendingGen = 0;
+  };
+  // Make ring's mask current for camera (cx, cy); false while none exists yet.
+  bool updateMask(QOpenGLExtraFunctions *gl, int ring, float cx, float cy,
+                  float regionSize, float ringCell);
+  procgen::FieldParams maskField() const;
+
   bool ready_ = false;
+  MaskTile mask_[kRings];
+  unsigned int maskGen_ = 1; // bumped by setParams: tiles older than it rebuild
   Params params_;
   // Heap-held so release() can drop them and init() build fresh ones in a new
   // context (a linked program cannot take shaders again, nor change context).
@@ -97,6 +152,7 @@ private:
   std::unique_ptr<QOpenGLShaderProgram> draw_; // render
   unsigned int heightTex_ = 0; // R32F terrain-height image around the camera
   int texSize_ = 512;
+  int maskSize_ = 512; // texels per mask tile side
   unsigned int ssbo_[kRings] = {0};     // per-ring blade instances
   unsigned int indirect_[kRings] = {0}; // per-ring DrawArraysIndirectCommand
   unsigned int counter_[kRings] = {0};  // per-ring atomic counter (-> indirect)

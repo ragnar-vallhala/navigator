@@ -17,6 +17,7 @@
 #pragma once
 
 #include "StartGate.h"
+#include "CustomVehicleWarning.h"
 
 #include "CommandRetrier.h"
 #include "vsim/SimWorker.h"
@@ -68,6 +69,11 @@ class QComboBox;
 class QSpinBox;
 class QPlainTextEdit;
 class QProcess;
+class SimViewPanel;
+class SimVehiclePanel;
+class SimWorldPanel;
+class SimControlsPanel;
+class SimAutotunePanel;
 
 namespace vsim {
 struct LoadedMesh;
@@ -100,6 +106,16 @@ struct BuiltChunk {
 
 class SimulatorWidget : public QWidget {
   Q_OBJECT
+  // The simulator panels (sim.view, sim.vehicle, sim.world, sim.controls,
+  // sim.autotune) build their widget trees through the private builders below:
+  // the controls they create are this widget's m_* state.
+  friend class SimViewPanel;
+  friend class SimVehiclePanel;
+  friend class SimWorldPanel;
+  friend class SimControlsPanel;
+  friend class SimAutotunePanel;
+  friend class SimulatorWidgetTestAccess; // tests/tst_world_change_floor.cpp
+
 public:
   explicit SimulatorWidget(QWidget *parent = nullptr);
   ~SimulatorWidget() override;
@@ -185,6 +201,11 @@ public:
   void stopInAppSim();
   void stopAutotune();
 
+  // MainWindow calls this after it actually sent the proposed gains (live FC
+  // or running sim). A refused Apply (no link, sim stopped, replay) does not,
+  // so the Custom-vehicle notice stays.
+  void notifyPidGainsSent();
+
   // Keep Start disabled until the app is restarted, showing `reason` as its
   // tooltip and in the status line. For after "Reset Firmware Settings": the
   // engine module caches the old settings in RAM and is never unloaded, so a
@@ -197,6 +218,11 @@ private:
   void applyStartBlock();
 
   void buildUi();
+  // Panel builders (defined next to their panel class, Sim*Panel.cpp).
+  void buildViewPanel(QWidget *viewHost);
+  void buildVehiclePage(ui::MinWidthScrollArea *scroll);
+  void buildWorldPage(ui::MinWidthScrollArea *scroll);
+  void buildSimControls(QWidget *host);
   void appendLog(const QString &tag, const QString &text);
 
   void startInAppSim();
@@ -265,6 +291,9 @@ private:
   // Start owes a spawn reset, but only once the collision under the spawn has
   // shipped (otherwise the drone is placed over terrain the engine lacks).
   bool spawnResetWaitsForCollision() const;
+  // After the world changed: respawn on the home pad of the new ground (sim
+  // running: like Reset, once the collision is in) or park the view there.
+  void placeVehicleOnWorld();
   void startShipJob(WorldShipReq req);
   void onShipFinished(const WorldShipResult &r, int gen, const QString &path,
                       const QString &tmp);
@@ -537,6 +566,9 @@ private:
   bool m_attached = false;         // true while mirroring an external sim
   QCheckBox *m_fpvCheck = nullptr; // onboard FPV (only meaningful running)
   QLabel *m_simStatusLabel = nullptr;
+  QLabel *m_customWarnLabel = nullptr; // Custom + untuned notice (non-modal)
+  CustomTuneState m_customTune;
+  void updateCustomWarning(bool atStart);
   QLabel *m_simPoseLabel = nullptr;
 
   // ---- live readouts derived from snapshot ----

@@ -21,7 +21,9 @@
 #include <QtGlobal>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstring>
 #include <vector>
 
 // GL 4.3 enums (may be absent from the ES-oriented extra-functions headers).
@@ -54,6 +56,15 @@
 #endif
 #ifndef GL_MAP_READ_BIT
 #define GL_MAP_READ_BIT 0x0001
+#endif
+#ifndef GL_R8
+#define GL_R8 0x8229
+#endif
+#ifndef GL_RED
+#define GL_RED 0x1903
+#endif
+#ifndef GL_CLAMP_TO_EDGE
+#define GL_CLAMP_TO_EDGE 0x812F
 #endif
 #ifndef GL_R32F
 #define GL_R32F 0x822E
@@ -126,6 +137,8 @@ uniform float u_grassMaxFrac,u_slopeLo,u_slopeHi,u_heightMean,u_heightStd,u_flow
 uniform float u_facefrac;   // fraction of blades turned broadside to the camera
 uniform int u_originCellX,u_originCellY; uniform float u_cell;
 uniform vec2 u_regionMin; uniform float u_regionSize;
+uniform sampler2D u_mask;   // ground cover: grass factor 0..1 (CPU grassFactor)
+uniform vec3 u_maskRect;    // world minX, minY, size of that tile
 uniform vec3 u_camPos; uniform mat4 u_vp;
 uniform float u_falloffStart,u_falloffEnd,u_innerStart,u_innerEnd,u_farRadius;
 uint hash32(uint x){ x^=x>>16; x*=0x7feb352du; x^=x>>15; x*=0x846ca68bu; x^=x>>16; return x; }
@@ -157,6 +170,9 @@ void main(){
   // Altitude thinning over a WIDE band (0.40..1.20 of the height limit) so grass
   // fades out gradually with elevation instead of cutting off in a hard line.
   float density=(1.0-ss(u_grassMaxFrac*0.40,u_grassMaxFrac*1.20,t))*ss(u_slopeLo,u_slopeHi,flatn);
+  // Tracks, ponds, rock and bare patches stay grass-free (same field the CPU
+  // flora path multiplies in), sampled at the blade's own position.
+  density*=texture(u_mask,(vec2(wx,wy)-u_maskRect.xy)/u_maskRect.z).r;
   float dist=length(vec2(wx,wy)-u_camPos.xy);
   float outer=1.0-ss(u_falloffStart,u_falloffEnd,dist);
   // Far rings fade IN over the SAME window the previous ring fades OUT, so total
@@ -399,7 +415,159 @@ bool GpuGrass::init(QOpenGLExtraFunctions *gl) {
   return true;
 }
 
-void GpuGrass::setParams(const Params &p) { params_ = p; }
+void GpuGrass::setParams(const Params &p) {
+  params_ = p;
+  ++maskGen_; // field / palette may have changed: rebuild the cover tiles
+}
+
+procgen::FieldParams GpuGrass::maskField() const {
+  procgen::FieldParams f = params_.field;
+  f.seed = params_.seed;
+  f.heightM = params_.heightM;
+  f.featureM = params_.featureM;
+  f.macroM = params_.macroM;
+  f.octaves = params_.octaves;
+  f.lacunarity = params_.lacunarity;
+  f.gain = params_.gain;
+  f.mountainMix = params_.mountainMix;
+  return f;
+}
+
+float GpuGrass::maskAt(const procgen::TerrainField &f, float wx, float wy,
+                       float tm) {
+  const float h = f.height(wx, wy);
+  const float dhdx = (f.height(wx + tm, wy) - f.height(wx - tm, wy)) / (2 * tm);
+  const float dhdy = (f.height(wx, wy + tm) - f.height(wx, wy - tm)) / (2 * tm);
+  const float flatness = 1.0f / std::sqrt(dhdx * dhdx + dhdy * dhdy + 1.0f);
+  return f.grassFactor(wx, wy, h, flatness);
+}
+
+std::vector<uint8_t> GpuGrass::buildMask(const procgen::FieldParams &field,
+                                         float minX, float minY, float size,
+                                         int n) {
+  const procgen::TerrainField f(field);
+  const float tm = size / float(n);
+  // Heights over the tile plus a one-texel apron, so slopes are central
+  // differences of the same samples (identical to maskAt's separate calls).
+  const int g = n + 2;
+  std::vector<float> H(size_t(g) * size_t(g));
+  for (int j = 0; j < g; ++j)
+    for (int i = 0; i < g; ++i)
+      H[size_t(j) * size_t(g) + size_t(i)] =
+          f.height(minX + (float(i - 1) + 0.5f) * tm,
+                   minY + (float(j - 1) + 0.5f) * tm);
+  std::vector<uint8_t> out(size_t(n) * size_t(n));
+  for (int j = 0; j < n; ++j)
+    for (int i = 0; i < n; ++i) {
+      const auto at = [&](int di, int dj) {
+        return H[size_t(j + 1 + dj) * size_t(g) + size_t(i + 1 + di)];
+      };
+      const float dhdx = (at(1, 0) - at(-1, 0)) / (2 * tm);
+      const float dhdy = (at(0, 1) - at(0, -1)) / (2 * tm);
+      const float flatness = 1.0f / std::sqrt(dhdx * dhdx + dhdy * dhdy + 1.0f);
+      const float wx = minX + (float(i) + 0.5f) * tm;
+      const float wy = minY + (float(j) + 0.5f) * tm;
+      const float gr = f.grassFactor(wx, wy, at(0, 0), flatness);
+      out[size_t(j) * size_t(n) + size_t(i)] =
+          uint8_t(std::lround(std::clamp(gr, 0.0f, 1.0f) * 255.0f));
+    }
+  return out;
+}
+
+bool GpuGrass::updateMask(QOpenGLExtraFunctions *gl, int ring, float cx,
+                          float cy, float regionSize, float /*ringCell*/) {
+  MaskTile &m = mask_[ring];
+  // Tile is 1.5x the ring's region; blades only live within ~0.49 region of the
+  // camera, so the camera may drift 0.2 region before the tile is rebuilt.
+  const float tileSize = regionSize * 1.5f;
+  const auto launch = [&] {
+    const procgen::FieldParams field = maskField();
+    const float minX = cx - tileSize * 0.5f, minY = cy - tileSize * 0.5f;
+    const int n = maskSize_;
+    m.pendingGen = maskGen_;
+    m.pending = std::async(std::launch::async, [=] {
+      MaskTile::Built b;
+      b.data = buildMask(field, minX, minY, tileSize, n);
+      b.minX = minX;
+      b.minY = minY;
+      b.size = tileSize;
+      b.cx = cx;
+      b.cy = cy;
+      return b;
+    });
+  };
+  const auto land = [&](MaskTile::Built &b) {
+    if (!m.tex) {
+      gl->glGenTextures(1, &m.tex);
+      gl->glBindTexture(GL_TEXTURE_2D, m.tex);
+      gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+      gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+      gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      gl->glTexStorage2D(GL_TEXTURE_2D, 1, GL_R8, maskSize_, maskSize_);
+    } else {
+      gl->glBindTexture(GL_TEXTURE_2D, m.tex);
+    }
+    gl->glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    gl->glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, maskSize_, maskSize_, GL_RED,
+                        GL_UNSIGNED_BYTE, b.data.data());
+    gl->glBindTexture(GL_TEXTURE_2D, 0);
+    m.minX = b.minX;
+    m.minY = b.minY;
+    m.size = b.size;
+    m.cx = b.cx;
+    m.cy = b.cy;
+    m.valid = true;
+  };
+
+  if (m.pending.valid() &&
+      (m.pending.wait_for(std::chrono::seconds(0)) ==
+       std::future_status::ready)) {
+    MaskTile::Built b = m.pending.get();
+    if (m.pendingGen == maskGen_)
+      land(b);
+    m.gen = m.pendingGen;
+  }
+  const bool stale = m.valid && m.gen != maskGen_;
+  const bool far = m.valid && (std::fabs(cx - m.cx) > regionSize * 0.2f ||
+                               std::fabs(cy - m.cy) > regionSize * 0.2f);
+  if (!m.pending.valid() && (!m.valid || stale || far || m.gen != maskGen_)) {
+    launch();
+    if (!m.valid && !params_.asyncMask) {
+      MaskTile::Built b = m.pending.get();
+      land(b);
+      m.gen = m.pendingGen;
+    }
+  }
+  return m.valid;
+}
+
+std::vector<GpuGrass::Blade> GpuGrass::readBlades(QOpenGLExtraFunctions *gl,
+                                                  int ring) const {
+  std::vector<Blade> out;
+  if (!ready_ || ring < 0 || ring >= kNumRings)
+    return out;
+  unsigned int count = 0;
+  gl->glBindBuffer(GL_COPY_READ_BUFFER, counter_[ring]);
+  if (const void *c = gl->glMapBufferRange(GL_COPY_READ_BUFFER, 0, 4,
+                                           GL_MAP_READ_BIT)) {
+    std::memcpy(&count, c, 4);
+    gl->glUnmapBuffer(GL_COPY_READ_BUFFER);
+  }
+  count = std::min<unsigned int>(count, unsigned(maxBladesPerRing_));
+  if (count) {
+    gl->glBindBuffer(GL_COPY_READ_BUFFER, ssbo_[ring]);
+    if (const void *b = gl->glMapBufferRange(
+            GL_COPY_READ_BUFFER, 0, GLsizeiptr(count) * sizeof(Blade),
+            GL_MAP_READ_BIT)) {
+      out.resize(count);
+      std::memcpy(out.data(), b, size_t(count) * sizeof(Blade));
+      gl->glUnmapBuffer(GL_COPY_READ_BUFFER);
+    }
+  }
+  gl->glBindBuffer(GL_COPY_READ_BUFFER, 0);
+  return out;
+}
 
 void GpuGrass::release(QOpenGLExtraFunctions *gl) {
   ready_ = false;
@@ -421,13 +589,20 @@ void GpuGrass::release(QOpenGLExtraFunctions *gl) {
   if (heightTex_)
     gl->glDeleteTextures(1, &heightTex_);
   heightTex_ = 0;
+  for (MaskTile &m : mask_) {
+    if (m.pending.valid())
+      m.pending.wait(); // the worker only touches its own copy
+    if (m.tex)
+      gl->glDeleteTextures(1, &m.tex);
+    m = MaskTile();
+  }
 }
 
 int GpuGrass::liveObjects() const {
   int n = (fill_ ? 1 : 0) + (comp_ ? 1 : 0) + (draw_ ? 1 : 0) +
           (heightTex_ ? 1 : 0);
   for (int i = 0; i < kNumRings; ++i)
-    n += (ssbo_[i] ? 1 : 0) + (indirect_[i] ? 1 : 0) + (counter_[i] ? 1 : 0) +
+    n += (mask_[i].tex ? 1 : 0) + (ssbo_[i] ? 1 : 0) + (indirect_[i] ? 1 : 0) + (counter_[i] ? 1 : 0) +
          (bladeVbo_[i].isCreated() ? 1 : 0) + (vao_[i].isCreated() ? 1 : 0);
   return n;
 }
@@ -607,6 +782,12 @@ void GpuGrass::render(QOpenGLExtraFunctions *gl, const QMatrix4x4 &proj,
     const QVector2D regionMin(float(originCellX - halfGrid) * ring.cell,
                               float(originCellY - halfGrid) * ring.cell);
 
+    // Ground-cover tile for this ring (a ring with none yet draws nothing: its
+    // indirect command above already has instanceCount 0).
+    if (!updateMask(gl, i, camPos.x(), camPos.y(), regionSize, ring.cell))
+      continue;
+    const MaskTile &mk = mask_[i];
+
     // --- pass 1: fill the height texture (terrain noise once per texel) ---
     fill_->bind();
     gl->glUniform1ui(fill_->uniformLocation("u_seed"), params_.seed);
@@ -656,6 +837,11 @@ void GpuGrass::render(QOpenGLExtraFunctions *gl, const QMatrix4x4 &proj,
     comp_->setUniformValue("u_farRadius", farRadius);
     gl->glBindImageTexture(0, heightTex_, 0, GL_FALSE, 0, GL_READ_ONLY,
                            GL_R32F);
+    comp_->setUniformValue("u_mask", 2); // sampler on texture unit 2
+    comp_->setUniformValue("u_maskRect", QVector3D(mk.minX, mk.minY, mk.size));
+    gl->glActiveTexture(0x84C2 /*GL_TEXTURE2*/);
+    gl->glBindTexture(0x0DE1 /*GL_TEXTURE_2D*/, mk.tex);
+    gl->glActiveTexture(0x84C0 /*GL_TEXTURE0*/);
     gl->glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, ssbo_[i]);
     gl->glBindBufferBase(GL_ATOMIC_COUNTER_BUFFER, 1, counter_[i]);
     const int groups = (params_.grid + 15) / 16;
