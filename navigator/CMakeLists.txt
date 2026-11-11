@@ -426,6 +426,13 @@ endif()
 message(STATUS "Qt6 Navigator build configured")
 message(STATUS "Qt6 version: ${Qt6_VERSION}")
 
+# Workspace mock (docking prototype). Standalone; skipped unless Qt Advanced
+# Docking System is found. See tools/workspace_mock/CMakeLists.txt.
+option(NAVIGATOR_WORKSPACE_MOCK "Build the docking/workspace mock app" ON)
+if(NAVIGATOR_WORKSPACE_MOCK)
+    add_subdirectory(tools/workspace_mock)
+endif()
+
 # -------------------------------------------------------
 # Unit tests (QtTest + ctest). On by default; -DNAVIGATOR_BUILD_TESTS=OFF
 # to skip. Run with `ctest` from the build dir.

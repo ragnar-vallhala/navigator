@@ -195,6 +195,73 @@ jobs:
           tools/dev/run_clang_tidy.sh \
             navigator/build-tidy navigator/headless-sdk/cpp/worldmesh/build
 
+  # The workspace/docking mock (navigator/tools/workspace_mock) and its tests.
+  # Own job and own build directory so a problem here cannot turn the main
+  # build/clang-tidy job red, and so it needs neither the firmware SDK nor the
+  # secret behind it (SITL is off): it runs on fork PRs too.
+  #
+  # Qt Advanced Docking System is fetched at configure time from a PINNED
+  # commit (NAVIGATOR_FETCH_ADS) and built here as a shared library; it needs
+  # the Qt private headers, hence qt6-base-private-dev.
+  workspace:
+    name: Workspace mock + tests (Qt Advanced Docking, Linux)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Install Qt6 + private headers + Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build python3-numpy \
+            qt6-base-dev qt6-base-private-dev qt6-base-dev-tools \
+            qt6-serialport-dev libgl1-mesa-dev libassimp-dev libpulse-dev \
+            xvfb libgl1-mesa-dri libxkbcommon-x11-0 libxcb-icccm4 \
+            libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 \
+            libxcb-xkb1
+      - name: Configure + build the mock and its tests
+        run: |
+          cmake -S navigator -B navigator/build-ws -G Ninja \
+                -DNAVIGATOR_SITL=OFF -DNAVIGATOR_FETCH_ADS=ON \
+                -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build navigator/build-ws -j"$(nproc)" \
+                --target workspace_mock tst_workspace_manager tst_workspace_gl
+      - name: tst_workspace_manager (no GL, offscreen)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir navigator/build-ws --output-on-failure -R tst_workspace_manager
+      - name: tst_workspace_manager backtrace (only when it failed)
+        # The runner's Qt (6.x, newer than a developer machine's) can crash
+        # where the local one does not; print where, instead of just SEGFAULT.
+        if: failure()
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          sudo apt-get install -y gdb
+          gdb -batch -ex run -ex bt -ex "info threads" \
+              --args navigator/build-ws/tests/tst_workspace_manager || true
+      - name: tst_workspace_gl (xcb on Xvfb, software GL)
+        # The GL test needs a real platform plugin and skips itself under
+        # offscreen. It is run as a binary, not through ctest: navigator_test()
+        # pins QT_QPA_PLATFORM=offscreen on every ctest case (so this step's
+        # xcb was overridden and the test only ever skipped), and ctest hides
+        # a QtTest skip as a pass. Run directly, the log shows PASS or SKIP.
+        # It has not been green on a GitHub runner yet, so it does not fail the
+        # job until it has; drop continue-on-error once it has been green.
+        continue-on-error: true
+        # Run directly (no ctest TIMEOUT), the first run on a runner hung for
+        # 30+ minutes. Bound it, and use -v2 so the log shows the last test
+        # function reached when it stops.
+        timeout-minutes: 4
+        env:
+          QT_QPA_PLATFORM: xcb
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          timeout -k 10 150 xvfb-run -a -s "-screen 0 1280x800x24 +extension GLX" \
+            navigator/build-ws/tests/tst_workspace_gl -v2
+
   # The GCS-only Windows build (NAVIGATOR_SITL=OFF: the SITL bridge needs a
   # POSIX host) on MSYS2 UCRT64, the toolchain tools/windows/deploy-navigator-
   # msys.sh bundles from. It keeps the Windows port from rotting between
@@ -222,6 +289,7 @@ jobs:
             mingw-w64-ucrt-x86_64-python
             mingw-w64-ucrt-x86_64-qt6-base
             mingw-w64-ucrt-x86_64-qt6-serialport
+            git
       - name: Configure + build
         run: |
           cmake -S navigator -B build-win -G Ninja \
@@ -231,6 +299,20 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir build-win --output-on-failure
+      - name: Workspace mock + tests (Qt Advanced Docking)
+        # Qt Advanced Docking System is fetched (pinned commit) and built here.
+        # Never tried on MSYS2 UCRT64 by the author: it is allowed to fail
+        # until someone has seen it pass, and does not gate the check.
+        continue-on-error: true
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          cmake -S navigator -B build-win-ws -G Ninja \
+                -DCMAKE_BUILD_TYPE=Release -DNAVIGATOR_SITL=OFF \
+                -DNAVIGATOR_FETCH_ADS=ON
+          cmake --build build-win-ws -j"$(nproc)" \
+                --target workspace_mock tst_workspace_manager
+          ctest --test-dir build-win-ws --output-on-failure -R tst_workspace_manager
       - name: Failing tests, run directly
         if: failure()
         env:
@@ -254,7 +336,7 @@ jobs:
     name: CI required
     runs-on: ubuntu-latest
     if: always()
-    needs: [changes, commit-lint, navigator, windows]
+    needs: [changes, commit-lint, navigator, workspace, windows]
     steps:
       - env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
