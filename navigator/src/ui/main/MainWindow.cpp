@@ -931,9 +931,12 @@ void MainWindow::buildMenuBar() {
     if (forced) {
       dockToggle->setEnabled(false);
       dockToggle->setToolTip(
-          tr("Forced on by the NAVIGATOR_DOCKING environment variable"));
+          tr("Experimental. Forced on by the NAVIGATOR_DOCKING environment "
+             "variable"));
     } else {
-      dockToggle->setToolTip(tr("Takes effect the next time Navigator starts"));
+      dockToggle->setToolTip(
+          tr("Experimental: dockable panels and workspaces. Takes effect the "
+             "next time Navigator starts"));
     }
     connect(dockToggle, &QAction::toggled, this, [this](bool on) {
       DockShell::setPersisted(on);
