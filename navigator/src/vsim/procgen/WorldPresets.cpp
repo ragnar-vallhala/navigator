@@ -45,11 +45,7 @@ struct Rng {
 // Terrain context handed to the layout generators.
 struct Ground {
   const TerrainField &f;
-  float sizeM;
-  int res;
-  float at(float x, float y) const {
-    return arenaSurfaceHeight(f, sizeM, res, x, y);
-  }
+  float at(float x, float y) const { return streamSurfaceHeight(f, x, y); }
   // Lowest and highest surface under a round footprint.
   void span(float x, float y, float r, float &lo, float &hi) const {
     lo = hi = at(x, y);
@@ -316,8 +312,6 @@ PresetData baseArena(const std::string &biome, uint32_t seed, float sizeM) {
   d.field.seed = seed;
   d.flora.seed = seed;
   d.sizeM = sizeM;
-  // ~1.5 m grid cells; even so the 2x2 chunk split is exact.
-  d.resolution = static_cast<int>(sizeM / 1.5f) / 2 * 2;
   d.field.octaves = 5;
   d.field.flatRadiusM = 9.0f;
   return d;
@@ -353,7 +347,7 @@ bool isFieldBiome(const std::string &b) {
 bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
   if (id == "meadow") {
     out = PresetData{};
-    out.biome = "meadow";
+    out.biome = "endless"; // the streamed default terrain
     out.field.seed = seed;
     out.flora.seed = seed;
     return true;
@@ -385,7 +379,6 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     f.flatRadiusM = 12.0f;
   } else if (id == "flat") {
     d.sizeM = 300.0f;
-    d.resolution = 200;
     f.heightM = 1.2f;
     f.mountainMix = 0.0f;
     f.maxSlope = 0.3f;
@@ -402,7 +395,6 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     f.colSlopeT = 0.9f;
   } else if (id == "forest") {
     d.sizeM = 300.0f;
-    d.resolution = 200;
     f.heightM = 16.0f;
     f.featureM = 150.0f;
     f.mountainMix = 0.1f;
@@ -413,7 +405,6 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     f.colSlopeT = 0.8f;
   } else if (id == "racing") {
     d.sizeM = 300.0f;
-    d.resolution = 200;
     f.heightM = 5.0f;
     f.mountainMix = 0.0f;
     f.maxSlope = 0.25f;
@@ -421,7 +412,6 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     noSnowNoRock(f);
   } else { // yard
     d.sizeM = 240.0f;
-    d.resolution = 160;
     f.heightM = 0.6f;
     f.mountainMix = 0.0f;
     f.maxSlope = 0.2f;
@@ -429,7 +419,7 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     noSnowNoRock(f);
   }
   const TerrainField field(f);
-  const Ground g{field, d.sizeM, d.resolution};
+  const Ground g{field};
   if (id == "racing")
     layoutRacing(g, seed, d);
   else if (id == "yard")
@@ -440,27 +430,6 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     layoutMarkers(g, seed, d); // hills / alpine / flat / desert
   out = std::move(d);
   return true;
-}
-
-ProcMesh meshArena(const TerrainField &f, float sizeM, int resolution) {
-  ProcMesh all;
-  const float cm = arenaChunkM(sizeM);
-  const int cr = arenaChunkRes(resolution);
-  for (int cy = -1; cy <= 0; ++cy)
-    for (int cx = -1; cx <= 0; ++cx) {
-      ProcMesh m = meshFieldChunk(f, cx, cy, cm, cr);
-      all.positions.insert(all.positions.end(), m.positions.begin(),
-                           m.positions.end());
-      all.normals.insert(all.normals.end(), m.normals.begin(), m.normals.end());
-      all.colors.insert(all.colors.end(), m.colors.begin(), m.colors.end());
-    }
-  return all;
-}
-
-float arenaSurfaceHeight(const TerrainField &f, float sizeM, int resolution,
-                         float wx, float wy) {
-  return surfaceHeight(f, wx, wy, arenaChunkM(sizeM),
-                       arenaChunkRes(resolution));
 }
 
 const std::vector<PresetInfo> &windPresets() {

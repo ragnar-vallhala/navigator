@@ -100,13 +100,13 @@ public:
 
   struct Config {
     procgen::FieldParams field;
-    float chunkM = 192.0f;        // world metres per chunk side
-    int resolution = 100;         // visual tessellation (grid cells per side)
+    float chunkM = procgen::kStreamChunkM; // world metres per chunk side
+    int resolution = procgen::kStreamChunkRes; // visual tessellation (grid cells per side)
     // Collision tessellation. Keep == resolution: the physics surface is then the
     // very surface drawn (and surfaceHeight() samples), 0 m deviation. A coarser
     // value is cheaper for the BVH but deviates from the render mesh by metres
     // on rough terrain (measured 1.1 m max at 48 vs 100, 192 m chunks).
-    int collisionResolution = 100;
+    int collisionResolution = procgen::kStreamChunkRes;
     int renderRadius = 3;         // Chebyshev chunk radius kept loaded (visual)
     int collisionRadius = 1;      // chunk radius shipped to the daemon as a BVH
     float collisionLookaheadS = 1.0f;   // recentre toward where we will be

@@ -16,8 +16,9 @@
  */
 // tst_worldeditor.cpp — World tab preset wiring, driven through the real
 // widget handlers (offscreen). Guards the bug where applying a preset left the
-// biome/size/resolution widgets stale, so the next pull() (knob edit + Generate,
-// or a seed edit) wrote meadow 256/192 back over the preset.
+// biome widgets stale, so the next pull() (knob edit + Generate, or a seed edit)
+// wrote the previous biome back over the preset. Also: procedural worlds are
+// endless, so there is no finite meadow/size/resolution to pick.
 #include <QtTest/QtTest>
 
 #include "ui/widgets/WorldEditorWidget.h"
@@ -47,8 +48,7 @@ private:
   static int presetBiomeEntries(const WorldEditorWidget &we) {
     int n = 0;
     for (int i = 0; i < we.procBiome_->count(); ++i)
-      if (we.procBiome_->itemData(i).toString() != QLatin1String("meadow") &&
-          we.procBiome_->itemData(i).toString() != QLatin1String("endless") &&
+      if (we.procBiome_->itemData(i).toString() != QLatin1String("endless") &&
           !we.procBiome_->itemData(i).toString().isEmpty())
         ++n;
     return n;
@@ -61,11 +61,8 @@ private slots:
     const auto &c = we.config();
     QCOMPARE(c.proceduralBiome, QString("desert"));
     QCOMPARE(c.worldPreset, QString("desert"));
-    // Every widget pull() reads shows the preset, not the old meadow values.
+    // Every widget pull() reads shows the preset, not the previous biome.
     QCOMPARE(we.procBiome_->currentData().toString(), QString("desert"));
-    QCOMPARE(float(we.procSizeM_->value()), c.proceduralSizeM);
-    QCOMPARE(we.procResolution_->value(), c.proceduralResolution);
-    QCOMPARE(float(we.procSizeM_->value()), 400.0f);
     QCOMPARE(float(we.procKnobSpins_[0]->value()), c.field.heightM);
     QCOMPARE(we.procPreset_->currentData().toString(), QString("desert"));
     // Switching presets drops the previous "(preset)" biome entry.
@@ -86,7 +83,6 @@ private slots:
     const auto &c = we.config();
     QCOMPARE(c.proceduralBiome, QString("desert"));
     QCOMPARE(c.proceduralSizeM, preset.proceduralSizeM);
-    QCOMPARE(c.proceduralResolution, preset.proceduralResolution);
     QCOMPARE(c.field.shape, preset.field.shape);
     QCOMPARE(c.field.palette, preset.field.palette);
     QCOMPARE(c.field.featureM, preset.field.featureM);
@@ -99,19 +95,43 @@ private slots:
     pick(we, "alpine");
     const auto preset = we.config();
     we.procSeed_->setValue(77); // user edits the seed field
-    // Merely editing the seed must not clobber biome/size/resolution.
+    // Merely editing the seed must not clobber the biome.
     QCOMPARE(we.config().proceduralBiome, QString("alpine"));
     QCOMPARE(we.config().proceduralSizeM, preset.proceduralSizeM);
-    QCOMPARE(we.config().proceduralResolution, preset.proceduralResolution);
     clickGenerate(we);
     const auto &c = we.config();
     QCOMPARE(c.proceduralSeed, quint32(77));
     QCOMPARE(c.worldPreset, QString("alpine"));
     QCOMPARE(c.proceduralBiome, QString("alpine"));
     QCOMPARE(c.proceduralSizeM, preset.proceduralSizeM);
-    QCOMPARE(c.proceduralResolution, preset.proceduralResolution);
     QCOMPARE(c.field.heightM, preset.field.heightM);
     QCOMPARE(c.field.seed, quint32(77));
+  }
+
+  void legacyFiniteMeadowLoadsAsEndless() {
+    WorldEditorWidget we;
+    // No finite arena entry and no size/resolution controls any more.
+    for (int i = 0; i < we.procBiome_->count(); ++i)
+      QVERIFY(we.procBiome_->itemData(i).toString() != QLatin1String("meadow"));
+    // An old save of the finite meadow (with its size/resolution) streams now.
+    vsim::WorldConfig w;
+    QVERIFY(WorldEditorWidget::deserializeProcedural(
+        w, QStringLiteral("{\"biome\":\"meadow\",\"seed\":21,"
+                          "\"size_m\":300,\"resolution\":192}")));
+    QCOMPARE(w.proceduralBiome, QString("endless"));
+    QCOMPARE(w.proceduralSeed, quint32(21));
+    QVERIFY(vsim::isStreamedBiome(w.proceduralBiome));
+    we.setConfig(w);
+    QCOMPARE(we.procBiome_->currentData().toString(), QString("endless"));
+  }
+
+  void everyPresetStreams() {
+    for (const auto &p : vsim::worldPresetList()) {
+      vsim::WorldConfig w;
+      QVERIFY(vsim::applyWorldPreset(w, p.first, 5));
+      QVERIFY2(vsim::isStreamedBiome(w.proceduralBiome), qPrintable(p.first));
+    }
+    QVERIFY(!vsim::isStreamedBiome(QString()));
   }
 
   void setConfigRestoresWidgets() {
@@ -120,7 +140,6 @@ private slots:
     QVERIFY(vsim::applyWorldPreset(w, "forest", 5));
     we.setConfig(w);
     QCOMPARE(we.procBiome_->currentData().toString(), QString("forest"));
-    QCOMPARE(float(we.procSizeM_->value()), 300.0f);
     clickGenerate(we); // unchanged id/seed: keeps everything
     QCOMPARE(we.config().proceduralBiome, QString("forest"));
     QCOMPARE(we.config().obstacles.size(), w.obstacles.size());

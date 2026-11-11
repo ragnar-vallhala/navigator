@@ -35,10 +35,12 @@
 #include "SimulatorWidget.h"
 #include "SitlModule.h"
 #include "ProceduralWorld.h"
+#include "procgen/TerrainField.h"
 #include "WorldEditorWidget.h"
 
 #include <QApplication>
 #include <QDir>
+#include <QFile>
 #include <QElapsedTimer>
 #include <QGuiApplication>
 #include <QStandardPaths>
@@ -63,6 +65,15 @@ public:
   bool hasGround() const { return bool(w_.m_terrainHeightAt); }
   float groundAt(float x, float y) const { return w_.m_terrainHeightAt(x, y); }
   QVector3D lastPos() const { return w_.m_lastDronePos; }
+  QVector3D lastVel() const { return w_.m_lastDroneVel; }
+  // Streaming state: meshed chunks cached around the vehicle, and the pads.
+  size_t chunksCached() const { return w_.m_chunkCache.size(); }
+  const std::vector<QVector3D> &pads() const { return w_.m_helipads; }
+  // Teleport the running vehicle to (x, y), `up` metres above the terrain
+  // sampler there, level and at rest (what a long flight would deliver).
+  void teleport(float x, float y, float up) {
+    w_.m_sim->sendResetPose(x, y, -(w_.m_terrainHeightAt(x, y) + up));
+  }
   bool running() const { return w_.m_sim != nullptr; }
   bool shipBusy() const {
     return w_.m_shipWatcher || w_.m_shipPending || w_.m_collisionPending ||
@@ -131,21 +142,22 @@ QVector<Change> changes() {
       QVERIFY2(vsim::applyWorldPreset(c, QString::fromLatin1(id), seed), id);
     };
   };
-  // Preset arenas whose ground at the origin is well above z=0, then a plain
-  // seed change within one preset, then the finite meadow, then no world.
+  // Presets whose ground at the origin is well above z=0, then a plain seed
+  // change within one preset, then the legacy finite "meadow" of old saves
+  // (streams now), then no world.
   return {
       {"preset alpine seed 3", preset("alpine", 3)},
       {"preset hills seed 11", preset("hills", 11)},
       {"preset hills seed 12 (seed only)", preset("hills", 12)},
       {"preset desert seed 5", preset("desert", 5)},
       {"preset alpine seed 99", preset("alpine", 99)},
-      {"meadow seed 21",
+      {"legacy meadow seed 21",
        [](vsim::WorldConfig &c) {
          c.worldPreset.clear();
          c.proceduralBiome = QStringLiteral("meadow");
          c.proceduralSeed = 21;
        }},
-      {"meadow seed 22 size 300",
+      {"legacy meadow seed 22 size 300",
        [](vsim::WorldConfig &c) {
          c.proceduralBiome = QStringLiteral("meadow");
          c.proceduralSeed = 22;
@@ -250,6 +262,97 @@ private slots:
                qPrintable(QStringLiteral("not re-placed after '%1'")
                               .arg(QString::fromLatin1(cs[i].name))));
     }
+  }
+
+  // Procedural worlds are endless: far past the old +-200 m arena edge the
+  // terrain still streams and still collides (the vehicle teleported there
+  // comes to rest on the ground instead of falling), and the helipads around it
+  // sit on the same surface an independent sampler of the world's field gives.
+  void farFromOriginStreamsAndCollides_data() {
+    QTest::addColumn<QString>("preset");
+    QTest::addColumn<float>("dist");
+    for (const char *id : {"alpine", "hills", "desert", "forest", "racing"})
+      for (float d : {600.0f, 2000.0f})
+        QTest::newRow(qPrintable(QStringLiteral("%1 %2 m").arg(id).arg(d)))
+            << QString::fromLatin1(id) << d;
+    for (float d : {600.0f, 2000.0f})
+      QTest::newRow(qPrintable(QStringLiteral("endless %1 m").arg(d)))
+          << QStringLiteral("endless") << d;
+  }
+  void farFromOriginStreamsAndCollides() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    if (!SitlModule::instance().available())
+      QSKIP("no engine module (set VAYU_SITL_MODULE)");
+    QFETCH(QString, preset);
+    QFETCH(float, dist);
+    if (!a_->running()) {
+      a_->start();
+      QVERIFY(a_->running());
+    }
+    a_->changeWorld([&](vsim::WorldConfig &c) {
+      if (preset == QLatin1String("endless")) {
+        c.worldPreset.clear();
+        c.proceduralBiome = preset;
+        c.proceduralSeed = 31;
+      } else {
+        QVERIFY(vsim::applyWorldPreset(c, preset, 31));
+      }
+    });
+    QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 30000));
+    pump(2000);
+
+    const float x = dist * 0.8f, y = dist * 0.6f; // |(x, y)| == dist
+    a_->teleport(x, y, 8.0f);
+    // The streamer follows the vehicle: wait for the collision there to ship.
+    QVERIFY(waitFor(
+        [&] {
+          const QVector3D p = a_->lastPos();
+          return std::hypot(p.x() - x, p.y() - y) < 30.0f && !a_->shipBusy();
+        },
+        60000));
+    pump(6000); // fall (8 m) and settle
+    const QVector3D p = a_->lastPos();
+    const float g = a_->groundAt(p.x(), p.y());
+    const float alt = -p.z() - g;
+    long rssMb = -1; // resident set, Linux only; informational
+#ifdef __linux__
+    {
+      QFile sm(QStringLiteral("/proc/self/statm"));
+      if (sm.open(QIODevice::ReadOnly)) {
+        const QList<QByteArray> f = sm.readAll().split(' ');
+        if (f.size() > 1)
+          rssMb = f[1].toLong() * 4 / 1024; // 4 KiB pages
+      }
+    }
+#endif
+    qInfo("far %s %.0f m: vehicle=(%.1f %.1f %.2f) ground=%.2f alt=%.2f "
+          "vz=%.2f chunks=%zu pads=%zu rss=%ld MB",
+          qPrintable(preset), dist, p.x(), p.y(), p.z(), g, alt,
+          a_->lastVel().z(), a_->chunksCached(), a_->pads().size(), rssMb);
+    QVERIFY2(alt >= -0.3f, "vehicle fell through the terrain far from origin");
+    QVERIFY2(alt < 3.0f, "vehicle did not come to rest on the terrain");
+    // (Vertical speed is only logged: a vehicle at rest on a steep dune can
+    // still slide, so a hard bound would be flaky. A fall through shows in alt.)
+    QVERIFY2(a_->chunksCached() >= 9, "collision chunks were not streamed");
+    QVERIFY2(a_->chunksCached() <= 49, "chunk cache is not bounded");
+
+    // Optional pause so a screenshot of the window can be taken (manual use).
+    pump(qEnvironmentVariableIntValue("NAV_TEST_HOLD_MS"));
+
+    // Pads near the vehicle sit on the streamed surface of THIS world's field
+    // (independent sampler, not the widget's own lambda), not above/below it.
+    vsim::procgen::FieldParams fp = a_->editor()->config().field;
+    fp.seed = static_cast<uint32_t>(a_->editor()->config().proceduralSeed);
+    const vsim::procgen::TerrainField field(fp);
+    int nearPads = 0;
+    for (const QVector3D &pad : a_->pads()) {
+      const float ref = vsim::procgen::streamSurfaceHeight(field, pad.x(), pad.y());
+      QVERIFY2(std::fabs(pad.z() - ref) < 0.02f, "a helipad floats or sinks");
+      if (std::hypot(pad.x() - x, pad.y() - y) < 260.0f)
+        ++nearPads;
+    }
+    QVERIFY2(nearPads >= 1, "no helipad was placed around the far vehicle");
   }
 
   // Stop, then change the world again with the sim stopped.

@@ -145,8 +145,6 @@ private:
   QComboBox *procPreset_ = nullptr; // world preset (biome + terrain + obstacles)
   QComboBox *windPreset_ = nullptr; // wind preset (calm / breezy / gusty)
   QSpinBox *procSeed_ = nullptr;
-  QDoubleSpinBox *procSizeM_ = nullptr;
-  QSpinBox *procResolution_ = nullptr;
   bool procSyncing_ = false;
   // Generator-tuning knobs: each pushes a sync lambda (cfg_ -> spinbox) here so
   // setConfig can refresh them all without a member per knob.
