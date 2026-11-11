@@ -49,7 +49,12 @@ AdsBackend::~AdsBackend() {
       p.widget->setParent(nullptr);
     }
   if (m_dm) {
-    m_host->takeCentralWidget();
+    // When the manager is a child of the host and the host is being deleted,
+    // Qt has already deleted the host's own layout (it is the first child), and
+    // QMainWindow::takeCentralWidget() would dereference it. Only detach while
+    // the host is still whole; otherwise deleting the manager is enough.
+    if (m_host && m_host->layout())
+      m_host->takeCentralWidget();
     delete m_dm;
     m_dm = nullptr;
   }
