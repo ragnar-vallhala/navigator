@@ -17,6 +17,7 @@
 #include "DockShell.h"
 
 #include "AdsBackend.h"
+#include "Theme.h"
 
 #include <QActionGroup>
 #include <QInputDialog>
@@ -139,8 +140,9 @@ bool DockShell::hasPanel(const QString &id) const {
 void DockShell::start(bool applyLayout) {
   if (m_wm)
     return;
-  m_wm = new WorkspaceManager(m_host, std::make_unique<ws::AdsBackend>(m_host),
-                              this);
+  auto ads = std::make_unique<ws::AdsBackend>(m_host);
+  ads->setExtraStyleSheet(Theme::dockStyleSheet());
+  m_wm = new WorkspaceManager(m_host, std::move(ads), this);
   ws::PanelRegistry reg;
   for (const PanelInfo &p : panelInfos()) {
     QWidget *w = m_widgets.value(p.id, nullptr);

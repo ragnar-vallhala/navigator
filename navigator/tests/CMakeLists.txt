@@ -381,9 +381,11 @@ endif()
 # switch, showPanel, the pinned attitude panel. Offscreen, no real pages.
 if(TARGET navigator_workspace)
     navigator_test(tst_dock_shell tst_dock_shell.cpp
-        ${SRC}/ui/main/DockShell.cpp ${SRC}/ui/main/DockShell.h)
+        ${SRC}/ui/main/DockShell.cpp ${SRC}/ui/main/DockShell.h
+        ${SRC}/core/Theme.cpp)
     target_include_directories(tst_dock_shell PRIVATE ${SRC}/ui/main)
-    target_compile_definitions(tst_dock_shell PRIVATE NAVIGATOR_HAS_DOCKING=1)
+    target_compile_definitions(tst_dock_shell PRIVATE NAVIGATOR_HAS_DOCKING=1
+        DARK_QSS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../resources/styles/dark.qss")
     target_link_libraries(tst_dock_shell PRIVATE navigator_workspace)
 endif()
 

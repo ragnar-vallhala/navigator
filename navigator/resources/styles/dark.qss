@@ -256,6 +256,11 @@ QTabBar::tab:selected {
     color: #DCDFE4;
 }
 
+/* The docked layout (Qt Advanced Docking System, ads--* classes) is themed
+   from Theme::dockStyleSheet() in core/Theme.cpp, not here: the dock manager's
+   own stylesheet outranks the application's, so rules for it in this file are
+   ignored. Keep that function's colours in step with the tabs above. */
+
 /* ===== Scrollbars ===== */
 QScrollBar:vertical {
     background: #1A1D27;

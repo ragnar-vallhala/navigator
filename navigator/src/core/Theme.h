@@ -61,6 +61,13 @@ inline QString hex(const QColor &c) { return c.name(QColor::HexRgb).toUpper(); }
 // caller should fall back to whatever defaults Qt provides.
 QString loadStyleSheet();
 
+// Rules for the docked layout (Qt Advanced Docking System). The dock manager
+// carries its own stylesheet, written with palette() roles, and a widget's own
+// sheet beats the application's, so these cannot live in dark.qss: the dock
+// host appends them to the manager (AdsBackend::setExtraStyleSheet). Built
+// from the tokens above so the docked layout uses the same colours.
+QString dockStyleSheet();
+
 // Apply the dark palette + stylesheet to qApp. Call once from main()
 // before constructing windows.
 void apply();

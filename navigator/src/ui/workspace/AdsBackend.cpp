@@ -145,6 +145,8 @@ void AdsBackend::rebuild() {
     m_dm.clear();
   }
   m_dm = new ads::CDockManager(m_host);
+  if (!m_extraStyle.isEmpty())
+    m_dm->setStyleSheet(m_dm->styleSheet() + m_extraStyle);
   m_host->setCentralWidget(m_dm);
   for (Panel &p : m_panels) {
     auto *dw = new ads::CDockWidget(m_dm, p.title);
@@ -229,6 +231,12 @@ ads::CDockAreaWidget *AdsBackend::place(const LayoutNode &n,
     m_dm->setSplitterSizes(firsts.first(), px);
   }
   return firsts.isEmpty() ? nullptr : firsts.first();
+}
+
+void AdsBackend::setExtraStyleSheet(const QString &qss) {
+  m_extraStyle = qss;
+  if (m_dm)
+    m_dm->setStyleSheet(m_dm->styleSheet() + m_extraStyle);
 }
 
 void AdsBackend::applySpec(const LayoutSpec &spec) {
