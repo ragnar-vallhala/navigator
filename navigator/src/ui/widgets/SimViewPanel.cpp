@@ -16,6 +16,7 @@
  */
 #include "SimViewPanel.h"
 
+#include "NativeClip.h"
 #include "SimPanelsCommon.h"
 
 SimViewPanel::SimViewPanel(SimulatorWidget &sim, QWidget *parent) : QWidget(parent) {
@@ -41,6 +42,7 @@ viewLay->addWidget(m_pipRail);
 m_renderer = new vsim::SimRendererWidget();
 m_rendererBox = QWidget::createWindowContainer(m_renderer, viewHost);
 m_rendererBox->setMinimumSize(400, 300);
+new NativeClip(m_rendererBox, m_renderer); // a short dock area must not let it overflow
 m_rendererBox->setFocusPolicy(Qt::StrongFocus); // G/R/X/Y/Z/Esc/WASD
 viewLay->addWidget(m_rendererBox, 1);
 
@@ -64,6 +66,7 @@ m_downRenderer->setDownCam(true);
 m_downRenderer->setWorldVisible(true);
 QWidget *downBox = QWidget::createWindowContainer(m_downRenderer);
 downBox->setMinimumSize(100, 80);
+new NativeClip(downBox, m_downRenderer);
 m_downPip = new PipPane(tr("DOWN CAM"), downBox, 170, m_pipRail);
 railLay->addWidget(m_downPip);
 

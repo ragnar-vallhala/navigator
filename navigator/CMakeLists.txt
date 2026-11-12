@@ -148,6 +148,7 @@ set(GCS_HEADERS
     src/protocol/CommandCodec.h
     src/ui/widgets/AttitudeWidget.h
     src/ui/widgets/GlPaintHost.h
+    src/ui/widgets/NativeClip.h
     src/ui/widgets/ImuPanel.h
     src/ui/widgets/LogPanel.h
     src/ui/widgets/FaultsPanel.h
