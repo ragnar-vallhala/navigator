@@ -157,7 +157,6 @@ private slots:
 
   void init() {
     QSettings().clear();
-    qunsetenv("NAVIGATOR_DOCKING");
   }
 
   void panelIdsAreTheAgreedOnes() {
@@ -201,37 +200,6 @@ private slots:
       exp.sort();
       QCOMPARE(ref, exp);
     }
-  }
-
-  // Docked is the default; env and the stored choice override it.
-  void switchReadsEnvAndSetting() {
-    QVERIFY(DockShell::compiledIn());
-    QVERIFY(DockShell::enabled()); // nothing stored, no env: on
-    QVERIFY(DockShell::persistedRequested());
-    for (const char *v : {"1", "true", "ON", "yes"}) {
-      qputenv("NAVIGATOR_DOCKING", v);
-      QVERIFY2(DockShell::enabled(), v);
-    }
-    for (const char *v : {"0", "false", "OFF", "no"}) {
-      qputenv("NAVIGATOR_DOCKING", v);
-      QVERIFY2(!DockShell::enabled(), v);
-      QVERIFY2(DockShell::envDisabled(), v);
-    }
-    for (const char *v : {"", "2", "maybe"}) { // not a choice: the default
-      qputenv("NAVIGATOR_DOCKING", v);
-      QVERIFY2(DockShell::enabled(), v);
-    }
-    qunsetenv("NAVIGATOR_DOCKING");
-    DockShell::setPersisted(false); // an explicit stored false is respected
-    QVERIFY(!DockShell::persistedRequested());
-    QVERIFY(!DockShell::enabled());
-    qputenv("NAVIGATOR_DOCKING", "1"); // env beats the stored false
-    QVERIFY(DockShell::enabled());
-    qputenv("NAVIGATOR_DOCKING", "0"); // and beats a stored true
-    DockShell::setPersisted(true);
-    QVERIFY(!DockShell::enabled());
-    qunsetenv("NAVIGATOR_DOCKING");
-    QVERIFY(DockShell::enabled());
   }
 
   // Ctrl+1..6, 8 of the old View menu: each key is a built-in workspace, the

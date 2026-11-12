@@ -87,10 +87,8 @@ exists and fails when it is fixed, as a prompt to remove the workaround.
 `src/ui/main/DockShell` hosts every Navigator page as a panel on this layer
 (ids `view3d imu logs rc packets calibration motors control_loop gyro_notch perf
 sim settings`; workspaces Fly, Tune, Debug link, Sim, RC channels, Motors, Control loop,
-Packets, Kernel perf). It is on by default. Switch it off with
-`NAVIGATOR_DOCKING=0` in the environment, or with Window > Dockable layout
-(restart needed); the window then has Workspaces and Panels menus instead of the
-View menu, and Ctrl+1..6, Ctrl+8 switch workspace (Fly, RC channels, Motors,
+Packets, Kernel perf). It is the window's only layout (there is no switch and
+no View menu): Workspaces and Panels menus, and Ctrl+1..6, Ctrl+8 switch workspace (Fly, RC channels, Motors,
 Control loop, Packets, Sim, Kernel perf).
 
 GL decision: the attitude panel (`view3d`) holds two `QOpenGLWidget`s, which

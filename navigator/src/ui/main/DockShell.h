@@ -33,8 +33,7 @@ class QWidget;
 
 // The dock host of the real Navigator window (todo #187 step 3): every page is
 // a registered panel with a stable id, laid out by the workspace system in
-// src/ui/workspace/. Only used when the switch is on (see enabled()); the
-// legacy QStackedWidget window never constructs one.
+// src/ui/workspace/. It is the window's only layout.
 //
 // The static helpers (ids, titles, built-in workspaces, the switch) need no
 // display and are what the unit tests check.
@@ -76,18 +75,6 @@ public:
   static const std::vector<WorkspaceKey> &workspaceShortcuts();
   // Every panel id a layout names (tabs and floats, recursively).
   static QStringList referencedIds(const ws::LayoutSpec &spec);
-
-  // The switch. On by default. Env NAVIGATOR_DOCKING=0 (or false/off/no) turns
-  // it off, =1 (or true/on/yes) on, either beating the persisted setting
-  // (Window > Dockable layout, an explicit stored false is respected); any
-  // other env value is ignored. Always false in a build without the docking
-  // library.
-  static bool compiledIn();
-  static bool envRequested();
-  static bool envDisabled();
-  static bool persistedRequested();
-  static void setPersisted(bool on);
-  static bool enabled();
 
   explicit DockShell(QMainWindow *host);
 

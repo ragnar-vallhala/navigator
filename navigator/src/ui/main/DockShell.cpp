@@ -26,7 +26,6 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
-#include <QSettings>
 
 #include <algorithm>
 
@@ -34,9 +33,6 @@ using ws::LayoutNode;
 using ws::LayoutSpec;
 using ws::WorkspaceManager;
 
-namespace {
-const char *kDockKey = "ui/dockableLayout";
-}
 const std::vector<const char *> DockShell::kFixedPanels = {dockpanel::kView3d};
 namespace {
 
@@ -152,37 +148,6 @@ QStringList DockShell::referencedIds(const LayoutSpec &spec) {
   for (const ws::FloatSpec &f : spec.floats)
     l << f.panels;
   return l;
-}
-
-bool DockShell::compiledIn() {
-#ifdef NAVIGATOR_HAS_DOCKING
-  return true;
-#else
-  return false;
-#endif
-}
-
-bool DockShell::envRequested() {
-  const QString v = qEnvironmentVariable("NAVIGATOR_DOCKING").trimmed().toLower();
-  return v == "1" || v == "true" || v == "on" || v == "yes";
-}
-
-bool DockShell::envDisabled() {
-  const QString v = qEnvironmentVariable("NAVIGATOR_DOCKING").trimmed().toLower();
-  return v == "0" || v == "false" || v == "off" || v == "no";
-}
-
-// Docked is the default: only a stored explicit false turns it off.
-bool DockShell::persistedRequested() {
-  return QSettings().value(kDockKey, true).toBool();
-}
-
-void DockShell::setPersisted(bool on) { QSettings().setValue(kDockKey, on); }
-
-bool DockShell::enabled() {
-  if (!compiledIn() || envDisabled())
-    return false;
-  return envRequested() || persistedRequested();
 }
 
 DockShell::DockShell(QMainWindow *host) : QObject(host), m_host(host) {}

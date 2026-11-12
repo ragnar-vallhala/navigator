@@ -10,9 +10,10 @@
 #      by this project as a SHARED library (the LGPL relinking requirement);
 #      FETCHCONTENT_SOURCE_DIR_ADS=<dir> uses a local checkout instead and
 #      needs no network.
-# With neither, this directory configures nothing and the rest of the build is
-# unaffected. The default is OFF so an ordinary configure never uses the network.
-option(NAVIGATOR_FETCH_ADS "Fetch and build Qt Advanced Docking System (pinned) for the workspace mock" OFF)
+# With neither, this directory configures nothing and the Navigator target
+# stops the configure (its docked layout needs the library). The default is ON;
+# use FETCHCONTENT_SOURCE_DIR_ADS or an installed copy to stay offline.
+option(NAVIGATOR_FETCH_ADS "Fetch and build Qt Advanced Docking System (pinned)" ON)
 # Escape hatch: directories holding the Qt private headers (QtGui/<ver>, ...)
 # for a machine that cannot install qt6-base-private-dev. Normally empty.
 set(NAVIGATOR_QT_PRIVATE_INCLUDES "" CACHE STRING

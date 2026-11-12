@@ -20,7 +20,6 @@
 #include <QHash>
 #include <QLabel>
 #include <QMainWindow>
-#include <QSplitter>
 #include <QStackedWidget>
 #include <QTabWidget>
 #include <QThread>
@@ -118,12 +117,10 @@ private slots:
   void onExportLogToggle();
 
 private:
-  // Page hosting. Legacy: the QStackedWidget. Dock host on (DockShell::enabled):
-  // every page is a dock panel and these go through the dock host instead, so
-  // each existing showXxx() slot works in both modes.
-  void addPage(QWidget *w);
-  void showPage(QWidget *w, const char *panelId);
-  void showPageIndex(int idx); // recent-views index (stack or panel order)
+  // Page hosting: every page is a dock panel; showXxx() slots go through the
+  // dock host.
+  void showPage(const char *panelId);
+  void showPageIndex(int idx); // recent-views index (panel order)
   int dockPageIndex(const QString &id) const;
   void setupDockHost();
   void buildUi();
@@ -207,17 +204,13 @@ private:
 #ifdef NAVIGATOR_HAS_SITL
   SimulatorWidget *m_simulatorWidget = nullptr;
 #endif
-  QStackedWidget *m_stackedWidget = nullptr;
   QStackedWidget *m_attStack = nullptr;
   AttitudeSink *m_drone3d = nullptr;
   QWidget *m_homeWidget = nullptr;
   QWidget *m_attPanel = nullptr; // AttitudePanel (panel id view3d)
-  DockShell *m_dock = nullptr;   // non-null only when the dock host is on
+  DockShell *m_dock = nullptr;   // the window's layout (always set)
   QAction *m_windowMenuAction = nullptr; // Workspaces/Panels go before it
 
-  // Splitters retained as members so their state can be saved/restored.
-  QSplitter *m_topSplitter = nullptr;
-  QSplitter *m_vSplitter = nullptr;
 
   // ---- Command layer (Phase-1 1g / FR-UX-19) ----
   // Single source of truth for every command; menus, the toolbar, and the
