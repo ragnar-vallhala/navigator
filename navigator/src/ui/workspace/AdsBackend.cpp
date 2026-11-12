@@ -53,11 +53,10 @@ private:
   std::function<void()> m_f;
 };
 
-// A layout switch rebuilds the dock manager. Native child windows (the GL
+// A layout switch moves every panel, and the native child windows (the GL
 // containers) are mapped by the window system at once, before Qt has laid the
 // new tree out, so a half-built layout used to show through. Freeze the host's
-// painting for the whole switch, keep the new manager hidden until every panel
-// is docked, then show it in one step.
+// painting for the whole switch, then show the finished layout in one step.
 class SwitchFreeze {
 public:
   SwitchFreeze(QMainWindow *host, QPointer<ads::CDockManager> &dm)

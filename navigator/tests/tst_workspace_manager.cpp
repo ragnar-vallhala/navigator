@@ -103,7 +103,8 @@ private slots:
   void init() { QSettings().clear(); }
 
   // A saved layout is restored onto the same dock manager and the same panel
-  // widgets, with the identical state blob.
+  // widgets, with every panel in the state it was saved in. (The serialized
+  // blob is not compared: its bytes differ between Qt versions.)
   void savedLayoutRestoresOnTheSameManager() {
     Fixture f;
     QVERIFY(f.wm->load("Fly"));
@@ -114,14 +115,46 @@ private slots:
         a = l;
     QVERIFY(a);
     QVERIFY(f.wm->saveCurrentAs("Mine"));
-    const QByteArray mine = f.wm->backend()->saveState();
+    const QStringList ids{"a", "b", "c", "d", "e"};
+    QVector<PanelState> mine;
+    for (const QString &id : ids)
+      mine.append(f.wm->backend()->panelState(id));
     QVERIFY(f.wm->load("Sim"));
     QVERIFY(!f.wm->backend()->panelState("a").visible);
     QVERIFY(f.wm->load("Mine"));
     QCOMPARE(f.win.centralWidget(), dm);
-    QCOMPARE(f.wm->backend()->saveState(), mine);
+    for (int i = 0; i < ids.size(); ++i) {
+      const PanelState now = f.wm->backend()->panelState(ids[i]);
+      QVERIFY2(now.visible == mine[i].visible, qPrintable(ids[i]));
+      QVERIFY2(now.floating == mine[i].floating, qPrintable(ids[i]));
+      QVERIFY2(now.tabGroup == mine[i].tabGroup, qPrintable(ids[i]));
+    }
     QVERIFY(a);
     QVERIFY(f.wm->backend()->panelState("a").visible);
+  }
+
+  // A corrupt saved state is refused, leaves every panel closed on the same
+  // manager and no window of its own behind, and the next load still works.
+  void corruptRestoreLeavesNoFloatingLeftovers() {
+    Fixture f;
+    QVERIFY(f.wm->load("Fly"));
+    QWidget *dm = f.win.centralWidget();
+    const auto visibleTopLevels = [] {
+      int n = 0;
+      for (QWidget *w : QApplication::topLevelWidgets())
+        if (w->isVisible())
+          ++n;
+      return n;
+    };
+    const int before = visibleTopLevels();
+    QVERIFY(!f.wm->backend()->restoreState(QByteArray("not a layout")));
+    QCOMPARE(f.win.centralWidget(), dm);
+    for (const QString &id : {"a", "b", "c", "d", "e"})
+      QVERIFY2(!f.wm->backend()->panelState(id).visible, qPrintable(id));
+    QCOMPARE(visibleTopLevels(), before);
+    QVERIFY(f.wm->load("Fly"));
+    QVERIFY(f.wm->backend()->panelState("a").visible);
+    QCOMPARE(visibleTopLevels(), before);
   }
 
   void builtinsAreDefaultsAndReadOnly() {
