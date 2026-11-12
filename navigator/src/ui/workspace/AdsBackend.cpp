@@ -367,6 +367,10 @@ QByteArray AdsBackend::saveState() const {
 }
 
 QStringList AdsBackend::statePanelIds(const QByteArray &state) const {
+  // ADS writes its state as qCompress()ed XML. If a build ever turns that
+  // compression off, qUncompress() returns an empty array and this list is
+  // empty, so the unknown-panel check passes (it fails open, never closed);
+  // restoreState() then still validates the blob itself.
   QStringList ids;
   const QByteArray xml = qUncompress(state);
   static const QRegularExpression re(QStringLiteral("<Widget Name=\"([^\"]*)\""));
