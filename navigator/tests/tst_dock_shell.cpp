@@ -175,14 +175,21 @@ private slots:
     QStringList names;
     for (const auto &w : b)
       names << w.name;
-    QCOMPARE(names, (QStringList{"Fly", "Tune", "Debug link", "Sim"})); // Fly = default
+    // Fly = default; the rest after Sim are the old full-window pages.
+    QCOMPARE(names, (QStringList{"Fly", "Tune", "Debug link", "Sim", "RC channels",
+                                 "Motors", "Control loop", "Packets", "Kernel perf"}));
 
     const QStringList ids = allIds();
     QMap<QString, QStringList> want = {
         {"Fly", {"view3d", "imu", "logs"}},
         {"Tune", {"control_loop", "gyro_notch", "motors", "calibration", "logs"}},
         {"Debug link", {"packets", "logs", "perf", "rc"}},
-        {"Sim", {"sim", "logs"}}};
+        {"Sim", {"sim", "logs"}},
+        {"RC channels", {"rc"}},
+        {"Motors", {"motors"}},
+        {"Control loop", {"control_loop"}},
+        {"Packets", {"packets"}},
+        {"Kernel perf", {"perf"}}};
     for (const auto &w : b) {
       QStringList ref = DockShell::referencedIds(w.spec);
       for (const QString &id : ref)
@@ -196,23 +203,92 @@ private slots:
     }
   }
 
+  // Docked is the default; env and the stored choice override it.
   void switchReadsEnvAndSetting() {
     QVERIFY(DockShell::compiledIn());
-    QVERIFY(!DockShell::enabled());
+    QVERIFY(DockShell::enabled()); // nothing stored, no env: on
+    QVERIFY(DockShell::persistedRequested());
     for (const char *v : {"1", "true", "ON", "yes"}) {
       qputenv("NAVIGATOR_DOCKING", v);
       QVERIFY2(DockShell::enabled(), v);
     }
-    for (const char *v : {"", "0", "off", "no", "2"}) {
+    for (const char *v : {"0", "false", "OFF", "no"}) {
       qputenv("NAVIGATOR_DOCKING", v);
       QVERIFY2(!DockShell::enabled(), v);
+      QVERIFY2(DockShell::envDisabled(), v);
+    }
+    for (const char *v : {"", "2", "maybe"}) { // not a choice: the default
+      qputenv("NAVIGATOR_DOCKING", v);
+      QVERIFY2(DockShell::enabled(), v);
     }
     qunsetenv("NAVIGATOR_DOCKING");
-    DockShell::setPersisted(true);
-    QVERIFY(DockShell::persistedRequested());
-    QVERIFY(DockShell::enabled());
-    DockShell::setPersisted(false);
+    DockShell::setPersisted(false); // an explicit stored false is respected
+    QVERIFY(!DockShell::persistedRequested());
     QVERIFY(!DockShell::enabled());
+    qputenv("NAVIGATOR_DOCKING", "1"); // env beats the stored false
+    QVERIFY(DockShell::enabled());
+    qputenv("NAVIGATOR_DOCKING", "0"); // and beats a stored true
+    DockShell::setPersisted(true);
+    QVERIFY(!DockShell::enabled());
+    qunsetenv("NAVIGATOR_DOCKING");
+    QVERIFY(DockShell::enabled());
+  }
+
+  // Ctrl+1..6, 8 of the old View menu: each key is a built-in workspace, the
+  // Workspaces menu hosts the shortcut, and pressing the key switches to it.
+  void shortcutsMapToTheOldViewOrder() {
+    const QStringList order = {"Fly", "RC channels", "Motors", "Control loop",
+                               "Packets", "Sim", "Kernel perf"};
+    const QStringList keys = {"Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4",
+                              "Ctrl+5", "Ctrl+6", "Ctrl+8"};
+    const auto &map = DockShell::workspaceShortcuts();
+    QCOMPARE(int(map.size()), int(order.size()));
+    QStringList names;
+    for (const auto &w : DockShell::builtins())
+      names << w.name;
+    for (size_t i = 0; i < map.size(); ++i) {
+      QCOMPARE(map[i].workspace, order[int(i)]);
+      QCOMPARE(map[i].key, keys[int(i)]);
+      QVERIFY(names.contains(map[i].workspace));
+    }
+
+    Fixture f;
+    auto *bar = new QMenuBar; // owned by the window
+    f.win.setMenuBar(bar);
+    f.shell->addMenus(bar, nullptr);
+    QMenu *ws = menuNamed(bar, "&Workspaces");
+    QVERIFY(ws);
+    f.win.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&f.win));
+    f.win.activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(&f.win));
+    for (int i = 0; i < order.size(); ++i) {
+      QAction *a = nullptr;
+      for (QAction *c : ws->actions())
+        if (c->text() == order[i])
+          a = c;
+      QVERIFY2(a, qPrintable(order[i]));
+      QCOMPARE(a->shortcut(), QKeySequence(keys[i]));
+      // Through the real key path, not trigger().
+      QTest::keyClick(&f.win, QKeySequence(keys[i])[0].key(), Qt::ControlModifier);
+      QCOMPARE(f.shell->workspaces()->currentName(), order[i]);
+    }
+    // Ctrl+7 (Calibration) and Ctrl+9 stay outside the workspace keys.
+    for (QAction *c : ws->actions())
+      QVERIFY(c->shortcut() != QKeySequence("Ctrl+7") && c->shortcut() != QKeySequence("Ctrl+9"));
+  }
+
+  // Without the simulator panel (no SITL build) Ctrl+6 is not bound.
+  void simShortcutOnlyWithSimulatorPanel() {
+    Fixture f(QStringList{"view3d", "logs", "rc"});
+    auto *bar = new QMenuBar; // owned by the window
+    f.win.setMenuBar(bar);
+    f.shell->addMenus(bar, nullptr);
+    QMenu *ws = menuNamed(bar, "&Workspaces");
+    QVERIFY(ws);
+    for (QAction *c : ws->actions())
+      if (c->text() == "Sim")
+        QVERIFY(c->shortcut().isEmpty());
   }
 
   void everyBuiltinAppliesAndShowsItsPanels() {

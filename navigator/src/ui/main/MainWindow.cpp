@@ -794,7 +794,8 @@ void MainWindow::buildMenuBar() {
                                   QKeySequence(QKeySequence::Quit),
                                   CmdContext::Always, [this] { close(); }));
 
-  // ---- View (page navigation, Ctrl+1‑8 per the mockup) ----
+  // ---- View (legacy window only: page navigation, Ctrl+1‑8 per the mockup;
+  // docked, the same keys switch workspaces, see DockShell) ----
   // Helper: register a command, give it the mockup's line-icon, and add it.
   auto addNav = [&](QMenu *m, const QString &id, const QString &text,
                     const QKeySequence &key, ui::Icon icon,
@@ -806,33 +807,39 @@ void MainWindow::buildMenuBar() {
     return a;
   };
 
-  QMenu *viewMenu = menu->addMenu("&View");
-  addNav(viewMenu, "nav.dashboard", "Flight &Dashboard", QKeySequence("Ctrl+1"),
-         ui::Icon::Dashboard, [this] { showHome(); });
-  addNav(viewMenu, "nav.rc", "&RC Channels", QKeySequence("Ctrl+2"),
-         ui::Icon::Rc, [this] { showRcMonitor(); });
-  addNav(viewMenu, "nav.motors", "&Motors", QKeySequence("Ctrl+3"),
-         ui::Icon::Motors, [this] { showMotorStatus(); });
-  addNav(viewMenu, "nav.control", "&Control Loop", QKeySequence("Ctrl+4"),
-         ui::Icon::Control, [this] { showControlLoopPlot(); });
-  viewMenu->addSeparator();
-  addNav(viewMenu, "nav.packets", "&Packet Analyzer", QKeySequence("Ctrl+5"),
-         ui::Icon::Packets, [this] { showPacketAnalyzer(); });
+  // Fullscreen lives in View in the legacy window and in Window when docked
+  // (the View menu is gone there: the old pages are built-in workspaces, see
+  // DockShell::builtins()). Registered once, added to one menu below.
+  QAction *fullscreen = m_cmds->add(
+      "window.fullscreen", "&Fullscreen", "Window", QKeySequence(Qt::Key_F11),
+      CmdContext::Always, [this] {
+        if (isFullScreen())
+          showNormal();
+        else
+          showFullScreen();
+      });
+  if (!m_dock) {
+    QMenu *viewMenu = menu->addMenu("&View");
+    addNav(viewMenu, "nav.dashboard", "Flight &Dashboard",
+           QKeySequence("Ctrl+1"), ui::Icon::Dashboard, [this] { showHome(); });
+    addNav(viewMenu, "nav.rc", "&RC Channels", QKeySequence("Ctrl+2"),
+           ui::Icon::Rc, [this] { showRcMonitor(); });
+    addNav(viewMenu, "nav.motors", "&Motors", QKeySequence("Ctrl+3"),
+           ui::Icon::Motors, [this] { showMotorStatus(); });
+    addNav(viewMenu, "nav.control", "&Control Loop", QKeySequence("Ctrl+4"),
+           ui::Icon::Control, [this] { showControlLoopPlot(); });
+    viewMenu->addSeparator();
+    addNav(viewMenu, "nav.packets", "&Packet Analyzer", QKeySequence("Ctrl+5"),
+           ui::Icon::Packets, [this] { showPacketAnalyzer(); });
 #ifdef NAVIGATOR_HAS_SITL
-  addNav(viewMenu, "nav.simulator", "Si&mulator", QKeySequence("Ctrl+6"),
-         ui::Icon::Sim, [this] { showSimulator(); });
+    addNav(viewMenu, "nav.simulator", "Si&mulator", QKeySequence("Ctrl+6"),
+           ui::Icon::Sim, [this] { showSimulator(); });
 #endif
-  addNav(viewMenu, "nav.perf", "&Kernel Perf", QKeySequence("Ctrl+8"),
-         ui::Icon::Perf, [this] { showPerf(); });
-  viewMenu->addSeparator();
-  viewMenu->addAction(m_cmds->add("window.fullscreen", "&Fullscreen", "Window",
-                                  QKeySequence(Qt::Key_F11), CmdContext::Always,
-                                  [this] {
-                                    if (isFullScreen())
-                                      showNormal();
-                                    else
-                                      showFullScreen();
-                                  }));
+    addNav(viewMenu, "nav.perf", "&Kernel Perf", QKeySequence("Ctrl+8"),
+           ui::Icon::Perf, [this] { showPerf(); });
+    viewMenu->addSeparator();
+    viewMenu->addAction(fullscreen);
+  }
 
   // ---- Flight ----
   QMenu *flightMenu = menu->addMenu("F&light");
@@ -918,6 +925,8 @@ void MainWindow::buildMenuBar() {
   windowMenu->addAction(m_cmds->add(
       "window.resetLayout", "&Reset Layout", "Window", QKeySequence(),
       CmdContext::Always, [this] { resetLayout(); }));
+  if (m_dock)
+    windowMenu->addAction(fullscreen);
 #ifdef NAVIGATOR_HAS_DOCKING
   // The switch for the dock host. Read once at start, hence the restart.
   {
@@ -925,18 +934,16 @@ void MainWindow::buildMenuBar() {
         "window.dockable", "&Dockable layout (restart needed)", "Window",
         QKeySequence(), CmdContext::Always, [] {});
     dockToggle->setCheckable(true);
-    // Show what is in effect: the env var forces it on whatever the setting says.
-    const bool forced = DockShell::envRequested();
+    // Show what is in effect: the env var wins over the setting, either way.
     dockToggle->setChecked(DockShell::enabled());
-    if (forced) {
+    if (DockShell::envRequested() || DockShell::envDisabled()) {
       dockToggle->setEnabled(false);
       dockToggle->setToolTip(
-          tr("Experimental. Forced on by the NAVIGATOR_DOCKING environment "
-             "variable"));
+          tr("Set by the NAVIGATOR_DOCKING environment variable"));
     } else {
       dockToggle->setToolTip(
-          tr("Experimental: dockable panels and workspaces. Takes effect the "
-             "next time Navigator starts"));
+          tr("Dockable panels and workspaces (on by default). Takes effect "
+             "the next time Navigator starts"));
     }
     connect(dockToggle, &QAction::toggled, this, [this](bool on) {
       DockShell::setPersisted(on);
