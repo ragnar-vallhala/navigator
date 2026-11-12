@@ -465,6 +465,12 @@ endif()
 target_sources(Navigator PRIVATE
     src/ui/main/DockShell.cpp src/ui/main/DockShell.h)
 target_link_libraries(Navigator PRIVATE navigator_workspace)
+if(WIN32)
+    # Windows loads the shared dock library from beside the exe.
+    add_custom_command(TARGET Navigator POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:ads::qtadvanceddocking-qt6> $<TARGET_FILE_DIR:Navigator>)
+endif()
 
 # -------------------------------------------------------
 # Unit tests (QtTest + ctest). On by default; -DNAVIGATOR_BUILD_TESTS=OFF

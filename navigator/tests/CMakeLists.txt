@@ -20,6 +20,13 @@ function(navigator_test name)
   # qt_add_executable makes a GUI-subsystem exe on Windows, whose stdout is
   # lost: a failing QtTest then prints nothing under --output-on-failure.
   set_target_properties(${name} PROPERTIES WIN32_EXECUTABLE FALSE)
+  # The dock library is a shared library; Windows finds a DLL only beside the
+  # exe (or on PATH), so put a copy next to each test binary.
+  if(WIN32 AND TARGET ads::qtadvanceddocking-qt6)
+    add_custom_command(TARGET ${name} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              $<TARGET_FILE:ads::qtadvanceddocking-qt6> $<TARGET_FILE_DIR:${name}>)
+  endif()
   add_test(NAME ${name} COMMAND ${name})
   set_tests_properties(${name} PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
