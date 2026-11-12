@@ -16,6 +16,8 @@
  */
 #pragma once
 
+#include "NativeClip.h"
+
 #include <QOpenGLFunctions>
 #include <QOpenGLWindow>
 #include <QPainter>
@@ -36,6 +38,7 @@ public:
   explicit GlPaintHost(QWidget *parent = nullptr) : QWidget(parent) {
     m_win = new Win(this);
     m_box = QWidget::createWindowContainer(m_win, this);
+    new NativeClip(m_box, m_win);
     auto *l = new QVBoxLayout(this);
     l->setContentsMargins(0, 0, 0, 0);
     l->addWidget(m_box);

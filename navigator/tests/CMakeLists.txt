@@ -288,6 +288,11 @@ endif()
 # ---- Side-panel sizing helpers (no splitter may crop a panel) -------------
 navigator_test(tst_panel_widgets tst_panel_widgets.cpp)
 
+# ---- Native window containers are clipped to their dock area --------------
+navigator_test(tst_native_clip tst_native_clip.cpp)
+target_include_directories(tst_native_clip PRIVATE ${SRC}/ui/widgets)
+target_link_libraries(tst_native_clip PRIVATE Qt6::Gui Qt6::OpenGL)
+
 # ---- In-app simulator end to end (SITL builds only) -----------------------
 # Navigator's SitlModule + SimWorker + RcBridge against the real engine module:
 # it loads, boots and steps, telemetry reaches the sink, and RcBridge's RC gets
