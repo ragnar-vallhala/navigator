@@ -19,6 +19,7 @@
 #include "AdsBackend.h"
 #include "Theme.h"
 
+#include <QAction>
 #include <QActionGroup>
 #include <QInputDialog>
 #include <QMainWindow>
@@ -46,20 +47,51 @@ void collect(const LayoutNode &n, QStringList &out) {
 
 const std::vector<DockShell::PanelInfo> &DockShell::panelInfos() {
   static const std::vector<PanelInfo> kInfos = {
-      {dockpanel::kView3d, QObject::tr("Attitude")},
-      {dockpanel::kImu, QObject::tr("IMU")},
-      {dockpanel::kLogs, QObject::tr("Logs")},
-      {dockpanel::kRc, QObject::tr("RC channels")},
-      {dockpanel::kPackets, QObject::tr("Packet analyzer")},
-      {dockpanel::kCalibration, QObject::tr("Calibration")},
-      {dockpanel::kMotors, QObject::tr("Motors")},
-      {dockpanel::kControlLoop, QObject::tr("Control loop")},
-      {dockpanel::kGyroNotch, QObject::tr("Gyro notch")},
-      {dockpanel::kPerf, QObject::tr("Kernel perf")},
-      {dockpanel::kSim, QObject::tr("Simulator")},
-      {dockpanel::kSettings, QObject::tr("Settings")},
+      {dockpanel::kView3d, QObject::tr("Attitude"), "flight"},
+      {dockpanel::kImu, QObject::tr("IMU"), "sensors"},
+      {dockpanel::kLogs, QObject::tr("Logs"), "debug"},
+      {dockpanel::kRc, QObject::tr("RC channels"), "flight"},
+      {dockpanel::kPackets, QObject::tr("Packet analyzer"), "debug"},
+      {dockpanel::kCalibration, QObject::tr("Calibration"), "tuning"},
+      {dockpanel::kMotors, QObject::tr("Motors"), "flight"},
+      {dockpanel::kControlLoop, QObject::tr("Control loop"), "tuning"},
+      {dockpanel::kGyroNotch, QObject::tr("Gyro notch"), "tuning"},
+      {dockpanel::kPerf, QObject::tr("Kernel perf"), "debug"},
+      {dockpanel::kSim, QObject::tr("Simulator"), "simulation"},
+      {dockpanel::kSettings, QObject::tr("Settings"), "app"},
   };
   return kInfos;
+}
+
+const std::vector<DockShell::GroupInfo> &DockShell::panelGroups() {
+  static const std::vector<GroupInfo> kGroups = {
+      {"flight", QObject::tr("&Flight")},      {"sensors", QObject::tr("&Sensors")},
+      {"tuning", QObject::tr("&Tuning")},      {"debug", QObject::tr("&Debug")},
+      {"simulation", QObject::tr("S&imulation")}, {"app", QObject::tr("&App")},
+  };
+  return kGroups;
+}
+
+void DockShell::buildPanelsMenu(QMenu *menu, const std::vector<PanelInfo> &infos,
+                                const std::function<QAction *(const QString &)> &actionFor) {
+  std::vector<GroupInfo> groups = panelGroups();
+  const QString other = QStringLiteral("other");
+  groups.push_back({other, QObject::tr("&Other")});
+  for (const GroupInfo &g : groups) {
+    QMenu *sub = nullptr;
+    for (const PanelInfo &p : infos) {
+      const bool known = std::any_of(groups.begin(), groups.end() - 1,
+                                     [&](const GroupInfo &k) { return k.id == p.group; });
+      if ((known ? p.group : other) != g.id)
+        continue;
+      QAction *a = actionFor(p.id);
+      if (!a)
+        continue;
+      if (!sub)
+        sub = menu->addMenu(g.title);
+      sub->addAction(a);
+    }
+  }
 }
 
 std::vector<WorkspaceManager::Builtin> DockShell::builtins() {
@@ -189,8 +221,8 @@ void DockShell::addMenus(QMenuBar *bar, QAction *before) {
     return;
   m_wsMenu = new QMenu(tr("&Workspaces"), bar);
   auto *panels = new QMenu(tr("&Panels"), bar);
-  for (const QString &id : m_wm->backend()->panelIds())
-    panels->addAction(m_wm->backend()->viewAction(id));
+  buildPanelsMenu(panels, panelInfos(),
+                  [this](const QString &id) { return m_wm->backend()->viewAction(id); });
   if (before) {
     bar->insertMenu(before, m_wsMenu);
     bar->insertMenu(before, panels);
