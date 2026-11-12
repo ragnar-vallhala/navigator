@@ -25,7 +25,7 @@ bytes -> DroneProtocol::parseBuffer -> NavlinkRouter::feed
 
 - Attitude is converted from radians to degrees.
 - `IMU_COMPRESSED` carries half-float deltas, so the router keeps `lastImu` and rebuilds the absolute sample. Deltas that arrive before any `IMU_RAW` are dropped.
-- RC keeps the first 14 of 18 channels. Motors keep the first 4 of 8.
+- RC keeps the first 14 of 18 channels. Motors keep the first 4 of 8. (`NavlinkRouter.cpp`: the RC thunk comment reads "RcData holds 14 channels; v2 carries 18 — take the first 14", with a 14-iteration copy loop; the motor thunk likewise: "MotorData holds 4 motors; v2 carries 8 — take the first 4".)
 - `PERF_GLOBAL`, `PERF_TASK` and `PERF_FIFO` are reassembled into one `PerfReport`, emitted when the expected rows have arrived.
 - `FAULT_STATUS` gets its fault name from the generated fault table.
 - `TIME_SYNC` is passed on only for the RESPONSE role, and the router stamps the receive time (t4) itself.

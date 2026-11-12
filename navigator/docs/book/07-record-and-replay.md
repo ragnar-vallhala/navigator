@@ -32,7 +32,7 @@ Two things produce VREC files, and they differ in what they store:
 
 - Recordings and session logs use the directory from Settings (`logDirectory`). If it is empty, the default is `~/vayu-logs`, created on demand. The export dialog also pre-fills `~/vayu-logs`, and the Open Flight Log dialog starts there.
 - With "export on disconnect" enabled, the System Log buffer is dumped to `session_<stamp>.log` in the same directory.
-- The persistent text log (`Logger`) writes `navigator-<UTC date>.log` under `<AppDataLocation>/logs`, rotating at about 5 MB and keeping 10 files. If Qt reports no AppDataLocation it falls back to the system temp directory under `vayu-gcs/logs`.
+- The persistent text log (`Logger`) writes `navigator-<UTC date>.log` under `<AppDataLocation>/logs`, rotating at about 5 MB and keeping 10 files (the `maxBytes` and `maxFiles` defaults in `Logger.h`). If Qt reports no AppDataLocation it falls back to the system temp directory under `vayu-gcs/logs`.
 - Simulator ground-truth logs go to the simulator's own log directory, a setting editable on the Simulator page (settings key `simulator/logDir`). Its default is `$VAYU_REPO/logs` if `VAYU_REPO` is set, otherwise `<AppDataLocation>/logs`, otherwise the temp-directory fallback.
 
 ## Replay
