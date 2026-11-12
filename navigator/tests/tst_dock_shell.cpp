@@ -19,6 +19,7 @@
 // reads env + setting, showPanel is a no-op for an unknown id, shows without
 // floating, and the panel that holds QOpenGLWidgets cannot be floated.
 #include "DockShell.h"
+#include "AdsBackend.h"
 #include "Theme.h"
 
 #include <QFile>
@@ -26,6 +27,7 @@
 #include <QLabel>
 #include <QMainWindow>
 #include <QSettings>
+#include <QStyle>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -69,6 +71,18 @@ private slots:
   // palette()-based sheet used to paint Qt's default grey around the panels
   // and under the tab titles. Checks pixels the way a user sees them.
   void dockSurfacesWearTheDarkTheme() {
+    // Put the app palette and sheet back whatever happens below.
+    struct Restore {
+      QPalette pal = qApp->palette();
+      QString sheet = qApp->styleSheet();
+      QString style = qApp->style()->objectName();
+      ~Restore() {
+        qApp->setStyleSheet(sheet);
+        qApp->setPalette(pal);
+        if (style != qApp->style()->objectName())
+          qApp->setStyle(style);
+      }
+    } restore;
     // The palette and the real dark.qss, as main() applies them.
     Theme::apply();
     QFile qss(QStringLiteral(DARK_QSS_PATH));
@@ -106,6 +120,30 @@ private slots:
     QVERIFY(areas > 0);
     QVERIFY(docks > 0);
     QVERIFY(tabs > 0);
+
+    // A floated panel lives in its own top-level window: same theme there.
+    f.shell->workspaces()->backend()->floatPanel("imu");
+    QTest::qWait(400);
+    int floated = 0;
+    for (QWidget *tw : QApplication::topLevelWidgets()) {
+      if (!QByteArray(tw->metaObject()->className()).contains("Floating"))
+        continue;
+      QVERIFY(tw->isVisible());
+      const QImage im = tw->grab().toImage();
+      QCOMPARE(im.pixelColor(im.width() - 3, im.height() - 3), Theme::kBg);
+      QCOMPARE(im.pixelColor(im.width() / 2, 2), Theme::kBg); // tab strip
+      floated++;
+    }
+    QVERIFY(floated > 0);
+
+    // Setting the same extra sheet again leaves one copy, not two.
+    auto *ads = dynamic_cast<ws::AdsBackend *>(f.shell->workspaces()->backend());
+    QVERIFY(ads);
+    QWidget *dm = f.win.centralWidget();
+    const QString once = dm->styleSheet();
+    ads->setExtraStyleSheet(Theme::dockStyleSheet());
+    ads->setExtraStyleSheet(Theme::dockStyleSheet());
+    QCOMPARE(dm->styleSheet(), once);
   }
 
   void init() {

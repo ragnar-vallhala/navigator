@@ -234,9 +234,13 @@ ads::CDockAreaWidget *AdsBackend::place(const LayoutNode &n,
 }
 
 void AdsBackend::setExtraStyleSheet(const QString &qss) {
+  if (m_dm) {
+    QString cur = m_dm->styleSheet();
+    if (!m_extraStyle.isEmpty() && cur.endsWith(m_extraStyle))
+      cur.chop(m_extraStyle.size()); // replace the last extra, never stack it
+    m_dm->setStyleSheet(cur + qss);
+  }
   m_extraStyle = qss;
-  if (m_dm)
-    m_dm->setStyleSheet(m_dm->styleSheet() + m_extraStyle);
 }
 
 void AdsBackend::applySpec(const LayoutSpec &spec) {
