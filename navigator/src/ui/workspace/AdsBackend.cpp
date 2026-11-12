@@ -52,6 +52,32 @@ public:
 private:
   std::function<void()> m_f;
 };
+
+// A layout switch rebuilds the dock manager. Native child windows (the GL
+// containers) are mapped by the window system at once, before Qt has laid the
+// new tree out, so a half-built layout used to show through. Freeze the host's
+// painting for the whole switch, keep the new manager hidden until every panel
+// is docked, then show it in one step.
+class SwitchFreeze {
+public:
+  SwitchFreeze(QMainWindow *host, QPointer<ads::CDockManager> &dm)
+      : m_host(host), m_dm(dm) {
+    if (m_host)
+      m_host->setUpdatesEnabled(false);
+  }
+  ~SwitchFreeze() {
+    if (m_dm)
+      m_dm->show();
+    if (m_host) {
+      m_host->setUpdatesEnabled(true);
+      m_host->update();
+    }
+  }
+
+private:
+  QPointer<QMainWindow> m_host;
+  QPointer<ads::CDockManager> &m_dm;
+};
 }
 
 AdsBackend::AdsBackend(QMainWindow *host) : m_host(host) {
@@ -182,6 +208,10 @@ void AdsBackend::rebuild() {
   if (!m_host) // the window is gone: nothing to build into
     return;
   m_quiet = true; // the old manager's teardown signals are not edits
+  // Unmap the old tree (and every native GL window in it) first, so none of
+  // them can stay mapped at its old position while the panels move.
+  if (m_dm)
+    m_dm->hide();
   for (Panel &p : m_panels) {
     if (p.dock && p.widget) {
       p.dock->takeWidget();
@@ -195,6 +225,7 @@ void AdsBackend::rebuild() {
     m_dm.clear();
   }
   m_dm = new ads::CDockManager(m_host);
+  m_dm->hide(); // shown by SwitchFreeze once the layout is complete
   m_quiet = false;
   m_built.start();
   {
@@ -323,6 +354,7 @@ void AdsBackend::setExtraStyleSheet(const QString &qss) {
 }
 
 void AdsBackend::applySpec(const LayoutSpec &spec) {
+  SwitchFreeze freeze(m_host, m_dm);
   rebuild();
   if (!m_dm)
     return;
@@ -381,6 +413,7 @@ QStringList AdsBackend::statePanelIds(const QByteArray &state) const {
 }
 
 bool AdsBackend::restoreState(const QByteArray &state) {
+  SwitchFreeze freeze(m_host, m_dm);
   rebuild();
   if (!m_dm || state.isEmpty())
     return false;

@@ -49,6 +49,27 @@ QMenu *menuNamed(QMenuBar *bar, const QString &title) {
   return nullptr;
 }
 
+// A panel that notes, on every reparent, whether the host was frozen and the
+// dock manager hidden (the state a layout switch must keep until it is built).
+class ProbeLabel : public QLabel {
+public:
+  ProbeLabel(const QString &t, QMainWindow *host, int *bad, int *seen)
+      : QLabel(t), m_host(host), m_bad(bad), m_seen(seen) {}
+  bool event(QEvent *e) override {
+    if (e->type() == QEvent::ParentChange) {
+      QWidget *c = m_host->centralWidget();
+      ++*m_seen;
+      if (m_host->updatesEnabled() || !c || !c->isHidden())
+        ++*m_bad;
+    }
+    return QLabel::event(e);
+  }
+
+private:
+  QMainWindow *m_host;
+  int *m_bad, *m_seen;
+};
+
 // A window with a started shell whose panels are labels (as many as asked).
 struct Fixture {
   QMainWindow win;
@@ -269,6 +290,63 @@ private slots:
         QVERIFY2(st.visible && !st.floating, qPrintable(w.name + "/" + id));
       }
     }
+  }
+
+  // A switch freezes the host and keeps the dock manager hidden until every
+  // panel is docked, so no native GL window can show through a half-built
+  // layout; afterwards the host paints again and shows the new manager.
+  void switchIsFrozenAndHiddenUntilBuilt() {
+    QMainWindow win;
+    win.resize(1200, 800);
+    int bad = 0, seen = 0;
+    auto *shell = new DockShell(&win);
+    for (const QString &id : allIds())
+      shell->addPanel(id, new ProbeLabel(id, &win, &bad, &seen));
+    shell->start(false);
+    win.show();
+    auto *wm = shell->workspaces();
+    for (const auto &w : DockShell::builtins()) {
+      bad = seen = 0;
+      QVERIFY(wm->load(w.name));
+      QVERIFY2(seen > 0, qPrintable(w.name));
+      QVERIFY2(bad == 0, qPrintable(w.name));
+      QVERIFY(win.updatesEnabled());
+      QVERIFY(win.centralWidget()->isVisible());
+    }
+  }
+
+  void switchNeverResizesTheWindow() {
+    Fixture f;
+    f.win.resize(1300, 820);
+    QTest::qWait(50);
+    const QSize before = f.win.size();
+    auto *wm = f.shell->workspaces();
+    for (int round = 0; round < 2; ++round)
+      for (const auto &w : DockShell::builtins()) {
+        QVERIFY(wm->load(w.name));
+        QTest::qWait(10);
+        QCOMPARE(f.win.size(), before);
+        QVERIFY2(f.win.minimumSizeHint().width() <= before.width(),
+                 qPrintable(w.name));
+        QVERIFY2(f.win.minimumSizeHint().height() <= before.height(),
+                 qPrintable(w.name));
+      }
+  }
+
+  void quickSuccessiveLoadsEndConsistent() {
+    Fixture f;
+    auto *wm = f.shell->workspaces();
+    QVERIFY(wm->load("Sim"));
+    QVERIFY(wm->load("Fly"));
+    QVERIFY(wm->load("Packets"));
+    QTest::qWait(50);
+    QCOMPARE(wm->currentName(), QString("Packets"));
+    auto *b = wm->backend();
+    QVERIFY(b->panelState("packets").visible);
+    QVERIFY(!b->panelState("sim").visible);
+    QVERIFY(!b->panelState("view3d").visible);
+    QVERIFY(f.win.updatesEnabled());
+    QVERIFY(f.win.centralWidget()->isVisible());
   }
 
   void showPanelUnknownIdIsNoOp() {
