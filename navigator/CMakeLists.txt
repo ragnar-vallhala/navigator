@@ -447,10 +447,10 @@ message(STATUS "Qt6 version: ${Qt6_VERSION}")
 
 # Workspace mock (docking prototype). Standalone; skipped unless Qt Advanced
 # Docking System is found. See tools/workspace_mock/CMakeLists.txt.
+# The dock library (navigator_workspace) is always configured; the option only
+# controls the standalone demo app.
 option(NAVIGATOR_WORKSPACE_MOCK "Build the docking/workspace mock app" ON)
-if(NAVIGATOR_WORKSPACE_MOCK)
-    add_subdirectory(tools/workspace_mock)
-endif()
+add_subdirectory(tools/workspace_mock)
 
 # The dock host is the window's only layout (src/ui/main/DockShell), so Qt
 # Advanced Docking System is required (NAVIGATOR_FETCH_ADS, default ON, or an

@@ -77,5 +77,9 @@ target_include_directories(navigator_workspace PUBLIC ${WS_DIR})
 target_link_libraries(navigator_workspace PUBLIC Qt6::Widgets
     ads::qtadvanceddocking-qt6)
 
-qt_add_executable(workspace_mock main.cpp MockPanels.h GlPanel.h)
-target_link_libraries(workspace_mock PRIVATE navigator_workspace Qt6::OpenGLWidgets)
+# The library above is always built (Navigator's dock host needs it); only the
+# demo app is optional.
+if(NAVIGATOR_WORKSPACE_MOCK)
+    qt_add_executable(workspace_mock main.cpp MockPanels.h GlPanel.h)
+    target_link_libraries(workspace_mock PRIVATE navigator_workspace Qt6::OpenGLWidgets)
+endif()

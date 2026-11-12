@@ -27,7 +27,7 @@ cmake --build build -j
 | `NAVIGATOR_SITL` | ON | Build the in-app simulator and autotune. OFF gives a GCS-only binary. |
 | `NAVIGATOR_SIM_GRASS` | OFF | Compile the grass and flora renderer. CI turns it on so static analysis sees that code. |
 | `NAVIGATOR_BUILD_TESTS` | ON | Build the QtTest targets and register them with ctest. |
-| `NAVIGATOR_WORKSPACE_MOCK` | ON | Add the docking mock app. It configures nothing unless Qt Advanced Docking System is found. |
+| `NAVIGATOR_WORKSPACE_MOCK` | ON | Build the standalone docking demo app. The dock library itself is always configured, because the main window needs it; without Qt Advanced Docking System the configure stops. |
 | `NAVIGATOR_FETCH_ADS` | ON | Fetch and build that library from a pinned commit (required: the docked layout is the only layout; use `FETCHCONTENT_SOURCE_DIR_ADS` or an installed copy to stay offline). Defined in `navigator/tools/workspace_mock/CMakeLists.txt`. |
 | `VAYU_SITL_SDK` | see below | Cache path to the SDK include directory. |
 
