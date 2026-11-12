@@ -27,8 +27,8 @@ cmake --build build -j
 | `NAVIGATOR_SITL` | ON | Build the in-app simulator and autotune. OFF gives a GCS-only binary. |
 | `NAVIGATOR_SIM_GRASS` | OFF | Compile the grass and flora renderer. CI turns it on so static analysis sees that code. |
 | `NAVIGATOR_BUILD_TESTS` | ON | Build the QtTest targets and register them with ctest. |
-| `NAVIGATOR_WORKSPACE_MOCK` | ON | Add the docking mock app. It configures nothing unless Qt Advanced Docking System is found. |
-| `NAVIGATOR_FETCH_ADS` | OFF | Fetch and build that library from a pinned commit. Defined in `navigator/tools/workspace_mock/CMakeLists.txt`. |
+| `NAVIGATOR_WORKSPACE_MOCK` | ON | Build the standalone docking demo app. The dock library itself is always configured, because the main window needs it; without Qt Advanced Docking System the configure stops. |
+| `NAVIGATOR_FETCH_ADS` | ON | Fetch and build that library from a pinned commit (required: the docked layout is the only layout; use `FETCHCONTENT_SOURCE_DIR_ADS` or an installed copy to stay offline). Defined in `navigator/tools/workspace_mock/CMakeLists.txt`. |
 | `VAYU_SITL_SDK` | see below | Cache path to the SDK include directory. |
 
 Even with `NAVIGATOR_SITL=ON`, a missing SDK is only a CMake warning ("SITL features disabled"). The app still builds. CMake looks for the SDK at `sim/host/sdk` under the repository root if present, otherwise `vayu-sitl-sdk/include` there.
@@ -98,7 +98,7 @@ Gap: nothing describes an install step (`cmake --install`) or packaging; none is
 
 - No tags locally or on the remote -> `git tag -l` and `git ls-remote --tags origin` both empty
 - Requirements and options -> navigator/CMakeLists.txt
-- `NAVIGATOR_FETCH_ADS` default OFF -> navigator/tools/workspace_mock/CMakeLists.txt
+- `NAVIGATOR_FETCH_ADS` default ON -> navigator/tools/workspace_mock/CMakeLists.txt
 - 44 test targets, with conditions -> navigator/tests/CMakeLists.txt
 - Module search order -> navigator/src/vsim/SitlModule.cpp, comment in navigator/CMakeLists.txt
 - CI jobs, pinned v0.2.1 -> .github/workflows/ci.yml

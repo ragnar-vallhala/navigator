@@ -447,20 +447,29 @@ message(STATUS "Qt6 version: ${Qt6_VERSION}")
 
 # Workspace mock (docking prototype). Standalone; skipped unless Qt Advanced
 # Docking System is found. See tools/workspace_mock/CMakeLists.txt.
+# The dock library (navigator_workspace) is always configured; the option only
+# controls the standalone demo app.
 option(NAVIGATOR_WORKSPACE_MOCK "Build the docking/workspace mock app" ON)
-if(NAVIGATOR_WORKSPACE_MOCK)
-    add_subdirectory(tools/workspace_mock)
-endif()
+add_subdirectory(tools/workspace_mock)
 
-# The dock host in the real window (src/ui/main/DockShell). Compiled in only when
-# the docking library was found above; it is used only when the switch is on
-# (env NAVIGATOR_DOCKING=1 or Window > Dockable layout), so a build with it
-# behaves like one without it until then.
-if(TARGET navigator_workspace)
-    target_sources(Navigator PRIVATE
-        src/ui/main/DockShell.cpp src/ui/main/DockShell.h)
-    target_compile_definitions(Navigator PRIVATE NAVIGATOR_HAS_DOCKING=1)
-    target_link_libraries(Navigator PRIVATE navigator_workspace)
+# The dock host is the window's only layout (src/ui/main/DockShell), so Qt
+# Advanced Docking System is required (NAVIGATOR_FETCH_ADS, default ON, or an
+# installed copy; see tools/workspace_mock/CMakeLists.txt).
+if(NOT TARGET navigator_workspace)
+    message(FATAL_ERROR "Qt Advanced Docking System is required: the docked "
+                        "layout is Navigator's only layout. Use "
+                        "-DNAVIGATOR_FETCH_ADS=ON (network), "
+                        "-DFETCHCONTENT_SOURCE_DIR_ADS=<checkout> (offline) "
+                        "or install it (CMAKE_PREFIX_PATH).")
+endif()
+target_sources(Navigator PRIVATE
+    src/ui/main/DockShell.cpp src/ui/main/DockShell.h)
+target_link_libraries(Navigator PRIVATE navigator_workspace)
+if(WIN32)
+    # Windows loads the shared dock library from beside the exe.
+    add_custom_command(TARGET Navigator POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:ads::qtadvanceddocking-qt6> $<TARGET_FILE_DIR:Navigator>)
 endif()
 
 # -------------------------------------------------------

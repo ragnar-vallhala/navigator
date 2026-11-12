@@ -69,4 +69,9 @@ WarningsAsErrors: '*'
 # §5.3 exemption -- a vaios bump could have turned upstream's code into our red
 # build. clang-tidy 18 has no ExcludeHeaderFilterRegex, so the exclusion is
 # expressed positively: extern/** carries none of these as a path segment.
-HeaderFilterRegex: '.*/(firmware|navigator|sim|navlink|vtest)/.*\.(h|hpp)$'
+#
+# The Navigator build tree sits under a directory also named 'navigator', and
+# FetchContent puts Qt Advanced Docking System in <build>/_deps (build-tidy/),
+# so a bare 'navigator' segment pulled that third-party code in. Navigator's own
+# headers are therefore named by their sub-directory.
+HeaderFilterRegex: '.*/(firmware|sim|navlink|vtest)/.*\.(h|hpp)$|.*/navigator/(src|tests|tools|headless-sdk)/.*\.(h|hpp)$'

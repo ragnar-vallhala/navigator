@@ -2,7 +2,7 @@
 
 This chapter walks through the pages of the normal (non-docked) window and says, for each one, what it shows and which data path feeds it. The simulator page is Chapter 6. Record and replay are Chapter 7.
 
-In the normal window, `MainWindow` puts every page in one `QStackedWidget`. The View menu switches pages: Ctrl+1 Flight Dashboard, Ctrl+2 RC Channels, Ctrl+3 Motors, Ctrl+4 Control Loop, Ctrl+5 Packet Analyzer, Ctrl+6 Simulator, Ctrl+8 Kernel Perf. The Tools menu has Calibration (Ctrl+7) and Gyro Notch (Ctrl+9). Settings has its own menu-bar entry.
+MainWindow lays every page out as a dock panel (`DockShell`). There is no View menu: the old pages are built-in workspaces in the Workspaces menu, with the old keys: Ctrl+1 Fly (the old Flight Dashboard), Ctrl+2 RC channels, Ctrl+3 Motors, Ctrl+4 Control loop, Ctrl+5 Packets, Ctrl+6 Sim, Ctrl+8 Kernel perf. The Tools menu has Calibration (Ctrl+7) and Gyro Notch (Ctrl+9). Settings has its own menu-bar entry. Fullscreen (F11) is in the Window menu.
 
 ## Where the data comes from
 

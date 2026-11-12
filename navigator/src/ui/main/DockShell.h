@@ -33,8 +33,7 @@ class QWidget;
 
 // The dock host of the real Navigator window (todo #187 step 3): every page is
 // a registered panel with a stable id, laid out by the workspace system in
-// src/ui/workspace/. Only used when the switch is on (see enabled()); the
-// legacy QStackedWidget window never constructs one.
+// src/ui/workspace/. It is the window's only layout.
 //
 // The static helpers (ids, titles, built-in workspaces, the switch) need no
 // display and are what the unit tests check.
@@ -64,19 +63,18 @@ public:
   // Panels pinned to the main window (GL views in window containers; not
   // checked yet for floating out of the main window on real GPUs).
   static const std::vector<const char *> kFixedPanels;
-  // Fly (the default), Tune, Debug link, Sim.
+  // Fly (the default), Tune, Debug link, Sim, then one per old full-window
+  // page: RC channels, Motors, Control loop, Packets, Kernel perf. (Fly is
+  // the old Flight Dashboard page, Sim the old Simulator page.)
   static std::vector<ws::WorkspaceManager::Builtin> builtins();
+  // Ctrl+1..6 and Ctrl+8 -> built-in workspace, in the old View menu order.
+  struct WorkspaceKey {
+    QString workspace;
+    QString key; // QKeySequence text
+  };
+  static const std::vector<WorkspaceKey> &workspaceShortcuts();
   // Every panel id a layout names (tabs and floats, recursively).
   static QStringList referencedIds(const ws::LayoutSpec &spec);
-
-  // The switch: env NAVIGATOR_DOCKING=1 (or true/on/yes), OR the persisted
-  // setting (Window > Dockable layout). Always false in a build without the
-  // docking library.
-  static bool compiledIn();
-  static bool envRequested();
-  static bool persistedRequested();
-  static void setPersisted(bool on);
-  static bool enabled();
 
   explicit DockShell(QMainWindow *host);
 

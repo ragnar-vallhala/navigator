@@ -20,6 +20,13 @@ function(navigator_test name)
   # qt_add_executable makes a GUI-subsystem exe on Windows, whose stdout is
   # lost: a failing QtTest then prints nothing under --output-on-failure.
   set_target_properties(${name} PROPERTIES WIN32_EXECUTABLE FALSE)
+  # The dock library is a shared library; Windows finds a DLL only beside the
+  # exe (or on PATH), so put a copy next to each test binary.
+  if(WIN32 AND TARGET ads::qtadvanceddocking-qt6)
+    add_custom_command(TARGET ${name} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              $<TARGET_FILE:ads::qtadvanceddocking-qt6> $<TARGET_FILE_DIR:${name}>)
+  endif()
   add_test(NAME ${name} COMMAND ${name})
   set_tests_properties(${name} PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
@@ -384,7 +391,7 @@ if(TARGET navigator_workspace)
         ${SRC}/ui/main/DockShell.cpp ${SRC}/ui/main/DockShell.h
         ${SRC}/core/Theme.cpp)
     target_include_directories(tst_dock_shell PRIVATE ${SRC}/ui/main)
-    target_compile_definitions(tst_dock_shell PRIVATE NAVIGATOR_HAS_DOCKING=1
+    target_compile_definitions(tst_dock_shell PRIVATE
         DARK_QSS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../resources/styles/dark.qss")
     target_link_libraries(tst_dock_shell PRIVATE navigator_workspace)
 endif()

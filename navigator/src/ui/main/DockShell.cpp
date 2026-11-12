@@ -26,7 +26,6 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
-#include <QSettings>
 
 #include <algorithm>
 
@@ -34,9 +33,6 @@ using ws::LayoutNode;
 using ws::LayoutSpec;
 using ws::WorkspaceManager;
 
-namespace {
-const char *kDockKey = "ui/dockableLayout";
-}
 const std::vector<const char *> DockShell::kFixedPanels = {dockpanel::kView3d};
 namespace {
 
@@ -126,7 +122,24 @@ std::vector<WorkspaceManager::Builtin> DockShell::builtins() {
                    {3, 1})}});
   b.push_back({"Sim",
                {LayoutNode::split(V, {T({dockpanel::kSim}), T({dockpanel::kLogs})}, {4, 1})}});
+  // The old full-window pages, one panel each (Flight Dashboard = Fly, Simulator
+  // = Sim above).
+  b.push_back({"RC channels", {T({dockpanel::kRc})}});
+  b.push_back({"Motors", {T({dockpanel::kMotors})}});
+  b.push_back({"Control loop", {T({dockpanel::kControlLoop})}});
+  b.push_back({"Packets", {T({dockpanel::kPackets})}});
+  b.push_back({"Kernel perf", {T({dockpanel::kPerf})}});
   return b;
+}
+
+const std::vector<DockShell::WorkspaceKey> &DockShell::workspaceShortcuts() {
+  static const std::vector<WorkspaceKey> k = {
+      {"Fly", "Ctrl+1"},          {"RC channels", "Ctrl+2"},
+      {"Motors", "Ctrl+3"},       {"Control loop", "Ctrl+4"},
+      {"Packets", "Ctrl+5"},      {"Sim", "Ctrl+6"},
+      {"Kernel perf", "Ctrl+8"},
+  };
+  return k;
 }
 
 QStringList DockShell::referencedIds(const LayoutSpec &spec) {
@@ -135,29 +148,6 @@ QStringList DockShell::referencedIds(const LayoutSpec &spec) {
   for (const ws::FloatSpec &f : spec.floats)
     l << f.panels;
   return l;
-}
-
-bool DockShell::compiledIn() {
-#ifdef NAVIGATOR_HAS_DOCKING
-  return true;
-#else
-  return false;
-#endif
-}
-
-bool DockShell::envRequested() {
-  const QString v = qEnvironmentVariable("NAVIGATOR_DOCKING").trimmed().toLower();
-  return v == "1" || v == "true" || v == "on" || v == "yes";
-}
-
-bool DockShell::persistedRequested() {
-  return QSettings().value(kDockKey, false).toBool();
-}
-
-void DockShell::setPersisted(bool on) { QSettings().setValue(kDockKey, on); }
-
-bool DockShell::enabled() {
-  return compiledIn() && (envRequested() || persistedRequested());
 }
 
 DockShell::DockShell(QMainWindow *host) : QObject(host), m_host(host) {}
@@ -246,6 +236,11 @@ void DockShell::rebuildWorkspaceMenu() {
     a->setChecked(n == m_wm->currentName());
     grp->addAction(a);
     connect(a, &QAction::triggered, this, [this, n] { m_wm->load(n); });
+    // Ctrl+N (the old View menu keys), hosted on this menu like any menu-bar
+    // shortcut. Sim only where the simulator panel exists in this build.
+    for (const WorkspaceKey &k : workspaceShortcuts())
+      if (k.workspace == n && (n != "Sim" || hasPanel(dockpanel::kSim)))
+        a->setShortcut(QKeySequence(k.key));
   };
   for (const QString &n : m_wm->builtinNames())
     addWs(n);

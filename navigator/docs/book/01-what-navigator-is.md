@@ -29,7 +29,7 @@ From the source tree, Navigator provides:
 - **Autotune.** A native C++ autotuner launched from the simulator page.
 - **Extras.** An editable shortcut and command registry, a command palette, and optional propeller and alert audio.
 
-There is also an experimental dockable layout, covered later.
+The window is a dockable layout with built-in and user workspaces, covered later.
 
 ## Who it is for
 

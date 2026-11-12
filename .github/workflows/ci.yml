@@ -110,7 +110,7 @@ jobs:
           # gracefully) but is installed so CI compiles the same audio path a
           # developer machine does, rather than a variant nobody runs.
           apt_retry install -y cmake clang-tidy-18 jq \
-            qt6-base-dev qt6-base-dev-tools qt6-serialport-dev \
+            qt6-base-dev qt6-base-private-dev qt6-base-dev-tools qt6-serialport-dev \
             libgl1-mesa-dev libassimp-dev libpulse-dev python3-numpy \
             xvfb libgl1-mesa-dri libxkbcommon-x11-0 libxcb-icccm4 \
             libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 \

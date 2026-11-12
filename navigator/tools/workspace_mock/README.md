@@ -86,10 +86,10 @@ exists and fails when it is fixed, as a prompt to remove the workaround.
 
 `src/ui/main/DockShell` hosts every Navigator page as a panel on this layer
 (ids `view3d imu logs rc packets calibration motors control_loop gyro_notch perf
-sim settings`; workspaces Fly, Tune, Debug link, Sim). It is off by default.
-Switch it on with `NAVIGATOR_DOCKING=1` in the environment, or with
-Window > Dockable layout (restart needed); the window then has Workspaces and
-Panels menus, and View / Ctrl+1..9 show and focus a panel.
+sim settings`; workspaces Fly, Tune, Debug link, Sim, RC channels, Motors, Control loop,
+Packets, Kernel perf). It is the window's only layout (there is no switch and
+no View menu): Workspaces and Panels menus, and Ctrl+1..6, Ctrl+8 switch workspace (Fly, RC channels, Motors,
+Control loop, Packets, Sim, Kernel perf).
 
 GL decision: the attitude panel (`view3d`) holds two `QOpenGLWidget`s, which
 cannot move between windows under ADS 5.1.1 on Qt 6.4, so that panel is pinned
