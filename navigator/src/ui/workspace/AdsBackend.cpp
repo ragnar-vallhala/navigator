@@ -26,12 +26,32 @@
 #include <FloatingDockContainer.h>
 
 #include <QMainWindow>
+#include <QRegularExpression>
+#include <QSplitter>
 #include <QTimer>
 
 namespace ws {
 
 namespace {
 constexpr int kStateVersion = 2;
+constexpr int kSettleMs = 500;
+
+// A floating window dragged or resized by the user has no ADS signal: watch its
+// Move/Resize events.
+class GeometryWatcher : public QObject {
+public:
+  GeometryWatcher(QObject *parent, std::function<void()> f)
+      : QObject(parent), m_f(std::move(f)) {}
+  bool eventFilter(QObject *o, QEvent *e) override {
+    if ((e->type() == QEvent::Move || e->type() == QEvent::Resize) &&
+        static_cast<QWidget *>(o)->isVisible())
+      m_f();
+    return false;
+  }
+
+private:
+  std::function<void()> m_f;
+};
 }
 
 AdsBackend::AdsBackend(QMainWindow *host) : m_host(host) {
@@ -51,6 +71,7 @@ AdsBackend::~AdsBackend() {
       p.dock->takeWidget();
       p.widget->setParent(nullptr);
     }
+  m_quiet = true;
   if (m_dm) {
     // When the manager is a child of the host and the host is being deleted,
     // Qt has already deleted the host's own layout (it is the first child), and
@@ -129,9 +150,38 @@ QStringList AdsBackend::panelIds() const {
   return l;
 }
 
+// Every ADS signal that can mean "the layout changed" ends here. Splitter drags
+// have no ADS signal, so each splitter is hooked (QSplitter::splitterMoved) as
+// it appears; new ones appear with a new area or floating window, which do
+// signal.
+void AdsBackend::layoutChanged() {
+  if (m_quiet || !m_dm)
+    return;
+  hookSplitters();
+  if (m_notify)
+    m_notify();
+}
+
+void AdsBackend::hookSplitters() {
+  if (!m_dm)
+    return;
+  const auto hook = [this](QWidget *root) {
+    for (QSplitter *s : root->findChildren<QSplitter *>()) {
+      if (s->property("wsHooked").toBool())
+        continue;
+      s->setProperty("wsHooked", true);
+      QObject::connect(s, &QSplitter::splitterMoved, m_dm.data(),
+                       [this] { layoutChanged(); });
+    }
+  };
+  for (ads::CDockContainerWidget *c : m_dm->dockContainers())
+    hook(c);
+}
+
 void AdsBackend::rebuild() {
   if (!m_host) // the window is gone: nothing to build into
     return;
+  m_quiet = true; // the old manager's teardown signals are not edits
   for (Panel &p : m_panels) {
     if (p.dock && p.widget) {
       p.dock->takeWidget();
@@ -145,6 +195,31 @@ void AdsBackend::rebuild() {
     m_dm.clear();
   }
   m_dm = new ads::CDockManager(m_host);
+  m_quiet = false;
+  m_built.start();
+  {
+    using M = ads::CDockManager;
+    auto *dm = m_dm.data();
+    const auto changed = [this] { layoutChanged(); };
+    QObject::connect(dm, &M::dockAreaCreated, dm,
+                     [this](ads::CDockAreaWidget *a) {
+                       QObject::connect(a, &ads::CDockAreaWidget::currentChanged,
+                                        m_dm.data(), [this] { layoutChanged(); });
+                       layoutChanged();
+                     });
+    QObject::connect(dm, &M::floatingWidgetCreated, dm,
+                     [this](ads::CFloatingDockContainer *fc) {
+                       // Move/Resize events also trail a layout build (the window
+                       // system settling the windows just placed): not edits.
+                       fc->installEventFilter(new GeometryWatcher(fc, [this] {
+                         if (m_built.hasExpired(kSettleMs))
+                           layoutChanged();
+                       }));
+                       layoutChanged();
+                     });
+    QObject::connect(dm, &M::dockWidgetAdded, dm, changed);
+    QObject::connect(dm, &M::dockWidgetRemoved, dm, changed);
+  }
   if (!m_extraStyle.isEmpty())
     m_dm->setStyleSheet(m_dm->styleSheet() + m_extraStyle);
   m_host->setCentralWidget(m_dm);
@@ -156,6 +231,10 @@ void AdsBackend::rebuild() {
     applyFixed(p);
     if (p.widget)
       dw->setWidget(p.widget, ads::CDockWidget::ForceNoScrollArea);
+    QObject::connect(dw, &ads::CDockWidget::viewToggled, m_dm.data(),
+                     [this] { layoutChanged(); });
+    QObject::connect(dw, &ads::CDockWidget::topLevelChanged, m_dm.data(),
+                     [this] { layoutChanged(); });
     // Keep the menu action in step with the panel's visibility.
     QAction *act = m_actions.value(p.id);
     if (act) {
@@ -280,10 +359,21 @@ void AdsBackend::applySpec(const LayoutSpec &spec) {
     }
   }
   syncActions();
+  m_built.start();
 }
 
 QByteArray AdsBackend::saveState() const {
   return m_dm ? m_dm->saveState(kStateVersion) : QByteArray();
+}
+
+QStringList AdsBackend::statePanelIds(const QByteArray &state) const {
+  QStringList ids;
+  const QByteArray xml = qUncompress(state);
+  static const QRegularExpression re(QStringLiteral("<Widget Name=\"([^\"]*)\""));
+  auto it = re.globalMatch(QString::fromUtf8(xml));
+  while (it.hasNext())
+    ids << it.next().captured(1);
+  return ids;
 }
 
 bool AdsBackend::restoreState(const QByteArray &state) {
@@ -294,6 +384,7 @@ bool AdsBackend::restoreState(const QByteArray &state) {
   if (!ok)
     rebuild(); // empty, usable layout; the caller applies a default
   syncActions();
+  m_built.start();
   return ok;
 }
 

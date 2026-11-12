@@ -21,7 +21,10 @@
 #include "PanelRegistry.h"
 
 #include <QList>
+#include <QByteArray>
 #include <QObject>
+#include <QPointer>
+#include <QTimer>
 #include <QRect>
 #include <QStringList>
 #include <functional>
@@ -92,19 +95,40 @@ public:
 
   DockBackend *backend() { return m_backend.get(); }
 
+  // The "last layout" slot: whatever is on screen (a built-in, a saved view or
+  // an edited, unsaved variant of one) plus the name of the workspace it came
+  // from. It is written `kLastDelayMs` after the last layout change, and at
+  // once before another workspace loads, in persistLast() (window close) and
+  // on app quit. It is its own slot: built-in and saved workspaces are never
+  // written by it (only saveCurrentAs() writes those).
+  static constexpr int kLastDelayMs = 800;
+  void setLastDelay(int ms) { m_lastTimer.setInterval(ms); }
+  // Store the last layout now if a change is pending and differs from the slot.
+  void flushLast();
+
 signals:
   void workspacesChanged();
   void currentChanged(const QString &name);
   // A saved layout could not be used and the default was applied instead.
   void loadFailed(const QString &name, const QString &reason);
+  // The last-layout slot was written (not emitted by persistLast()).
+  void lastSaved();
 
 private:
   const Builtin *builtin(const QString &name) const;
   void applyBuiltin(const Builtin &b);
   void setCurrent(const QString &n);
   QString userGroup(const QString &name) const;
+  bool hasUnknownPanel(const QByteArray &state) const;
+  void onLayoutChanged();
+  void markChanged();
+  bool writeLast(); // false: nothing usable captured
 
-  QMainWindow *m_host;
+  QPointer<QMainWindow> m_host;
+  QTimer m_lastTimer;
+  QByteArray m_lastBlob;   // what the slot holds
+  bool m_dirty = false;    // a change was signalled since the slot was written
+  bool m_applying = false; // a layout is being built: changes are not edits
   std::unique_ptr<DockBackend> m_backend;
   std::vector<Builtin> m_builtins;
   QString m_current;

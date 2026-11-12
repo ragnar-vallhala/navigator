@@ -18,6 +18,7 @@
 
 #include "DockBackend.h"
 
+#include <QElapsedTimer>
 #include <QHash>
 #include <QPointer>
 #include <utility>
@@ -47,6 +48,7 @@ public:
   void setPanelFixed(const QString &id, bool fixed) override;
   void applySpec(const LayoutSpec &spec) override;
   QByteArray saveState() const override;
+  QStringList statePanelIds(const QByteArray &state) const override;
   bool restoreState(const QByteArray &state) override;
   PanelState panelState(const QString &id) const override;
   void showPanel(const QString &id) override;
@@ -56,6 +58,9 @@ public:
   void setFloatGeometry(const QString &id, const QRect &g) override;
   QAction *viewAction(const QString &id) override;
   int clampFloatingTo(const QList<QRect> &screens) override;
+  void setChangeNotifier(std::function<void()> notify) override {
+    m_notify = std::move(notify);
+  }
 
   // Appended to the stylesheet of every dock manager this backend builds (the
   // manager's own sheet outranks the application's, so a theme has to go here).
@@ -69,7 +74,12 @@ private:
     QPointer<ads::CDockWidget> dock; // a child of m_dm: dies with it
   };
   QString m_extraStyle;
+  std::function<void()> m_notify;
+  QElapsedTimer m_built; // when a layout was last built (see layoutChanged)
+  bool m_quiet = false; // tearing a manager down: its signals mean nothing
   void rebuild();
+  void layoutChanged();
+  void hookSplitters();
   void applyFixed(Panel &p);
   void syncActions();
   Panel *find(const QString &id);

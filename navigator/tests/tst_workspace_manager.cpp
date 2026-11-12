@@ -26,6 +26,7 @@
 #include <QPointer>
 #include <QSettings>
 #include <QSignalSpy>
+#include <QSplitter>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -61,6 +62,27 @@ struct Fixture {
     wm->setBuiltins(builtins());
     wm->setScreenProvider([] { return QList<QRect>{QRect(0, 0, 1600, 900)}; });
     win.show();
+  }
+};
+// The stored layout blob of a user view, read straight from the settings.
+QByteArray storedState(const QString &name) {
+  QSettings q;
+  return q.value("workspaces/user/" + QString::fromLatin1(name.toUtf8().toHex()) +
+                 "/state")
+      .toByteArray();
+}
+
+QByteArray storedLast() {
+  return QSettings().value("workspaces/last/state").toByteArray();
+}
+
+// A backend whose capture can be made empty (a failed capture).
+class FlakyBackend : public AdsBackend {
+public:
+  using AdsBackend::AdsBackend;
+  bool empty = false;
+  QByteArray saveState() const override {
+    return empty ? QByteArray() : AdsBackend::saveState();
   }
 };
 } // namespace
@@ -370,6 +392,203 @@ private slots:
     const QRect r = g.wm->backend()->panelState("c").floatGeometry;
     QVERIFY2(QRect(0, 0, 1280, 720).contains(r),
              qPrintable(QStringLiteral("%1,%2").arg(r.x()).arg(r.y())));
+  }
+
+  // ---- the last layout is kept (debounced) and restored at start ----------
+
+  // (a) an edit made through the real backend is stored with no save call, and
+  // a new manager on the same settings ("restart") restores it as edited.
+  void editedLayoutIsDebouncedAndRestored() {
+    {
+      Fixture f;
+      auto *b = f.wm->backend();
+      f.wm->setLastDelay(50);
+      f.wm->load("Fly");
+      QSignalSpy saved(f.wm, &WorkspaceManager::lastSaved);
+      b->floatPanel("c");
+      b->setFloatGeometry("c", QRect(100, 120, 400, 300));
+      b->hidePanel("b");
+      QTRY_VERIFY_WITH_TIMEOUT(saved.count() >= 1, 3000);
+      QTest::qWait(200); // settled: the slot holds the final layout
+      QCOMPARE(storedLast(), b->saveState());
+      // no persistLast() / close here: only the debounce wrote it
+    }
+    Fixture g;
+    QVERIFY(g.wm->restoreLast());
+    auto *b = g.wm->backend();
+    QCOMPARE(g.wm->currentName(), QString("Fly")); // the menu tick
+    QVERIFY(b->panelState("c").floating);
+    QCOMPARE(b->panelState("c").floatGeometry.size(), QSize(400, 300));
+    QVERIFY(!b->panelState("b").visible);
+    QVERIFY(b->panelState("a").visible);
+  }
+
+  // A splitter dragged with the mouse is a layout change too (ADS has no signal
+  // for it).
+  void lastLayoutSeesSplitterDrag() {
+    Fixture f;
+    auto *b = f.wm->backend();
+    f.wm->setLastDelay(50);
+    f.wm->load("Fly");
+    QTest::qWait(150);
+    QSplitter *sp = nullptr; // one with two visible sides
+    for (QSplitter *c : f.win.findChildren<QSplitter *>())
+      if (c->count() > 1 && !c->sizes().contains(0))
+        sp = c;
+    QVERIFY(sp);
+    const QByteArray beforeDrag = storedLast();
+    QWidget *h = sp->handle(1);
+    const QPoint c = h->rect().center();
+    const QPoint d = sp->orientation() == Qt::Horizontal ? QPoint(-60, 0)
+                                                         : QPoint(0, -60);
+    QTest::mousePress(h, Qt::LeftButton, {}, c);
+    QTest::mouseMove(h, c + d / 2);
+    QTest::mouseMove(h, c + d);
+    QTest::mouseRelease(h, Qt::LeftButton, {}, c + d);
+    QTRY_VERIFY_WITH_TIMEOUT(storedLast() != beforeDrag, 3000);
+    QCOMPARE(storedLast(), b->saveState());
+  }
+
+  // The active user view is what the menu ticks after a restart, and the edit
+  // is in the last slot while the saved view itself is untouched.
+  void editedUserViewIsRestoredButNotOverwritten() {
+    QByteArray mine;
+    {
+      Fixture f;
+      f.wm->setLastDelay(50);
+      f.wm->load("Fly");
+      QVERIFY(f.wm->saveCurrentAs("Mine"));
+      mine = storedState("Mine");
+      f.wm->backend()->hidePanel("c");
+      QSignalSpy saved(f.wm, &WorkspaceManager::lastSaved);
+      QTRY_VERIFY_WITH_TIMEOUT(saved.count() >= 1, 3000);
+    }
+    QCOMPARE(storedState("Mine"), mine);
+    Fixture g;
+    QVERIFY(g.wm->restoreLast());
+    QCOMPARE(g.wm->currentName(), QString("Mine"));
+    QVERIFY(!g.wm->backend()->panelState("c").visible); // as edited
+    QVERIFY(g.wm->load("Mine")); // the saved definition is still the original
+    QVERIFY(g.wm->backend()->panelState("c").visible);
+  }
+
+  // (b) switching right after an edit still records it.
+  void switchFlushesPendingEdit() {
+    {
+      Fixture f;
+      f.wm->setLastDelay(60000); // the debounce can not fire in this test
+      f.wm->load("Fly");
+      QSignalSpy saved(f.wm, &WorkspaceManager::lastSaved);
+      f.wm->backend()->hidePanel("c");
+      QCOMPARE(saved.count(), 0);
+      QVERIFY(f.wm->load("Sim")); // flush happens here
+      QCOMPARE(saved.count(), 1);
+    }
+    Fixture g; // restarted before the new layout was ever recorded
+    QVERIFY(g.wm->restoreLast());
+    QCOMPARE(g.wm->currentName(), QString("Fly"));
+    QVERIFY(!g.wm->backend()->panelState("c").visible);
+  }
+
+  // (c) applying or loading never loops: at most one record per load, then
+  // quiet; a restore records nothing.
+  void loadingDoesNotLoopWrite() {
+    Fixture f;
+    f.wm->setLastDelay(50);
+    f.wm->load("Fly");
+    f.wm->backend()->floatPanel("c");
+    QVERIFY(f.wm->saveCurrentAs("Mine"));
+    QSignalSpy saved(f.wm, &WorkspaceManager::lastSaved);
+    for (int i = 0; i < 3; ++i) {
+      f.wm->load("Mine");
+      f.wm->load("Fly");
+      f.wm->resetLayout();
+    }
+    QTest::qWait(400);
+    const int n = saved.count();
+    QVERIFY(n <= 9); // at most one record per switch (9 of them), no more
+    QTest::qWait(500);
+    QCOMPARE(saved.count(), n); // quiet
+    f.wm->persistLast();
+    QSignalSpy again(f.wm, &WorkspaceManager::lastSaved);
+    QVERIFY(f.wm->restoreLast());
+    QTest::qWait(400);
+    QCOMPARE(again.count(), 0);
+  }
+
+  // (d) edits never change a built-in or a saved workspace.
+  void editsLeaveDefinitionsAlone() {
+    Fixture f;
+    auto *b = f.wm->backend();
+    f.wm->setLastDelay(50);
+    f.wm->load("Fly");
+    QVERIFY(f.wm->saveCurrentAs("Mine"));
+    const QByteArray mine = storedState("Mine");
+    f.wm->load("Fly");
+    b->hidePanel("c");
+    b->floatPanel("a");
+    QTest::qWait(300);
+    f.wm->load("Mine");
+    b->hidePanel("a");
+    QTest::qWait(300);
+    f.wm->load("Sim");
+    QCOMPARE(f.wm->userNames(), QStringList{"Mine"});
+    QCOMPARE(storedState("Mine"), mine);
+    QVERIFY(f.wm->load("Fly")); // the built-in definition is intact
+    QVERIFY(b->panelState("c").visible);
+    QVERIFY(!b->panelState("a").floating);
+  }
+
+  // (e) a last layout that cannot be used falls back to the default.
+  void unusableLastFallsBackToDefault() {
+    {
+      Fixture f; // a layout naming a panel the next run does not have
+      f.wm->backend()->addPanel("zz", "ZZ", new QLabel("zz"));
+      f.wm->load("Sim");
+      f.wm->backend()->showPanel("zz");
+      f.wm->persistLast();
+    }
+    {
+      Fixture g;
+      QSignalSpy failed(g.wm, &WorkspaceManager::loadFailed);
+      QVERIFY(!g.wm->restoreLast());
+      QCOMPARE(failed.count(), 1);
+      QCOMPARE(g.wm->currentName(), QString("Fly"));
+      QVERIFY(g.wm->backend()->panelState("a").visible);
+    }
+    QSettings q; // corrupt bytes
+    q.setValue("workspaces/last/state", QByteArray("garbage"));
+    q.sync();
+    Fixture h;
+    QVERIFY(!h.wm->restoreLast());
+    QCOMPARE(h.wm->currentName(), QString("Fly"));
+  }
+
+  // (f) a failed (empty) capture is never stored.
+  void emptyCaptureIsNeverSaved() {
+    QMainWindow win;
+    win.resize(900, 600);
+    auto be = std::make_unique<FlakyBackend>(&win);
+    FlakyBackend *fb = be.get();
+    auto *wm = new WorkspaceManager(&win, std::move(be), &win);
+    wm->registerPanels(panels());
+    wm->setBuiltins(builtins());
+    wm->setScreenProvider([] { return QList<QRect>{QRect(0, 0, 1600, 900)}; });
+    wm->setLastDelay(50);
+    win.show();
+    wm->load("Fly");
+    wm->persistLast();
+    const QByteArray last = storedLast();
+    QVERIFY(!last.isEmpty());
+    QSignalSpy saved(wm, &WorkspaceManager::lastSaved);
+    fb->empty = true;
+    fb->hidePanel("c");
+    QTest::qWait(300);
+    wm->flushLast();
+    wm->load("Sim");
+    wm->persistLast();
+    QCOMPARE(saved.count(), 0);
+    QCOMPARE(storedLast(), last);
   }
 };
 
