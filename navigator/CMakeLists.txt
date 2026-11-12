@@ -465,6 +465,12 @@ endif()
 target_sources(Navigator PRIVATE
     src/ui/main/DockShell.cpp src/ui/main/DockShell.h)
 target_link_libraries(Navigator PRIVATE navigator_workspace)
+if(UNIX AND NOT APPLE)
+    # An installed copy keeps the dock library in lib/ beside the binary
+    # (~/.local/opt/navigator/{Navigator,lib/}); BUILD_RPATH still holds the
+    # build-tree library path, so running from the build dir keeps working.
+    set_property(TARGET Navigator APPEND PROPERTY BUILD_RPATH "$ORIGIN/lib")
+endif()
 if(WIN32)
     # Windows loads the shared dock library from beside the exe.
     add_custom_command(TARGET Navigator POST_BUILD
