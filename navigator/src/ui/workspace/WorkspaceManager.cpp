@@ -18,6 +18,7 @@
 
 #include "ScreenClamp.h"
 
+#include <QCoreApplication>
 #include <QGuiApplication>
 #include <QMainWindow>
 #include <QScreen>
@@ -67,7 +68,13 @@ bool readStored(const QString &group, Stored &s) {
 WorkspaceManager::WorkspaceManager(QMainWindow *host,
                                    std::unique_ptr<DockBackend> backend,
                                    QObject *parent)
-    : QObject(parent), m_host(host), m_backend(std::move(backend)) {}
+    : QObject(parent), m_host(host), m_backend(std::move(backend)) {
+  m_lastTimer.setSingleShot(true);
+  m_lastTimer.setInterval(kLastDelayMs);
+  connect(&m_lastTimer, &QTimer::timeout, this, [this] { flushLast(); });
+  m_backend->setChangeNotifier([this] { onLayoutChanged(); });
+  connect(qApp, &QCoreApplication::aboutToQuit, this, [this] { flushLast(); });
+}
 
 WorkspaceManager::~WorkspaceManager() = default;
 
@@ -161,6 +168,54 @@ int WorkspaceManager::clampToScreens() {
   return moved + m_backend->clampFloatingTo(scr);
 }
 
+bool WorkspaceManager::hasUnknownPanel(const QByteArray &state) const {
+  const QStringList known = m_backend->panelIds();
+  for (const QString &id : m_backend->statePanelIds(state))
+    if (!known.contains(id))
+      return true;
+  return false;
+}
+
+void WorkspaceManager::onLayoutChanged() {
+  if (!m_applying)
+    markChanged();
+}
+
+void WorkspaceManager::markChanged() {
+  m_dirty = true;
+  m_lastTimer.start();
+}
+
+bool WorkspaceManager::writeLast() {
+  const QByteArray st = m_backend->saveState();
+  if (st.isEmpty()) // a failed capture never replaces a good slot
+    return false;
+  Stored s;
+  s.name = m_current;
+  s.format = kFormat;
+  s.backend = m_backend->tag();
+  s.state = st;
+  s.geometry = m_host ? m_host->saveGeometry() : QByteArray();
+  writeStored(kLast, s);
+  m_lastBlob = st;
+  m_dirty = false;
+  return true;
+}
+
+void WorkspaceManager::flushLast() {
+  m_lastTimer.stop();
+  // Only a signalled change counts: a layout that merely settles after a load
+  // is not an edit.
+  if (!m_dirty || m_applying)
+    return;
+  if (m_backend->saveState() == m_lastBlob) {
+    m_dirty = false;
+    return;
+  }
+  if (writeLast())
+    emit lastSaved();
+}
+
 void WorkspaceManager::applyBuiltin(const Builtin &b) {
   m_backend->applySpec(b.spec);
   setCurrent(b.name);
@@ -182,6 +237,16 @@ bool WorkspaceManager::saveCurrentAs(const QString &name) {
 }
 
 bool WorkspaceManager::load(const QString &name) {
+  flushLast(); // the outgoing layout's pending edit is kept
+  const struct Guard {
+    bool &f;
+    explicit Guard(bool &flag) : f(flag) { f = true; }
+    ~Guard() { f = false; }
+  } guard(m_applying);
+  struct After { // one debounced record of the new layout, after it settled
+    WorkspaceManager *w;
+    ~After() { w->markChanged(); }
+  } after{this};
   if (const Builtin *b = builtin(name)) {
     applyBuiltin(*b);
     clampToScreens();
@@ -193,6 +258,7 @@ bool WorkspaceManager::load(const QString &name) {
   const QString bad = (s.format != kFormat)       ? tr("older or newer format")
                       : (s.backend != m_backend->tag()) ? tr("other backend")
                       : s.state.isEmpty()           ? tr("empty")
+                      : hasUnknownPanel(s.state)    ? tr("unknown panel")
                                                     : QString();
   if (bad.isEmpty()) {
     if (m_backend->restoreState(s.state)) {
@@ -248,6 +314,16 @@ bool WorkspaceManager::rename(const QString &from, const QString &to) {
 }
 
 void WorkspaceManager::resetLayout() {
+  flushLast();
+  const struct Guard {
+    bool &f;
+    explicit Guard(bool &flag) : f(flag) { f = true; }
+    ~Guard() { f = false; }
+  } guard(m_applying);
+  struct After {
+    WorkspaceManager *w;
+    ~After() { w->markChanged(); }
+  } after{this};
   const Builtin *b = builtin(m_current);
   if (!b && !m_builtins.empty())
     b = &m_builtins.front();
@@ -258,16 +334,17 @@ void WorkspaceManager::resetLayout() {
 }
 
 void WorkspaceManager::persistLast() {
-  Stored s;
-  s.name = m_current;
-  s.format = kFormat;
-  s.backend = m_backend->tag();
-  s.state = m_backend->saveState();
-  s.geometry = m_host ? m_host->saveGeometry() : QByteArray();
-  writeStored(kLast, s);
+  m_lastTimer.stop();
+  writeLast(); // always (window geometry too), unless nothing was captured
 }
 
 bool WorkspaceManager::restoreLast() {
+  flushLast();
+  const struct Guard {
+    bool &f;
+    explicit Guard(bool &flag) : f(flag) { f = true; }
+    ~Guard() { f = false; }
+  } guard(m_applying);
   Stored s;
   QString why;
   if (!readStored(kLast, s))
@@ -278,6 +355,8 @@ bool WorkspaceManager::restoreLast() {
     why = tr("other backend");
   else if (s.state.isEmpty())
     why = tr("empty");
+  else if (hasUnknownPanel(s.state))
+    why = tr("unknown panel");
   if (why.isEmpty()) {
     if (m_backend->restoreState(s.state)) {
       // Geometry only after the state loaded (see load()).
@@ -285,6 +364,8 @@ bool WorkspaceManager::restoreLast() {
         m_host->restoreGeometry(s.geometry);
       // Keep the name only if it still exists, so the menu tick is honest.
       setCurrent(exists(s.name) ? s.name : QString());
+      m_lastBlob = s.state;
+      m_dirty = false;
       clampToScreens();
       return true;
     }

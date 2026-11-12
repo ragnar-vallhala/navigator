@@ -23,6 +23,7 @@
 #include <QRect>
 #include <QString>
 #include <QStringList>
+#include <functional>
 
 class QWidget;
 
@@ -63,6 +64,9 @@ public:
   // Replace the whole layout.
   virtual void applySpec(const LayoutSpec &spec) = 0;
   virtual QByteArray saveState() const = 0;
+  // Ids of the panels a saved blob names (empty if it cannot be read), so a
+  // blob naming a panel this build lacks can be rejected before it is applied.
+  virtual QStringList statePanelIds(const QByteArray &) const { return {}; }
   // Replace the whole layout from a blob; false (and a usable, empty layout)
   // if the blob is not understood.
   virtual bool restoreState(const QByteArray &state) = 0;
@@ -76,6 +80,12 @@ public:
   virtual void setFloatGeometry(const QString &id, const QRect &g) = 0;
   // Show/hide action for a Panels menu.
   virtual QAction *viewAction(const QString &id) = 0;
+
+  // Called (possibly many times, also while a layout is being built) when the
+  // user or the code changed the layout: a panel moved, docked, floated,
+  // closed or opened, a tab switched, a splitter dragged. Splitter drags and
+  // such are what a debounced autosave listens to. Default: never called.
+  virtual void setChangeNotifier(std::function<void()> /*notify*/) {}
 
   // Move every floating window that is not reachable on `screens` back onto
   // one. Returns how many were moved.
