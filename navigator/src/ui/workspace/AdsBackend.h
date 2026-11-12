@@ -35,8 +35,9 @@ class CDockAreaWidget;
 namespace ws {
 
 // DockBackend on Qt Advanced Docking System (LGPL-2.1, used as a shared
-// library). Every layout change goes through a fresh CDockManager, so a failed
-// or half-applied restore can never leave a broken layout behind.
+// library). One CDockManager serves the window's life; a layout change parks
+// every panel and places them again on it (or restores a saved state onto it),
+// so the panel widgets and their native GL windows are never re-parented.
 class AdsBackend : public DockBackend {
 public:
   explicit AdsBackend(QMainWindow *host);
@@ -78,6 +79,7 @@ private:
   QElapsedTimer m_built; // when a layout was last built (see layoutChanged)
   bool m_quiet = false; // tearing a manager down: its signals mean nothing
   void rebuild();
+  void parkAll();
   void layoutChanged();
   void hookSplitters();
   void applyFixed(Panel &p);

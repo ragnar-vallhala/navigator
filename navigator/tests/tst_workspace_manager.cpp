@@ -102,6 +102,28 @@ private slots:
   }
   void init() { QSettings().clear(); }
 
+  // A saved layout is restored onto the same dock manager and the same panel
+  // widgets, with the identical state blob.
+  void savedLayoutRestoresOnTheSameManager() {
+    Fixture f;
+    QVERIFY(f.wm->load("Fly"));
+    QWidget *dm = f.win.centralWidget();
+    QPointer<QWidget> a;
+    for (QLabel *l : f.win.findChildren<QLabel *>())
+      if (l->text() == "a")
+        a = l;
+    QVERIFY(a);
+    QVERIFY(f.wm->saveCurrentAs("Mine"));
+    const QByteArray mine = f.wm->backend()->saveState();
+    QVERIFY(f.wm->load("Sim"));
+    QVERIFY(!f.wm->backend()->panelState("a").visible);
+    QVERIFY(f.wm->load("Mine"));
+    QCOMPARE(f.win.centralWidget(), dm);
+    QCOMPARE(f.wm->backend()->saveState(), mine);
+    QVERIFY(a);
+    QVERIFY(f.wm->backend()->panelState("a").visible);
+  }
+
   void builtinsAreDefaultsAndReadOnly() {
     Fixture f;
     QCOMPARE(f.wm->builtinNames(), (QStringList{"Fly", "Sim"}));

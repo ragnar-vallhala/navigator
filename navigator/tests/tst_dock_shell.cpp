@@ -49,26 +49,40 @@ QMenu *menuNamed(QMenuBar *bar, const QString &title) {
   return nullptr;
 }
 
-// A panel that notes, on every reparent, whether the host was frozen and the
-// dock manager hidden (the state a layout switch must keep until it is built).
+// A panel that counts its reparents (a switch must cause none: that would
+// re-create its native GL windows) and notes whether the host was painting
+// while it was shown or hidden (a switch freezes the host).
 class ProbeLabel : public QLabel {
 public:
-  ProbeLabel(const QString &t, QMainWindow *host, int *bad, int *seen)
-      : QLabel(t), m_host(host), m_bad(bad), m_seen(seen) {}
+  struct Stats {
+    int reparents = 0, shownOrHidden = 0, unfrozen = 0;
+  };
+  ProbeLabel(const QString &t, QMainWindow *host, Stats *st)
+      : QLabel(t), m_host(host), m_st(st) {}
   bool event(QEvent *e) override {
-    if (e->type() == QEvent::ParentChange) {
-      QWidget *c = m_host->centralWidget();
-      ++*m_seen;
-      if (m_host->updatesEnabled() || !c || !c->isHidden())
-        ++*m_bad;
+    if (e->type() == QEvent::ParentChange)
+      ++m_st->reparents;
+    if (e->type() == QEvent::Show || e->type() == QEvent::Hide) {
+      ++m_st->shownOrHidden;
+      if (m_host->updatesEnabled())
+        ++m_st->unfrozen;
     }
     return QLabel::event(e);
   }
 
 private:
   QMainWindow *m_host;
-  int *m_bad, *m_seen;
+  Stats *m_st;
 };
+
+int areaCount(QWidget *dm) {
+  int n = 0;
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  for (QWidget *w : dm->findChildren<QWidget *>())
+    if (QByteArray(w->metaObject()->className()) == "ads::CDockAreaWidget")
+      ++n;
+  return n;
+}
 
 // A window with a started shell whose panels are labels (as many as asked).
 struct Fixture {
@@ -292,27 +306,74 @@ private slots:
     }
   }
 
-  // A switch freezes the host and keeps the dock manager hidden until every
-  // panel is docked, so no native GL window can show through a half-built
-  // layout; afterwards the host paints again and shows the new manager.
-  void switchIsFrozenAndHiddenUntilBuilt() {
+  // One dock manager and the same panel widgets for the window's life: a
+  // switch re-places them, never re-parents (no native window is re-created),
+  // and the host does not paint while it happens.
+  void switchKeepsManagerAndPanelsAndFreezesHost() {
     QMainWindow win;
     win.resize(1200, 800);
-    int bad = 0, seen = 0;
+    ProbeLabel::Stats st;
+    QHash<QString, QPointer<QWidget>> w;
     auto *shell = new DockShell(&win);
-    for (const QString &id : allIds())
-      shell->addPanel(id, new ProbeLabel(id, &win, &bad, &seen));
+    for (const QString &id : allIds()) {
+      auto *l = new ProbeLabel(id, &win, &st);
+      w.insert(id, l);
+      shell->addPanel(id, l);
+    }
     shell->start(false);
     win.show();
     auto *wm = shell->workspaces();
-    for (const auto &w : DockShell::builtins()) {
-      bad = seen = 0;
-      QVERIFY(wm->load(w.name));
-      QVERIFY2(seen > 0, qPrintable(w.name));
-      QVERIFY2(bad == 0, qPrintable(w.name));
-      QVERIFY(win.updatesEnabled());
-      QVERIFY(win.centralWidget()->isVisible());
+    QVERIFY(wm->load("Fly"));
+    QWidget *dm = win.centralWidget();
+    QVERIFY(dm);
+    st = {};
+    int areas = -1;
+    for (int round = 0; round < 2; ++round) {
+      for (const auto &b : DockShell::builtins()) {
+        QVERIFY(wm->load(b.name));
+        QCOMPARE(win.centralWidget(), dm);
+        QVERIFY(win.updatesEnabled());
+        QVERIFY(win.centralWidget()->isVisible());
+        for (const QString &id : allIds())
+          QVERIFY2(w.value(id), qPrintable(id)); // never destroyed
+      }
+      if (round == 0)
+        areas = areaCount(dm);
     }
+    QCOMPARE(st.reparents, 0);
+    QVERIFY(st.shownOrHidden > 0);
+    QCOMPARE(st.unfrozen, 0);
+    QCOMPARE(areaCount(dm), areas); // emptied areas do not pile up
+    QVERIFY(areas <= 8);
+  }
+
+  // A panel the new layout lacks is hidden, not destroyed, and comes back with
+  // its state; a floated panel is docked again by the next switch.
+  void droppedPanelsAreHiddenAndComeBack() {
+    Fixture f;
+    auto *wm = f.shell->workspaces();
+    auto *b = wm->backend();
+    QVERIFY(wm->load("Fly"));
+    QWidget *imu = nullptr;
+    for (QWidget *c : f.win.findChildren<QLabel *>())
+      if (static_cast<QLabel *>(c)->text() == "imu")
+        imu = c;
+    QVERIFY(imu);
+    imu->setProperty("keep", 42);
+    b->floatPanel("imu");
+    QVERIFY(b->panelState("imu").floating);
+    QVERIFY(wm->load("Motors"));
+    QVERIFY(!b->panelState("imu").visible);
+    QVERIFY(!b->panelState("view3d").visible);
+    QVERIFY(b->panelState("motors").visible);
+    QTest::qWait(30);
+    QVERIFY(!imu->isVisible());
+    QVERIFY(wm->load("Fly"));
+    QVERIFY(b->panelState("imu").visible);
+    QVERIFY(!b->panelState("imu").floating);
+    QCOMPARE(imu->property("keep").toInt(), 42);
+    QTest::qWait(30);
+    QVERIFY(imu->isVisible());
   }
 
   void switchNeverResizesTheWindow() {
