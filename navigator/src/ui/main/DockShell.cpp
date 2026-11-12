@@ -28,6 +28,8 @@
 #include <QMessageBox>
 #include <QSettings>
 
+#include <algorithm>
+
 using ws::LayoutNode;
 using ws::LayoutSpec;
 using ws::WorkspaceManager;
