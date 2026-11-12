@@ -26,6 +26,7 @@
 #include <QImage>
 #include <QLabel>
 #include <QMainWindow>
+#include <QScopeGuard>
 #include <QMenu>
 #include <QMenuBar>
 #include <QSettings>
@@ -56,10 +57,13 @@ class ProbeLabel : public QLabel {
 public:
   struct Stats {
     int reparents = 0, shownOrHidden = 0, unfrozen = 0;
+    bool armed = true; // off before teardown: the host is half destroyed then
   };
   ProbeLabel(const QString &t, QMainWindow *host, Stats *st)
       : QLabel(t), m_host(host), m_st(st) {}
   bool event(QEvent *e) override {
+    if (!m_st->armed)
+      return QLabel::event(e);
     if (e->type() == QEvent::ParentChange)
       ++m_st->reparents;
     if (e->type() == QEvent::Show || e->type() == QEvent::Hide) {
@@ -310,9 +314,11 @@ private slots:
   // switch re-places them, never re-parents (no native window is re-created),
   // and the host does not paint while it happens.
   void switchKeepsManagerAndPanelsAndFreezesHost() {
+    // st outlives win: panels still get events while win is torn down.
+    ProbeLabel::Stats st;
     QMainWindow win;
     win.resize(1200, 800);
-    ProbeLabel::Stats st;
+    const auto disarm = qScopeGuard([&st] { st.armed = false; }); // before ~win
     QHash<QString, QPointer<QWidget>> w;
     auto *shell = new DockShell(&win);
     for (const QString &id : allIds()) {
