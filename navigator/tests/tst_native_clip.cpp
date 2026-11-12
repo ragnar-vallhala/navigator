@@ -99,6 +99,27 @@ private slots:
     QCOMPARE(win->mask().boundingRect(), QRect(0, 0, 300, 50));
   }
 
+  // The container re-shows its window when it is shown (workspace switch,
+  // tab becoming current): while still fully clipped it must go away again.
+  void staysHiddenWhenTheContainerIsReshown() {
+    QWidget holder;
+    holder.resize(300, 100);
+    auto *win = new QOpenGLWindow;
+    QWidget *box = QWidget::createWindowContainer(win, &holder);
+    box->setGeometry(0, 150, 300, 100);
+    auto *clip = new NativeClip(box, win);
+    holder.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&holder));
+    QTRY_VERIFY(!win->isVisible());
+    box->hide();
+    box->show();
+    QTRY_VERIFY(!win->isVisible());
+    QVERIFY(clip->hiddenByClip());
+    holder.resize(300, 200);
+    QTRY_VERIFY(win->isVisible());
+    QCOMPARE(win->mask().boundingRect(), QRect(0, 0, 300, 50));
+  }
+
   void doesNotShowAWindowItDidNotHide() {
     QWidget holder;
     holder.resize(300, 100);

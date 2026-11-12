@@ -70,7 +70,9 @@ public:
     if (vis.isEmpty() && !full.isEmpty()) {
       // Fully clipped out: hide the window (a mask cannot be empty). Remember
       // that it was hidden here, so the container's own show/hide is left alone.
-      if (!m_hidden && m_win->isVisible()) {
+      // Every time: the container re-shows its window whenever it is shown
+      // itself (workspace switch, tab becoming current).
+      if (m_win->isVisible()) {
         m_win->hide();
         m_hidden = true;
       }
