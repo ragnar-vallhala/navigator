@@ -67,14 +67,25 @@ public:
     // would not touch the foreign native window it hosts.
     if (!m_win)
       return;
+    if (vis.isEmpty() && !full.isEmpty()) {
+      // Fully clipped out: hide the window (a mask cannot be empty). Remember
+      // that it was hidden here, so the container's own show/hide is left alone.
+      if (!m_hidden && m_win->isVisible()) {
+        m_win->hide();
+        m_hidden = true;
+      }
+      return;
+    }
+    if (m_hidden) {
+      m_hidden = false;
+      if (m_box->isVisible())
+        m_win->show();
+    }
     if (vis == full || full.isEmpty()) {
       if (m_masked) {
         m_win->setMask(QRegion());
         m_masked = false;
       }
-    } else if (vis.isEmpty()) {
-      m_win->setMask(QRegion(0, 0, 1, 1)); // an empty region means "no mask"
-      m_masked = true;
     } else {
       m_win->setMask(QRegion(vis));
       m_masked = true;
@@ -82,6 +93,7 @@ public:
   }
 
   bool masked() const { return m_masked; }
+  bool hiddenByClip() const { return m_hidden; }
 
   bool eventFilter(QObject *o, QEvent *e) override {
     switch (e->type()) {
@@ -93,8 +105,9 @@ public:
       schedule();
       break;
     case QEvent::ParentChange:
-      if (o == m_box)
-        rewatch();
+      // A float or re-tab re-parents an ancestor, not the container: the
+      // chain above it changed whoever it was.
+      rewatch();
       schedule();
       break;
     default:
@@ -108,6 +121,9 @@ public:
 private:
   void schedule() { m_timer.start(); }
   void rewatch() {
+    if (m_rewatching)
+      return;
+    m_rewatching = true;
     for (const QPointer<QWidget> &w : m_watched)
       if (w)
         w->removeEventFilter(this);
@@ -118,6 +134,7 @@ private:
       if (p->isWindow())
         break;
     }
+    m_rewatching = false;
   }
 
   QPointer<QWidget> m_box;
@@ -125,4 +142,6 @@ private:
   QVector<QPointer<QWidget>> m_watched;
   QTimer m_timer;
   bool m_masked = false;
+  bool m_hidden = false;
+  bool m_rewatching = false;
 };

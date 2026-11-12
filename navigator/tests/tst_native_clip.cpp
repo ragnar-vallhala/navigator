@@ -54,6 +54,68 @@ private slots:
     QVERIFY(!clip->masked());
   }
 
+  // Floating a dock re-parents an ancestor of the container, not the
+  // container: the mask must follow the new chain.
+  void followsAReparentedAncestor() {
+    QWidget winA;
+    winA.resize(300, 300);
+    auto *mid = new QWidget(&winA); // re-parented below: owned by its parent
+    mid->setGeometry(0, 0, 300, 100);
+    auto *win = new QOpenGLWindow;
+    QWidget *box = QWidget::createWindowContainer(win, mid);
+    box->setGeometry(0, 0, 300, 250);
+    auto *clip = new NativeClip(box, win);
+    winA.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&winA));
+    QTRY_COMPARE(win->mask().boundingRect(), QRect(0, 0, 300, 100));
+
+    QWidget winB; // a "floating window" of another size
+    winB.resize(300, 60);
+    mid->setParent(&winB);
+    mid->setGeometry(0, 0, 300, 200);
+    winB.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&winB));
+    QTRY_COMPARE(win->mask().boundingRect(), QRect(0, 0, 300, 60));
+    winB.resize(300, 40); // only the new top-level changes
+    QTRY_COMPARE(win->mask().boundingRect(), QRect(0, 0, 300, 40));
+    Q_UNUSED(clip);
+  }
+
+  void hidesWhenFullyClippedAndComesBack() {
+    QWidget holder;
+    holder.resize(300, 100);
+    auto *win = new QOpenGLWindow;
+    QWidget *box = QWidget::createWindowContainer(win, &holder);
+    box->setGeometry(0, 150, 300, 100); // entirely below the holder
+    auto *clip = new NativeClip(box, win);
+    holder.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&holder));
+    QTRY_VERIFY(clip->hiddenByClip());
+    QVERIFY(!win->isVisible());
+
+    holder.resize(300, 200); // part of it shows again
+    QTRY_VERIFY(win->isVisible());
+    QVERIFY(!clip->hiddenByClip());
+    QCOMPARE(win->mask().boundingRect(), QRect(0, 0, 300, 50));
+  }
+
+  void doesNotShowAWindowItDidNotHide() {
+    QWidget holder;
+    holder.resize(300, 100);
+    auto *win = new QOpenGLWindow;
+    QWidget *box = QWidget::createWindowContainer(win, &holder);
+    box->setGeometry(0, 0, 300, 100);
+    auto *clip = new NativeClip(box, win);
+    holder.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&holder));
+    box->hide(); // the owner hides it
+    QTest::qWait(50);
+    holder.resize(300, 120);
+    QTest::qWait(50);
+    QVERIFY(!win->isVisible());
+    QVERIFY(!clip->hiddenByClip());
+  }
+
   void visibleRectIsTheAncestorIntersection() {
     QWidget outer;
     outer.resize(200, 200);
