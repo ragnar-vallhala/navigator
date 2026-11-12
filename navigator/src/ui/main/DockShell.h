@@ -23,6 +23,7 @@
 #include <QObject>
 #include <QString>
 #include <QStringList>
+#include <functional>
 #include <vector>
 
 class QMainWindow;
@@ -43,7 +44,21 @@ public:
   struct PanelInfo {
     QString id;
     QString title;
+    // Panels-menu group id (a kGroups entry); empty or unknown = "Other".
+    QString group = QString();
   };
+  // A Panels-menu submenu. The title carries the mnemonic (&).
+  struct GroupInfo {
+    QString id;
+    QString title;
+  };
+  // Submenus in menu order. Add a group = one line here.
+  static const std::vector<GroupInfo> &panelGroups();
+  // Fill `menu` with one submenu per non-empty group (declaration order;
+  // panels without a known group go to a trailing "Other"), each holding
+  // `actionFor(id)` for its panels in `infos` order. Null actions are skipped.
+  static void buildPanelsMenu(QMenu *menu, const std::vector<PanelInfo> &infos,
+                              const std::function<QAction *(const QString &)> &actionFor);
   // Every panel, in registration order (the MRU/recent-views index too).
   static const std::vector<PanelInfo> &panelInfos();
   // Panels pinned to the main window (GL views in window containers; not

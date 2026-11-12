@@ -26,6 +26,8 @@
 #include <QImage>
 #include <QLabel>
 #include <QMainWindow>
+#include <QMenu>
+#include <QMenuBar>
 #include <QSettings>
 #include <QStyle>
 #include <QSignalSpy>
@@ -38,6 +40,13 @@ QStringList allIds() {
   for (const auto &p : DockShell::panelInfos())
     l << p.id;
   return l;
+}
+
+QMenu *menuNamed(QMenuBar *bar, const QString &title) {
+  for (QAction *a : bar->actions())
+    if (a->menu() && a->text() == title)
+      return a->menu();
+  return nullptr;
 }
 
 // A window with a started shell whose panels are labels (as many as asked).
@@ -289,6 +298,117 @@ private slots:
     shell.restoreLast(); // nothing saved: the default
     QCOMPARE(shell.workspaces()->currentName(), shell.workspaces()->defaultName());
     QVERIFY(shell.workspaces()->backend()->panelState("view3d").visible);
+  }
+
+  // The Panels menu: one submenu per group, panels in table order, no flat
+  // leftovers; the checkable actions are the backend's own.
+  void panelsMenuIsGrouped() {
+    Fixture f;
+    QMenuBar bar;
+    f.shell->addMenus(&bar, nullptr);
+    QMenu *panels = menuNamed(&bar, "&Panels");
+    QVERIFY(panels);
+    const QList<QAction *> top = panels->actions();
+    QStringList got;
+    for (QAction *a : top) {
+      QVERIFY2(a->menu(), qPrintable("flat leftover: " + a->text()));
+      QStringList ids;
+      for (QAction *c : a->menu()->actions())
+        ids << c->text();
+      got << a->text() + ": " + ids.join(", ");
+    }
+    auto *b = f.shell->workspaces()->backend();
+    auto t = [&](const char *id) { return b->viewAction(id)->text(); };
+    const QStringList want = {
+        "&Flight: " + QStringList{t("view3d"), t("rc"), t("motors")}.join(", "),
+        "&Sensors: " + t("imu"),
+        "&Tuning: " + QStringList{t("calibration"), t("control_loop"), t("gyro_notch")}.join(", "),
+        "&Debug: " + QStringList{t("logs"), t("packets"), t("perf")}.join(", "),
+        "S&imulation: " + t("sim"),
+        "&App: " + t("settings"),
+    };
+    QCOMPARE(got, want);
+  }
+
+  void panelsMenuToggleOpensClosesAndStaysInSync() {
+    Fixture f;
+    QMenuBar bar;
+    f.shell->addMenus(&bar, nullptr);
+    auto *b = f.shell->workspaces()->backend();
+    QMenu *panels = menuNamed(&bar, "&Panels");
+    QAction *act = nullptr; // Settings, from the App submenu
+    for (QAction *g : panels->actions())
+      if (g->text() == "&App")
+        act = g->menu()->actions().value(0);
+    QVERIFY(act);
+    QCOMPARE(act, b->viewAction("settings"));
+    QVERIFY(!act->isChecked() && !b->panelState("settings").visible);
+    act->trigger();
+    QVERIFY(act->isChecked() && b->panelState("settings").visible);
+    act->trigger();
+    QVERIFY(!act->isChecked() && !b->panelState("settings").visible);
+    b->showPanel("settings"); // shown elsewhere: the check follows
+    QVERIFY(act->isChecked());
+  }
+
+  // An ungrouped (or unknown-group) panel lands in a trailing "Other"; a group
+  // nobody uses is not shown.
+  void ungroupedPanelsGoToOtherAndEmptyGroupsAreHidden() {
+    const std::vector<DockShell::PanelInfo> infos = {
+        {"a", "A", "debug"}, {"b", "B"}, {"c", "C", "nonsense"}, {"d", "D", "debug"}};
+    QMenu menu;
+    QHash<QString, QAction *> acts;
+    for (const auto &i : infos)
+      acts[i.id] = new QAction(i.title, &menu);
+    DockShell::buildPanelsMenu(&menu, infos, [&](const QString &id) { return acts.value(id); });
+    QStringList got;
+    for (QAction *a : menu.actions()) {
+      QStringList ids;
+      for (QAction *c : a->menu()->actions())
+        ids << c->text();
+      got << a->text() + ": " + ids.join(",");
+    }
+    QCOMPARE(got, (QStringList{"&Debug: A,D", "&Other: B,C"}));
+    // nothing ungrouped: no Other
+    QMenu m2;
+    DockShell::buildPanelsMenu(&m2, {infos[0]}, [&](const QString &id) { return acts.value(id); });
+    QCOMPARE(m2.actions().size(), 1);
+    // every real panel has a known group
+    QStringList known;
+    for (const auto &g : DockShell::panelGroups())
+      known << g.id;
+    for (const auto &p : DockShell::panelInfos())
+      QVERIFY2(known.contains(p.group), qPrintable(p.id));
+  }
+
+  void panelsMenuHasNoDuplicateMnemonics() {
+    Fixture f;
+    QMenuBar bar;
+    f.shell->addMenus(&bar, nullptr);
+    QMenu *panels = menuNamed(&bar, "&Panels");
+    auto check = [](QMenu *m) {
+      QSet<QChar> seen;
+      for (QAction *a : m->actions()) {
+        const int i = a->text().indexOf('&');
+        if (i < 0 || i + 1 >= a->text().size())
+          continue;
+        const QChar c = a->text().at(i + 1).toLower();
+        QVERIFY2(!seen.contains(c), qPrintable(m->title() + ": " + a->text()));
+        seen.insert(c);
+      }
+    };
+    check(panels);
+    for (QAction *g : panels->actions())
+      check(g->menu());
+    QMenu all; // with a group of its own: the Other mnemonic must not clash either
+    DockShell::buildPanelsMenu(&all, {{"x", "X"}}, [&](const QString &) { return new QAction("X", &all); });
+    check(&all);
+    // the full set incl. Other
+    QMenu full;
+    std::vector<DockShell::PanelInfo> infos = DockShell::panelInfos();
+    infos.push_back({"zz", "ZZ"});
+    DockShell::buildPanelsMenu(&full, infos, [&](const QString &id) { return new QAction(id, &full); });
+    check(&full);
   }
 
   void attitudePanelCannotFloat() {
