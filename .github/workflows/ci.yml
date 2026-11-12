@@ -188,6 +188,24 @@ jobs:
         run: |
           cp vayu-sitl-sdk/lib/libvayu_sitl.so navigator/build-tidy/
           ctest --test-dir navigator/build-tidy --output-on-failure
+      - name: Backtrace for crashed ctest cases
+        # ctest only says 'SegFault'. Re-run each failed case under gdb so a
+        # crash shows where. Diagnostic only: the ctest step above already
+        # failed the job, this step never changes the outcome.
+        if: failure()
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          sudo timeout -k 10 300 apt-get -o DPkg::Lock::Timeout=120 install -y gdb \
+            || { echo "gdb not installed"; exit 0; }
+          for t in $(ctest --test-dir navigator/build-tidy --rerun-failed -N \
+                       | sed -n 's/.*Test *#[0-9]*: //p'); do
+            exe=$(find navigator/build-tidy -name "$t" -type f -perm -u+x | head -1)
+            [ -n "$exe" ] || continue
+            echo "::group::gdb $t"
+            timeout 300 gdb -batch -ex run -ex bt -ex 'thread apply all bt 12' "$exe" 2>&1 | tail -80 || true
+            echo "::endgroup::"
+          done
       - name: GL context test (xcb on Xvfb, software GL)
         # tst_sim_gl_context needs a real GL platform and skips itself on
         # offscreen, which is what the ctest step above forces on every case --

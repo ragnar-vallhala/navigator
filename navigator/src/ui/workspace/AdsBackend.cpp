@@ -52,6 +52,31 @@ public:
 private:
   std::function<void()> m_f;
 };
+
+// A layout switch moves every panel, and the native child windows (the GL
+// containers) are mapped by the window system at once, before Qt has laid the
+// new tree out, so a half-built layout used to show through. Freeze the host's
+// painting for the whole switch, then show the finished layout in one step.
+class SwitchFreeze {
+public:
+  SwitchFreeze(QMainWindow *host, QPointer<ads::CDockManager> &dm)
+      : m_host(host), m_dm(dm) {
+    if (m_host)
+      m_host->setUpdatesEnabled(false);
+  }
+  ~SwitchFreeze() {
+    if (m_dm)
+      m_dm->show();
+    if (m_host) {
+      m_host->setUpdatesEnabled(true);
+      m_host->update();
+    }
+  }
+
+private:
+  QPointer<QMainWindow> m_host;
+  QPointer<ads::CDockManager> &m_dm;
+};
 }
 
 AdsBackend::AdsBackend(QMainWindow *host) : m_host(host) {
@@ -181,21 +206,12 @@ void AdsBackend::hookSplitters() {
 void AdsBackend::rebuild() {
   if (!m_host) // the window is gone: nothing to build into
     return;
-  m_quiet = true; // the old manager's teardown signals are not edits
-  for (Panel &p : m_panels) {
-    if (p.dock && p.widget) {
-      p.dock->takeWidget();
-      p.widget->setParent(nullptr);
-    }
-    p.dock = nullptr;
+  if (m_dm) { // the one manager lives as long as the window
+    parkAll();
+    return;
   }
-  if (m_dm) {
-    m_host->takeCentralWidget();
-    delete m_dm.data(); // also deletes the docks and any floating windows
-    m_dm.clear();
-  }
+  m_quiet = true;
   m_dm = new ads::CDockManager(m_host);
-  m_quiet = false;
   m_built.start();
   {
     using M = ads::CDockManager;
@@ -243,17 +259,37 @@ void AdsBackend::rebuild() {
                        [act](bool open) { act->setChecked(open); });
     }
   }
-  // ADS only knows a dock widget (for restoreState) once it has been added, so
-  // park them all, closed, in one hidden area. Placing a panel later moves it.
+  m_quiet = false;
+  parkAll();
+}
+
+// Back to the empty layout (every panel parked, closed, in one hidden area) on
+// the manager that is already there: the docks, and so the panel widgets and
+// their native GL windows, are never re-parented or recreated. ADS only knows a
+// dock widget (for restoreState) once it has been added, hence the park.
+// Areas and floating windows a move leaves empty are removed by ADS itself.
+void AdsBackend::parkAll() {
+  if (!m_dm)
+    return;
+  m_quiet = true; // moving docks around is not an edit
   ads::CDockAreaWidget *park = nullptr;
+  for (Panel &p : m_panels)
+    if (p.dock && p.dock->dockAreaWidget() && !p.dock->isInFloatingContainer()) {
+      park = p.dock->dockAreaWidget();
+      break;
+    }
   for (Panel &p : m_panels) {
+    if (!p.dock)
+      continue;
     if (!park)
       park = m_dm->addDockWidget(ads::CenterDockWidgetArea, p.dock);
-    else
+    else if (p.dock->dockAreaWidget() != park)
       m_dm->addDockWidgetTabToArea(p.dock, park);
   }
   for (Panel &p : m_panels)
-    p.dock->closeDockWidget();
+    if (p.dock)
+      p.dock->closeDockWidget();
+  m_quiet = false;
 }
 
 ads::CDockAreaWidget *AdsBackend::place(const LayoutNode &n,
@@ -323,6 +359,7 @@ void AdsBackend::setExtraStyleSheet(const QString &qss) {
 }
 
 void AdsBackend::applySpec(const LayoutSpec &spec) {
+  SwitchFreeze freeze(m_host, m_dm);
   rebuild();
   if (!m_dm)
     return;
@@ -381,6 +418,7 @@ QStringList AdsBackend::statePanelIds(const QByteArray &state) const {
 }
 
 bool AdsBackend::restoreState(const QByteArray &state) {
+  SwitchFreeze freeze(m_host, m_dm);
   rebuild();
   if (!m_dm || state.isEmpty())
     return false;
