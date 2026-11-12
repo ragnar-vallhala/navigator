@@ -31,6 +31,22 @@ QString loadStyleSheet() {
   return QString::fromUtf8(f.readAll());
 }
 
+QString dockStyleSheet() {
+  const QString bg = hex(kBg), surf = hex(kSurface), alt = hex(kSurfaceAlt),
+                line = hex(kBorder), text = hex(kText), muted = hex(kTextMuted);
+  return QStringLiteral(
+             "ads--CDockContainerWidget, ads--CDockAreaWidget,"
+             " ads--CDockAreaTitleBar, ads--CDockWidget {"
+             " background: %1; border-color: %2; }"
+             "ads--CDockContainerWidget ads--CDockSplitter::handle {"
+             " background: %2; }"
+             "ads--CDockWidgetTab { background: %3; border-color: %2; }"
+             "ads--CDockWidgetTab[activeTab=\"true\"] { background: %4; }"
+             "ads--CDockWidgetTab QLabel { color: %6; }"
+             "ads--CDockWidgetTab[activeTab=\"true\"] QLabel { color: %5; }")
+      .arg(bg, line, surf, alt, text, muted);
+}
+
 void apply() {
   qApp->setStyle(QStyleFactory::create("Fusion"));
 

@@ -57,6 +57,10 @@ public:
   QAction *viewAction(const QString &id) override;
   int clampFloatingTo(const QList<QRect> &screens) override;
 
+  // Appended to the stylesheet of every dock manager this backend builds (the
+  // manager's own sheet outranks the application's, so a theme has to go here).
+  void setExtraStyleSheet(const QString &qss);
+
 private:
   struct Panel {
     QString id, title;
@@ -64,6 +68,7 @@ private:
     QPointer<QWidget> widget;
     QPointer<ads::CDockWidget> dock; // a child of m_dm: dies with it
   };
+  QString m_extraStyle;
   void rebuild();
   void applyFixed(Panel &p);
   void syncActions();
