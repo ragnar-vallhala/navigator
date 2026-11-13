@@ -245,6 +245,36 @@ private slots:
     QVERIFY(f.win.isMaximized());
   }
 
+  // Floating every dock area out of the window leaves the main container empty
+  // (ADS has no drop target there): the areas are docked back, tabs and all.
+  void emptiedMainContainerRedocks() {
+    Fixture f;
+    auto *b = f.wm->backend();
+    f.wm->load("Fly");
+    b->hidePanel("c");
+    QTest::qWait(50);
+    b->floatPanel("a");
+    b->floatPanel("b");
+    QVERIFY(b->panelState("a").floating);
+    QVERIFY(b->panelState("b").floating);
+    QTRY_VERIFY_WITH_TIMEOUT(!b->panelState("a").floating, 2000);
+    QVERIFY(!b->panelState("b").floating);
+    QVERIFY(b->panelState("a").visible);
+    QVERIFY(b->panelState("b").visible);
+    QVERIFY(!b->panelState("c").visible); // what the user had closed stays so
+  }
+
+  // ... but a window that still has an area keeps what is floating.
+  void floatingWithAreaLeftIsKept() {
+    Fixture f;
+    auto *b = f.wm->backend();
+    f.wm->load("Fly");
+    b->floatPanel("c");
+    QTest::qWait(700);
+    QVERIFY(b->panelState("c").floating);
+    QVERIFY(!b->panelState("a").floating);
+  }
+
   void overwriteDeleteRename() {
     Fixture f;
     auto *b = f.wm->backend();

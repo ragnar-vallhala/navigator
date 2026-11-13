@@ -25,6 +25,7 @@
 #include <DockWidgetTab.h>
 #include <FloatingDockContainer.h>
 
+#include <QGuiApplication>
 #include <QMainWindow>
 #include <QRegularExpression>
 #include <QSplitter>
@@ -185,6 +186,63 @@ void AdsBackend::layoutChanged() {
   hookSplitters();
   if (m_notify)
     m_notify();
+  if (!m_emptyTimer) {
+    m_emptyTimer = new QTimer(m_dm.data());
+    m_emptyTimer->setSingleShot(true);
+    m_emptyTimer->setInterval(250);
+    QObject::connect(m_emptyTimer, &QTimer::timeout, m_dm.data(),
+                     [this] { checkEmptyMain(); });
+  }
+  m_emptyTimer->start();
+}
+
+// Floating the last dock area out of the window leaves the main container
+// empty, and ADS offers no drop target on an empty container: the panels could
+// then only be brought back from the Workspaces menu, and a blank window looks
+// like a hang. Once the drag is over (no mouse button down), such areas are
+// docked back into the window, keeping their tab groups.
+void AdsBackend::checkEmptyMain() {
+  if (m_quiet || !m_dm)
+    return;
+  if (QGuiApplication::mouseButtons() != Qt::NoButton) { // still dragging
+    m_emptyTimer->start();
+    return;
+  }
+  if (m_dm->visibleDockAreaCount() > 0)
+    return;
+  const QList<ads::CFloatingDockContainer *> floats = m_dm->floatingWidgets();
+  QList<QList<ads::CDockWidget *>> groups;
+  QList<ads::CDockWidget *> current;
+  for (ads::CFloatingDockContainer *fc : floats) {
+    if (!fc || !fc->dockContainer())
+      continue;
+    for (ads::CDockAreaWidget *a : fc->dockContainer()->openedDockAreas()) {
+      QList<ads::CDockWidget *> g = a->openedDockWidgets();
+      if (g.isEmpty())
+        continue;
+      groups.append(g);
+      current.append(a->currentDockWidget());
+    }
+  }
+  if (groups.isEmpty())
+    return;
+  m_quiet = true;
+  ads::CDockAreaWidget *first = nullptr;
+  for (int i = 0; i < groups.size(); ++i) {
+    ads::CDockAreaWidget *area = nullptr;
+    for (ads::CDockWidget *dw : groups[i]) {
+      if (!area)
+        area = m_dm->addDockWidget(ads::RightDockWidgetArea, dw, first);
+      else
+        m_dm->addDockWidgetTabToArea(dw, area);
+    }
+    if (!first)
+      first = area;
+    if (current[i])
+      current[i]->setAsCurrentTab();
+  }
+  m_quiet = false;
+  layoutChanged();
 }
 
 void AdsBackend::hookSplitters() {
