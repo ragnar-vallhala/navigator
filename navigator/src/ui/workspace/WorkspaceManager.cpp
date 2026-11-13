@@ -264,8 +264,18 @@ bool WorkspaceManager::load(const QString &name) {
     if (m_backend->restoreState(s.state)) {
       // Only move/resize the window once the layout is known good, so a
       // corrupt state does not leave it displaced before the fallback.
-      if (m_host && !s.geometry.isEmpty())
+      if (m_host && !s.geometry.isEmpty()) {
+        // A switch must not change the window's state: a layout saved while
+        // the window was maximized (or full-screen) would otherwise maximize
+        // it now. Only the normal-state rectangle comes along.
+        const bool wasMax = m_host->isMaximized();
+        const bool wasFull = m_host->isFullScreen();
         m_host->restoreGeometry(s.geometry);
+        if (!wasFull && m_host->isFullScreen())
+          m_host->showNormal();
+        if (!wasMax && m_host->isMaximized())
+          m_host->showNormal();
+      }
       setCurrent(name);
       clampToScreens();
       return true;

@@ -295,6 +295,72 @@ private slots:
     QCOMPARE(visibleWindows(), windowsBefore);
   }
 
+  // The view follows its container: resized while shown, resized while hidden
+  // (a workspace switch re-places panels with their windows hidden) and
+  // masked/unmasked, every next frame is drawn for the window's current size.
+  void viewportFollowsSize() {
+    Rig rig;
+    rig.box->setMinimumSize(100, 80);
+    rig.box->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+    rig.box->setFixedSize(400, 300);
+    rig.box->setMinimumSize(100, 80);
+    rig.box->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+    QVERIFY(rig.showDocked());
+    auto settle = [&] {
+      rig.r->update();
+      QTest::qWait(150);
+      rig.r->update();
+      QTest::qWait(150);
+    };
+    auto check = [&](const char *what) {
+      const QSize want = rig.r->size() * rig.r->devicePixelRatio();
+      // a frame is drawn asynchronously: give a loaded machine a few seconds
+      QElapsedTimer waited;
+      waited.start();
+      while (rig.r->viewportSize() != want && waited.elapsed() < 4000) {
+        rig.r->update();
+        QTest::qWait(50);
+      }
+      const QSize got = rig.r->viewportSize();
+      if (got != want)
+        qWarning("%s: viewport %dx%d, window %dx%d", what, got.width(),
+                 got.height(), want.width(), want.height());
+      return got == want;
+    };
+    settle();
+    QVERIFY(check("initial"));
+    rig.host.resize(560, 420);
+    settle();
+    QCOMPARE(rig.r->size(), rig.box->size());
+    QVERIFY(check("resized while shown"));
+    // hidden: the way a switch re-places a panel
+    rig.r->hide();
+    rig.host.resize(700, 500);
+    QTest::qWait(100);
+    rig.r->show();
+    settle();
+    QCOMPARE(rig.r->size(), rig.box->size());
+    QVERIFY(check("resized while hidden"));
+    // a whole-container hide/resize/show
+    rig.box->hide();
+    rig.host.resize(480, 360);
+    QTest::qWait(100);
+    rig.box->show();
+    settle();
+    QCOMPARE(rig.r->size(), rig.box->size());
+    QVERIFY(check("container hidden and resized"));
+    // mask on and off
+    rig.r->setMask(QRegion(0, 0, 200, 150));
+    settle();
+    rig.r->setMask(QRegion());
+    settle();
+    QVERIFY(check("mask changes"));
+    // a cached size that went stale (a resize that never reached resizeGL)
+    rig.r->setCachedViewportForTest(QSize(123, 456));
+    settle();
+    QVERIFY(check("stale cached size"));
+  }
+
   // The context is torn down and rebuilt for real: the renderer frees every GL
   // object and builds them again (what Qt does when it recreates the context),
   // repeatedly and on the same context, and nothing leaks.

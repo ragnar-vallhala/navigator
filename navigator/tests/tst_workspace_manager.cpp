@@ -225,6 +225,56 @@ private slots:
     QVERIFY(!b->panelState("a").floating);
   }
 
+  // A layout saved while the window was maximized must not maximize the window
+  // when it is loaded later (on a real desktop the window then jumped to the
+  // screen size, bigger than the user had it).
+  void loadingMaximizedLayoutKeepsWindowState() {
+    Fixture f;
+    f.win.setWindowState(Qt::WindowMaximized);
+    QVERIFY(f.win.isMaximized());
+    QVERIFY(f.wm->load("Fly"));
+    QVERIFY(f.wm->saveCurrentAs("Big"));
+    f.win.setWindowState(Qt::WindowNoState);
+    QVERIFY(!f.win.isMaximized());
+    QVERIFY(f.wm->load("Big"));
+    QVERIFY(!f.win.isMaximized());
+    QVERIFY(!f.win.isFullScreen());
+    // and a window that is maximized stays so
+    f.win.setWindowState(Qt::WindowMaximized);
+    QVERIFY(f.wm->load("Big"));
+    QVERIFY(f.win.isMaximized());
+  }
+
+  // Floating every dock area out of the window leaves the main container empty
+  // (ADS has no drop target there): the areas are docked back, tabs and all.
+  void emptiedMainContainerRedocks() {
+    Fixture f;
+    auto *b = f.wm->backend();
+    f.wm->load("Fly");
+    b->hidePanel("c");
+    QTest::qWait(50);
+    b->floatPanel("a");
+    b->floatPanel("b");
+    QVERIFY(b->panelState("a").floating);
+    QVERIFY(b->panelState("b").floating);
+    QTRY_VERIFY_WITH_TIMEOUT(!b->panelState("a").floating, 2000);
+    QVERIFY(!b->panelState("b").floating);
+    QVERIFY(b->panelState("a").visible);
+    QVERIFY(b->panelState("b").visible);
+    QVERIFY(!b->panelState("c").visible); // what the user had closed stays so
+  }
+
+  // ... but a window that still has an area keeps what is floating.
+  void floatingWithAreaLeftIsKept() {
+    Fixture f;
+    auto *b = f.wm->backend();
+    f.wm->load("Fly");
+    b->floatPanel("c");
+    QTest::qWait(700);
+    QVERIFY(b->panelState("c").floating);
+    QVERIFY(!b->panelState("a").floating);
+  }
+
   void overwriteDeleteRename() {
     Fixture f;
     auto *b = f.wm->backend();

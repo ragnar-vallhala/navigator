@@ -25,6 +25,7 @@
 #include <vector>
 
 class QMainWindow;
+class QTimer;
 
 namespace ads {
 class CDockManager;
@@ -76,11 +77,13 @@ private:
   };
   QString m_extraStyle;
   std::function<void()> m_notify;
+  QPointer<QTimer> m_emptyTimer; // see checkEmptyMain
   QElapsedTimer m_built; // when a layout was last built (see layoutChanged)
   bool m_quiet = false; // tearing a manager down: its signals mean nothing
   void rebuild();
   void parkAll();
   void layoutChanged();
+  void checkEmptyMain();
   void hookSplitters();
   void applyFixed(Panel &p);
   void syncActions();
