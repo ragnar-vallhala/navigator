@@ -314,6 +314,13 @@ private slots:
     };
     auto check = [&](const char *what) {
       const QSize want = rig.r->size() * rig.r->devicePixelRatio();
+      // a frame is drawn asynchronously: give a loaded machine a few seconds
+      QElapsedTimer waited;
+      waited.start();
+      while (rig.r->viewportSize() != want && waited.elapsed() < 4000) {
+        rig.r->update();
+        QTest::qWait(50);
+      }
       const QSize got = rig.r->viewportSize();
       if (got != want)
         qWarning("%s: viewport %dx%d, window %dx%d", what, got.width(),
