@@ -225,6 +225,26 @@ private slots:
     QVERIFY(!b->panelState("a").floating);
   }
 
+  // A layout saved while the window was maximized must not maximize the window
+  // when it is loaded later (on a real desktop the window then jumped to the
+  // screen size, bigger than the user had it).
+  void loadingMaximizedLayoutKeepsWindowState() {
+    Fixture f;
+    f.win.setWindowState(Qt::WindowMaximized);
+    QVERIFY(f.win.isMaximized());
+    QVERIFY(f.wm->load("Fly"));
+    QVERIFY(f.wm->saveCurrentAs("Big"));
+    f.win.setWindowState(Qt::WindowNoState);
+    QVERIFY(!f.win.isMaximized());
+    QVERIFY(f.wm->load("Big"));
+    QVERIFY(!f.win.isMaximized());
+    QVERIFY(!f.win.isFullScreen());
+    // and a window that is maximized stays so
+    f.win.setWindowState(Qt::WindowMaximized);
+    QVERIFY(f.wm->load("Big"));
+    QVERIFY(f.win.isMaximized());
+  }
+
   void overwriteDeleteRename() {
     Fixture f;
     auto *b = f.wm->backend();
