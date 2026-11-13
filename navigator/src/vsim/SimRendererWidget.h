@@ -297,6 +297,12 @@ public:
   int liveGlObjects() const;
   // How many times initResources() has built the GL side (1 per context).
   int glInitCount() const { return glInitCount_; }
+  // Size (device pixels) the last frame was drawn for; matches the window's size
+  // after every paint, whatever resize path got it there.
+  QSize viewportSize() const { return {fbW_, fbH_}; }
+  // Test hook: pretend the cached size is stale (what a resize that never
+  // reached resizeGL leaves behind); the next frame must repair it.
+  void setCachedViewportForTest(QSize s) { fbW_ = s.width(); fbH_ = s.height(); }
   int contextGoneCount() const { return goneCount_; } // aboutToBeDestroyed seen
   bool contextWasCurrentWhenGone() const { return goneCurrent_; }
   // Drops every GL object and builds them all again in the CURRENT context,

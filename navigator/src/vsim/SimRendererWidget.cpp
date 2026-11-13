@@ -1196,6 +1196,17 @@ void SimRendererWidget::paintGL() {
   // follow with initializeGL.
   if (!glLive_)
     initResources();
+  // Do not trust that resizeGL ran for every size the window has had: a window
+  // resized while hidden, masked or re-parented by a dock switch can reach a
+  // frame with the old cached size, and the scene then renders at that size
+  // in a corner of the (differently sized) drawable. Re-derive it per frame
+  // (two multiplies) before the viewport is set from it.
+  {
+    const int w = std::max(1, int(std::lround(width() * devicePixelRatio())));
+    const int h = std::max(1, int(std::lround(height() * devicePixelRatio())));
+    if (w != fbW_ || h != fbH_)
+      resizeGL(w, h);
+  }
   resetGlState();
   if (glErrorCheck_)
     while (glGetError() != GL_NO_ERROR) {
