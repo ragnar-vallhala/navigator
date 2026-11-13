@@ -270,11 +270,18 @@ bool WorkspaceManager::load(const QString &name) {
         // it now. Only the normal-state rectangle comes along.
         const bool wasMax = m_host->isMaximized();
         const bool wasFull = m_host->isFullScreen();
+        // Nor may a switch move it between monitors: the saved rectangle's
+        // size comes along, its position does not (startup restoreLast keeps
+        // restoring the position).
+        const QPoint keepPos = m_host->pos();
         m_host->restoreGeometry(s.geometry);
         if (!wasFull && m_host->isFullScreen())
           m_host->showNormal();
         if (!wasMax && m_host->isMaximized())
           m_host->showNormal();
+        if (!wasMax && !wasFull && !m_host->isMaximized() &&
+            !m_host->isFullScreen())
+          m_host->move(keepPos); // clampToScreens below fits it to its screen
       }
       setCurrent(name);
       clampToScreens();

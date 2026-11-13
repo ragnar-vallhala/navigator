@@ -22,6 +22,7 @@
 #include "WorkspaceManager.h"
 
 #include <QLabel>
+#include <QGuiApplication>
 #include <QMainWindow>
 #include <QPointer>
 #include <QSettings>
@@ -497,6 +498,32 @@ private slots:
     const QRect r = g.wm->backend()->panelState("c").floatGeometry;
     QVERIFY2(QRect(0, 0, 1280, 720).contains(r),
              qPrintable(QStringLiteral("%1,%2").arg(r.x()).arg(r.y())));
+  }
+
+  // A layout switch changes the window's size but never its position (it must
+  // not hop between monitors). Needs real window positions: xcb only.
+  void loadKeepsWindowPositionAndTakesSavedSize() {
+    if (QGuiApplication::platformName() != "xcb")
+      QSKIP("window positions need the xcb platform");
+    const QList<QRect> wide{QRect(0, 0, 3840, 1000)};
+    Fixture f;
+    f.wm->setScreenProvider([wide] { return wide; });
+    f.win.setGeometry(100, 100, 700, 500); // position A, size S
+    QTest::qWait(100);
+    f.wm->load("Fly");
+    QVERIFY(f.wm->saveCurrentAs("Sized"));
+    const QSize saved = f.win.size();
+    f.win.move(2100, 150); // position B, "second monitor"
+    f.win.resize(1000, 650);
+    QTest::qWait(150);
+    const QPoint before = f.win.pos();
+    QVERIFY2(before.x() > 1500, qPrintable(QString::number(before.x())));
+    QVERIFY(f.wm->load("Sized"));
+    QTest::qWait(150);
+    QVERIFY(!f.win.isMaximized());
+    QVERIFY(!f.win.isFullScreen());
+    QCOMPARE(f.win.pos(), before);
+    QCOMPARE(f.win.size(), saved);
   }
 
   // ---- the last layout is kept (debounced) and restored at start ----------
