@@ -526,6 +526,57 @@ private slots:
     QCOMPARE(f.win.size(), saved);
   }
 
+  // A maximized (or full-screen) window is left alone by a layout switch, even
+  // when the saved layout was saved in the normal state: it must not
+  // un-maximize and hop to another monitor. xcb only (real positions).
+  void loadKeepsMaximizedWindowAndScreen() {
+    if (QGuiApplication::platformName() != "xcb")
+      QSKIP("window positions need the xcb platform");
+    const QList<QRect> wide{QRect(0, 0, 3840, 1000)};
+    Fixture f;
+    f.wm->setScreenProvider([wide] { return wide; });
+    f.win.setGeometry(100, 100, 700, 500);
+    QTest::qWait(100);
+    f.wm->load("Fly");
+    QVERIFY(f.wm->saveCurrentAs("Small")); // saved non-maximized, left side
+    f.win.move(2100, 150); // "second monitor"
+    QTest::qWait(100);
+    f.win.setWindowState(Qt::WindowMaximized);
+    QTest::qWait(150);
+    if (!f.win.isMaximized())
+      QSKIP("platform did not maximize the window");
+    const QPoint before = f.win.pos(); // a real WM may have moved it
+    QVERIFY(f.wm->load("Small"));
+    QTest::qWait(150);
+    QVERIFY(f.win.isMaximized());
+    QVERIFY(!f.win.isFullScreen());
+    QCOMPARE(f.win.pos(), before);
+  }
+
+  void loadKeepsFullScreenWindowAndScreen() {
+    if (QGuiApplication::platformName() != "xcb")
+      QSKIP("window positions need the xcb platform");
+    const QList<QRect> wide{QRect(0, 0, 3840, 1000)};
+    Fixture f;
+    f.wm->setScreenProvider([wide] { return wide; });
+    f.win.setGeometry(100, 100, 700, 500);
+    QTest::qWait(100);
+    f.wm->load("Fly");
+    QVERIFY(f.wm->saveCurrentAs("Small"));
+    f.win.move(2100, 150);
+    QTest::qWait(100);
+    f.win.setWindowState(Qt::WindowFullScreen);
+    QTest::qWait(150);
+    if (!f.win.isFullScreen())
+      QSKIP("platform did not full-screen the window");
+    const QPoint before = f.win.pos();
+    QVERIFY(f.wm->load("Small"));
+    QTest::qWait(150);
+    QVERIFY(f.win.isFullScreen());
+    QVERIFY(!f.win.isMaximized());
+    QCOMPARE(f.win.pos(), before);
+  }
+
   // ---- the last layout is kept (debounced) and restored at start ----------
 
   // (a) an edit made through the real backend is stored with no save call, and

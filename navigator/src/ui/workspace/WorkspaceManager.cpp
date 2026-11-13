@@ -264,24 +264,20 @@ bool WorkspaceManager::load(const QString &name) {
     if (m_backend->restoreState(s.state)) {
       // Only move/resize the window once the layout is known good, so a
       // corrupt state does not leave it displaced before the fallback.
-      if (m_host && !s.geometry.isEmpty()) {
-        // A switch must not change the window's state: a layout saved while
-        // the window was maximized (or full-screen) would otherwise maximize
-        // it now. Only the normal-state rectangle comes along.
-        const bool wasMax = m_host->isMaximized();
-        const bool wasFull = m_host->isFullScreen();
-        // Nor may a switch move it between monitors: the saved rectangle's
-        // size comes along, its position does not (startup restoreLast keeps
-        // restoring the position).
+      if (m_host && !s.geometry.isEmpty() && !m_host->isMaximized() &&
+          !m_host->isFullScreen()) {
+        // A maximized or full-screen window is left exactly as it is:
+        // restoreGeometry also restores the saved window state, which would
+        // un-maximize it and could move it to another monitor.
+        // For a normal window the saved size comes along but not the position
+        // (a switch must not hop between monitors; startup restoreLast keeps
+        // restoring the position), and never the saved state (a layout saved
+        // while maximized must not maximize the window now).
         const QPoint keepPos = m_host->pos();
         m_host->restoreGeometry(s.geometry);
-        if (!wasFull && m_host->isFullScreen())
+        if (m_host->isFullScreen() || m_host->isMaximized())
           m_host->showNormal();
-        if (!wasMax && m_host->isMaximized())
-          m_host->showNormal();
-        if (!wasMax && !wasFull && !m_host->isMaximized() &&
-            !m_host->isFullScreen())
-          m_host->move(keepPos); // clampToScreens below fits it to its screen
+        m_host->move(keepPos); // clampToScreens below fits it to its screen
       }
       setCurrent(name);
       clampToScreens();
