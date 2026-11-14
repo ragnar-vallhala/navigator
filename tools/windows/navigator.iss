@@ -9,6 +9,8 @@
 ; NavDir    unpacked nav win64.zip (bin\nav.exe, share\nav\...)
 ; LicenseDir  LICENSE.md, THIRD-PARTY-NOTICES.md, licenses\ (see tools/release/make-notices.sh)
 ; No flashing tools ship on Windows yet: which ones and from where is open.
+; nav.exe goes to {app}\tools, which is not on PATH: the coming updater has to
+; look it up there.
 #ifndef AppVersion
   #error Pass /DAppVersion=<version>
 #endif

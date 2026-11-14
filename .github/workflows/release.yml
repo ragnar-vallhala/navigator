@@ -178,6 +178,8 @@ jobs:
       - name: Build the AppImage
         env:
           REQUIRE_FLASH_TOOLS: '1'
+          # A shipped library with no notice is a licence gap: fail the build.
+          NOTICES_STRICT: '1'
         run: |
           mkdir -p "$RUNNER_TEMP/out"
           BUILD_DIR="$PWD/navigator/build-rel" SDK_DIR="$PWD/vayu-sitl-sdk" \
@@ -196,7 +198,9 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: '1'
           APPIMAGE_EXTRACT_AND_RUN: '1'
         run: |
-          sudo apt-get install -y xvfb libgl1-mesa-dri >/dev/null
+          sudo timeout -k 10 300 apt-get -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+            -o DPkg::Lock::Timeout=120 install -y xvfb libgl1-mesa-dri >/dev/null
           img="$RUNNER_TEMP/out/navigator-${VERSION}-${CHANNEL}-linux-x86_64.AppImage"
           priv=$(mktemp -d)
           rc=0
@@ -251,6 +255,9 @@ jobs:
       - name: Fetch nav (pinned, checksum verified)
         run: tools/release/fetch-nav.sh windows "$NAV_VERSION" "$PWD/nav-win"
       - name: Licences and third-party notices
+        env:
+          # A shipped library with no notice is a licence gap: fail the build.
+          NOTICES_STRICT: '1'
         run: |
           mkdir -p licensedir
           cp LICENSE.md licensedir/LICENSE.md
