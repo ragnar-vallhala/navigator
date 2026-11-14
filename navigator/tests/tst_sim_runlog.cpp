@@ -27,6 +27,14 @@
 // process with its own VAYU_SITL_MODULE. The widget owns GL views, so it needs
 // a real platform plugin (xcb on an Xvfb); on "offscreen" both cases skip.
 // Give it private VAYU_VFS_DIR / VSIM_FIFO_SUFFIX / XDG_* when running it.
+//
+// Known limitation, engine side (libvayu_sitl, not this repository): on a
+// heavily loaded host (several copies of this test at once) a worker thread
+// occasionally never returns from the engine's run_step (it spins in the
+// firmware scheduler, ipc.c / task.c); Stop's terminate() then either aborts
+// ("QThread: Destroyed while thread is still running") or crashes a firmware
+// task. The same driver does this on the unmodified SimulatorWidget too. Run
+// this test alone, not alongside other CPU-heavy jobs.
 
 #include "SimulatorWidget.h"
 #include "SitlModule.h"
@@ -120,7 +128,13 @@ private slots:
     total.start();
     for (int i = 0; i < kCycles; ++i) {
       a.start();
-      QVERIFY(a.running());
+      QVERIFY2(a.running(), qPrintable(a.logText().right(800)));
+      // Stop once the engine is online, as a user would.
+      QElapsedTimer online;
+      online.start();
+      while (a.logText().count("rtos engine: online") <= i &&
+             online.elapsed() < 20000)
+        pump(10);
       pump(100); // far below one second: many runs share a wall-clock second
       a.stop();
     }
