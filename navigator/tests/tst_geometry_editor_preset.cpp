@@ -21,9 +21,13 @@
 
 #include "AirframePresets.h"
 #include "GeometryEditorWidget.h"
+#include "VehicleJson.h"
 
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QPushButton>
 #include <QLineEdit>
 #include <QSignalSpy>
 #include <QtTest>
@@ -122,6 +126,74 @@ private slots:
     w.setConfig(p->geometry);
     QCOMPARE(w.presetId(), QString("7in")); // the caller sets the id
     QCOMPARE(chosen.size(), 0);
+  }
+
+  // ---- prop_radius: load -> edit -> save -> reload ----
+  static QDoubleSpinBox *radiusSpin(GeometryEditorWidget &w) {
+    return w.findChild<QDoubleSpinBox *>("propRadiusSpin");
+  }
+  // Commit the form into config() the way the Apply button does.
+  static void apply(GeometryEditorWidget &w) {
+    for (QPushButton *b : w.findChildren<QPushButton *>())
+      if (b->text() == QStringLiteral("Apply to Sim")) {
+        b->click();
+        return;
+      }
+    QFAIL("Apply button not found");
+  }
+  static vsim::GeometryConfig viaFile(const vsim::GeometryConfig &c) {
+    const QByteArray bytes =
+        QJsonDocument(vsim::geometryToJson(c)).toJson(QJsonDocument::Indented);
+    return vsim::geometryFromJson(QJsonDocument::fromJson(bytes).object());
+  }
+
+  void propRadiusLoadEditSaveReload() {
+    QJsonObject o = vsim::geometryToJson(vsim::GeometryConfig{});
+    o["prop_radius"] = 0.0889; // a file that carries it
+    GeometryEditorWidget w;
+    QDoubleSpinBox *sp = radiusSpin(w);
+    QVERIFY(sp);
+    w.setConfig(vsim::geometryFromJson(o));
+    QCOMPARE(sp->value(), 0.0889);
+    // Round-trips unchanged when untouched.
+    apply(w);
+    QCOMPARE(w.config().propRadius, 0.0889f);
+    QCOMPARE(viaFile(w.config()).propRadius, 0.0889f);
+    // Edit -> save -> reload into a fresh editor.
+    sp->setValue(0.1234);
+    apply(w);
+    QCOMPARE(w.config().propRadius, 0.1234f);
+    const vsim::GeometryConfig reloaded = viaFile(w.config());
+    QCOMPARE(reloaded.propRadius, 0.1234f);
+    GeometryEditorWidget w2;
+    w2.setConfig(reloaded);
+    QCOMPARE(radiusSpin(w2)->value(), 0.1234);
+    // Out-of-range edits are clamped to the model's 0.004-0.5 m range.
+    sp->setValue(9.0);
+    QCOMPARE(sp->value(), 0.5);
+    sp->setValue(0.0);
+    QCOMPARE(sp->value(), 0.004);
+  }
+
+  void propRadiusMissingFromFileKeepsDefault() {
+    QJsonObject o = vsim::geometryToJson(vsim::GeometryConfig{});
+    o.remove("prop_radius");
+    const vsim::GeometryConfig c = vsim::geometryFromJson(o);
+    QCOMPARE(c.propRadius, vsim::GeometryConfig{}.propRadius);
+    GeometryEditorWidget w;
+    w.setConfig(c);
+    QCOMPARE(radiusSpin(w)->value(), 0.0622);
+    apply(w);
+    QCOMPARE(w.config().propRadius, 0.0622f);
+  }
+
+  void editingPropRadiusFlipsToCustom() {
+    GeometryEditorWidget w;
+    pick(w, "5in");
+    QSignalSpy chosen(&w, &GeometryEditorWidget::presetChosen);
+    radiusSpin(w)->setValue(0.07);
+    QCOMPARE(w.presetId(), QString());
+    QCOMPARE(chosen.size(), 1);
   }
 };
 

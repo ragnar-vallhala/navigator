@@ -123,6 +123,16 @@ void GeometryEditorWidget::buildUi() {
     numRow->addWidget(new QLabel(tr("Mass:"), g));
     massSpin_ = spin(0.01, 100.0, 3, 0.05, 1.0, QStringLiteral(" kg"));
     numRow->addWidget(massSpin_);
+    numRow->addSpacing(12);
+    numRow->addWidget(new QLabel(tr("Prop radius:"), g));
+    // Range matches the renderer/model clamp (buildDroneModel: 0.004-0.5 m).
+    propRadiusSpin_ = spin(0.004, 0.5, 5, 0.005, 0.0622, QStringLiteral(" m"));
+    propRadiusSpin_->setObjectName(QStringLiteral("propRadiusSpin"));
+    propRadiusSpin_->setToolTip(
+        tr("Propeller radius (half the prop diameter). Sizes the drawn rotor "
+           "discs and, in the simulator, ground effect and the contact "
+           "footprint."));
+    numRow->addWidget(propRadiusSpin_);
     numRow->addStretch();
     auto *compute = new ui::PrimaryButton(tr("Load && Compute"), g);
     numRow->addWidget(compute);
@@ -255,8 +265,8 @@ void GeometryEditorWidget::buildUi() {
     auto edited = [this] { onFormEdited(); };
     const auto dbl = QOverload<double>::of(&QDoubleSpinBox::valueChanged);
     const auto idx = QOverload<int>::of(&QComboBox::currentIndexChanged);
-    for (QDoubleSpinBox *sp : {scaleSpin_, massSpin_, transX_, transY_, transZ_,
-                               rotX_, rotY_, rotZ_})
+    for (QDoubleSpinBox *sp : {scaleSpin_, massSpin_, propRadiusSpin_, transX_,
+                               transY_, transZ_, rotX_, rotY_, rotZ_})
       connect(sp, dbl, this, edited);
     connect(meshEdit_, &QLineEdit::textEdited, this, edited);
     for (auto &r : rows_) {
@@ -289,6 +299,7 @@ void GeometryEditorWidget::syncConfigToUi() {
   meshEdit_->setText(cfg_.meshPath);
   scaleSpin_->setValue(cfg_.scale);
   massSpin_->setValue(cfg_.mass);
+  propRadiusSpin_->setValue(cfg_.propRadius);
   transX_->setValue(cfg_.translate.x());
   transY_->setValue(cfg_.translate.y());
   transZ_->setValue(cfg_.translate.z());
@@ -317,6 +328,7 @@ void GeometryEditorWidget::syncUiToConfig() {
   cfg_.meshPath = meshEdit_->text();
   cfg_.scale = static_cast<float>(scaleSpin_->value());
   cfg_.mass = static_cast<float>(massSpin_->value());
+  cfg_.propRadius = static_cast<float>(propRadiusSpin_->value());
   cfg_.translate =
       QVector3D(transX_->value(), transY_->value(), transZ_->value());
   cfg_.rotate = QVector3D(rotX_->value(), rotY_->value(), rotZ_->value());
