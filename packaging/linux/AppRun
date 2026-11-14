@@ -1,0 +1,9 @@
+#!/bin/sh
+# AppImage entry point: the bundled nav and flashing tools come first on PATH,
+# for the coming updater, which will call `nav`, `st-flash`, ... and must find
+# the shipped versions. Navigator itself does not call them yet.
+HERE="$(dirname "$(readlink -f "$0")")"
+export APPDIR="$HERE"
+export PATH="$HERE/usr/bin:$PATH"
+for f in "$HERE"/apprun-hooks/*.sh; do [ -f "$f" ] && . "$f"; done
+exec "$HERE/usr/bin/Navigator" "$@"
