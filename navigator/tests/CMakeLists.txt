@@ -467,4 +467,25 @@ if(TARGET Navigator AND NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_ab
   set_tests_properties(tst_world_change_floor PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
       TIMEOUT 600)
+
+  # ---- Per-run log files of the real SimulatorWidget ------------------------
+  # One file pair per Start (unique stamp), none left by a failed Start. Same
+  # widget-source build as above; each case runs in its own process because the
+  # engine module loads once per process. Needs a GL platform plugin (xcb on an
+  # Xvfb): both cases skip on "offscreen".
+  navigator_test(tst_sim_runlog tst_sim_runlog.cpp ${_wf_srcs})
+  target_include_directories(tst_sim_runlog PRIVATE ${_nav_inc}
+      ${CMAKE_SOURCE_DIR}/src/ui/widgets ${CMAKE_SOURCE_DIR}/src/vsim)
+  target_compile_definitions(tst_sim_runlog PRIVATE ${_nav_def})
+  target_link_libraries(tst_sim_runlog PRIVATE ${_nav_lib})
+  add_test(NAME tst_sim_runlog_failed_start
+      COMMAND tst_sim_runlog missingModuleLeavesNoLogs)
+  set_tests_properties(tst_sim_runlog_failed_start PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=/nonexistent/libvayu_sitl.so"
+      TIMEOUT 120)
+  add_test(NAME tst_sim_runlog_rapid
+      COMMAND tst_sim_runlog rapidStartStopOneRunPerStart)
+  set_tests_properties(tst_sim_runlog_rapid PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
+      TIMEOUT 300)
 endif()

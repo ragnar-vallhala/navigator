@@ -2072,6 +2072,9 @@ void SimulatorWidget::updateCustomWarning(bool atStart) {
   m_customWarnLabel->setVisible(atStart && m_customTune.shouldWarn(custom));
 }
 
+// gt-*.bin header: magic + version + record size + start wall-clock ms.
+static constexpr qint64 kGtHeaderBytes = 20;  // magic+version+size+t0
+
 void SimulatorWidget::startInAppSim() {
   if (m_sim || startBlocked())
     return;
@@ -2086,8 +2089,11 @@ void SimulatorWidget::startInAppSim() {
             QByteArrayLiteral("_nav") + QByteArray::number(::getpid()));
   }
 
-  // Open a fresh per-run log file before the firmware starts emitting.
-  openNewLogFile();
+  // Open a fresh per-run log file before the firmware starts emitting, but
+  // only when the engine module can run at all: a Start that cannot work must
+  // not leave an empty run behind (it would also count toward the retention).
+  if (SitlModule::instance().available())
+    openNewLogFile();
 
   // The SINGLE in-process RTOS engine (libvayu_sitl, loaded at runtime) runs
   // BOTH the firmware and the vsim physics in one deterministic stepper — no
@@ -2121,7 +2127,7 @@ void SimulatorWidget::startInAppSim() {
   m_sim = new vsim::SimWorker(this);
   m_sim->setTelemetrySink(&uart2_to_widget_trampoline, this);
   connect(m_sim, &vsim::SimWorker::stoppedCleanly, this,
-          &SimulatorWidget::onSimWorkerExited);
+          [this, gen = ++m_simGen] { onSimWorkerExited(gen); });
   connect(m_sim, &vsim::SimWorker::poseUpdated, m_renderer,
           &vsim::SimRendererWidget::setSnapshot);
   if (m_downRenderer)
@@ -2245,7 +2251,7 @@ void SimulatorWidget::attachExternalSim() {
   m_attached = true;
   m_sim = new vsim::SimWorker(this);
   connect(m_sim, &vsim::SimWorker::stoppedCleanly, this,
-          &SimulatorWidget::onSimWorkerExited);
+          [this, gen = ++m_simGen] { onSimWorkerExited(gen); });
   connect(m_sim, &vsim::SimWorker::poseUpdated, m_renderer,
           &vsim::SimRendererWidget::setSnapshot);
   if (m_downRenderer)
@@ -2350,16 +2356,33 @@ void SimulatorWidget::stopInAppSim() {
   emit simRunningChanged(false);
 }
 
-void SimulatorWidget::onSimWorkerExited() {
+void SimulatorWidget::onSimWorkerExited(quint64 gen) {
   // The worker emitted stoppedCleanly (spawn failure, startup-grace timeout,
   // or the daemon died) without the user clicking Stop. If we haven't already
   // torn down (explicit Stop nulls m_sim before the queued signal arrives),
   // run the normal stop path so the buttons / status reflect the dead worker.
   if (!m_sim)
     return;
+  // A queued signal from an already-stopped worker must not tear down the
+  // worker of a newer Start (and, below, delete that run's fresh log files).
+  if (gen != m_simGen)
+    return;
   appendLog("vsim", "[worker exited — resetting to Stopped]");
   m_stopReason = QStringLiteral("fault");
+  // A worker that died before the first pose record leaves a header-only run:
+  // remove both files rather than leave an empty run in the list.
+  QStringList junk;
+  if (m_runLog && m_runLogBytes <= kGtHeaderBytes) {
+    junk << m_runLog->fileName();
+    if (m_events.isOpen())
+      junk << m_events.path();
+  }
   stopInAppSim();
+  if (!junk.isEmpty()) {
+    for (const QString &f : std::as_const(junk))
+      QFile::remove(f);
+    refreshFlights();
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -2737,17 +2760,20 @@ void SimulatorWidget::openNewLogFile() {
     appendLog("log", QString("[mkdir failed: %1]").arg(m_logDir));
     return;
   }
-  QString stamp = QDateTime::currentDateTime().toString("yyyy-MM-dd_HH-mm-ss");
   // gt- (ground truth), not sim-: this file holds the PHYSICS state, not the FC
   // telemetry. Legacy tools (tools/sim_log_*.py) still parse the old sim-*.bin
   // as FC NavLink, so a distinct name keeps them from mis-reading this format.
-  QString path = dir.absoluteFilePath(QString("gt-%1.bin").arg(stamp));
-  m_runLog = std::make_unique<QFile>(path);
-  if (!m_runLog->open(QIODevice::WriteOnly)) {
-    appendLog("log", QString("[open failed: %1]").arg(path));
+  // The stamp is unique per run (ms + tie-break) and the file is created
+  // exclusively, so a quick Stop -> Start never overwrites the previous run.
+  QString stamp;
+  m_runLog = std::make_unique<QFile>();
+  if (!vsim::FlightEventLog::createRunGt(
+          m_logDir, QDateTime::currentDateTime(), m_runLog.get(), &stamp)) {
+    appendLog("log", QString("[open failed: %1]").arg(m_logDir));
     m_runLog.reset();
     return;
   }
+  const QString path = m_runLog->fileName();
   m_runLogBytes = 0;
   // Header (little-endian, 20 bytes): magic "VGT1", version, record size,
   // start wall-clock ms. Per-record layout documented in logGroundTruth /
@@ -2758,7 +2784,7 @@ void SimulatorWidget::openNewLogFile() {
     hs.writeRawData("VGT1", 4);
     hs << quint32(1) << quint32(kGtRecordBytes)
        << quint64(QDateTime::currentMSecsSinceEpoch());
-    m_runLogBytes += 20;
+    m_runLogBytes += kGtHeaderBytes;
   }
   m_runClock.start(); // monotonic per-record timestamp base
   // Retention first (never the run opening now), then the events sidecar.
@@ -2767,7 +2793,7 @@ void SimulatorWidget::openNewLogFile() {
   m_runStamp = stamp; // the run being recorded, whether or not ev opened
   m_stopReason = QStringLiteral("user");
   if (!m_events.open(dir.absoluteFilePath(QString("ev-%1.jsonl").arg(stamp)),
-                     eventHeader(stamp)))
+                     eventHeader(stamp), true))
     appendLog("log", QString("[events log open failed for %1]").arg(stamp));
   else
     m_events.start(0);
