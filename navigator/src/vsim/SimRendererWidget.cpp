@@ -460,6 +460,21 @@ SimRendererWidget::SimRendererWidget(QWindow *parent)
   setFormat(f);
 }
 
+void SimRendererWidget::setDownCam(bool on) {
+  downCam_ = on;
+  if (!isValid() && !handle()) { // format is fixed once the window is created
+    QSurfaceFormat f = format();
+    f.setSwapInterval(on ? 0 : QSurfaceFormat::defaultFormat().swapInterval());
+    setFormat(f);
+  } else if (on && format().swapInterval() != 0) {
+    qWarning("SimRendererWidget::setDownCam(true) after the window exists: "
+             "swap interval stays %d, the down-cam will wait for vsync and "
+             "serialize frames with the main view",
+             format().swapInterval());
+  }
+  update();
+}
+
 void SimRendererWidget::setHudWidget(QWidget *w) {
   if (hud_)
     disconnect(hud_, nullptr, this, nullptr);
