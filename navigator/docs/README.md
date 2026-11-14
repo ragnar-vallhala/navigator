@@ -14,7 +14,8 @@ tells you how long it lives and how it's maintained:
   newcomers plus the formal requirements. Edited in place as the code changes;
   never deleted. Start with [`reference/gcs-architecture.md`](reference/gcs-architecture.md)
   for the whole-app picture; also `requirements.md`, `feature-matrix.md`,
-  `mockup-to-app.md`, and the `ui-mockup/` design prototype.
+  `mockup-to-app.md`, `flight-events.md` (the simulator's per-run event log
+  format), and the `ui-mockup/` design prototype.
 - **[plans/](plans/)** — *active plans* for in-flight work. Deleted once the
   feature ships. Empty for now.
 - **[journal/](journal/)** — *persistent, time-ordered record* kept to gauge
