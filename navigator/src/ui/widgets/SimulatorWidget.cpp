@@ -1274,24 +1274,28 @@ void SimulatorWidget::tryBuildCollision() {
     chunks.push_back(it->second);
   }
   m_collisionPending = false;
-  // Pads become solid landing surfaces (a few hundred verts: cheap here). The
-  // heavy concat + BVH build happen on the worker.
+  const float cm = m_chunkStreamer.config().chunkM;
+  const int rr = m_chunkStreamer.config().collisionRadius;
+  const QRectF window((m_colCx - rr) * cm, (m_colCy - rr) * cm,
+                      (2 * rr + 1) * cm, (2 * rr + 1) * cm);
+  // Pads become solid landing surfaces (a few hundred verts: cheap here). They
+  // are taken from the window being built, not from m_helipads: that list is
+  // centred on the view and refreshed lazily, so it can lag this window (or
+  // miss its far corners) and a pad the engine lacks lets the vehicle sink
+  // through the deck. The heavy concat + BVH build happen on the worker.
   std::vector<QVector3D> extra;
-  appendHelipadCollision(extra);
+  appendHelipadCollision(extra, window);
   // The local terrain just changed under the drone (spawn or a crossing); if
   // that left it buried it is re-dropped above the new surface -- but only once
   // this collision has actually reached the engine (async build), so the lift
   // never targets terrain the engine does not have yet. Self-guarded, so an
   // airborne or resting drone is untouched.
-  const float cm = m_chunkStreamer.config().chunkM;
-  const int rr = m_chunkStreamer.config().collisionRadius;
   WorldShipReq req;
   req.chunks = std::move(chunks);
   req.extra = std::move(extra);
   req.doubleSided = m_worldEditor->config().worldMeshDoubleSided;
   req.lift = true;
-  req.coverage = QRectF((m_colCx - rr) * cm, (m_colCy - rr) * cm,
-                        (2 * rr + 1) * cm, (2 * rr + 1) * cm);
+  req.coverage = window;
   enqueueShip(std::move(req));
 }
 
@@ -1307,13 +1311,25 @@ void SimulatorWidget::recomputeHelipads(float cx, float cy) {
   }
   // Home pad always at the origin — a deterministic, guaranteed drone spawn.
   m_homePad = QVector3D(0, 0, m_terrainHeightAt(0.0f, 0.0f));
-  m_helipads.push_back(m_homePad);
+  m_helipads = helipadsAround(cx, cy, 260.0f);
+  if (m_renderer)
+    m_renderer->setHelipads(m_helipads);
+  if (m_downRenderer)
+    m_downRenderer->setHelipads(m_helipads);
+}
+
+std::vector<QVector3D> SimulatorWidget::helipadsAround(float cx, float cy,
+                                                       float range) const {
+  std::vector<QVector3D> pads;
+  if (!m_terrainHeightAt)
+    return pads;
+  pads.push_back(QVector3D(0, 0, m_terrainHeightAt(0.0f, 0.0f)));
 
   // Deterministic coarse grid: one jittered candidate per cell, accepted on
   // flat enough ground. Mirrors the flora global-grid idea but far sparser, so
   // the same pads appear regardless of view history. Computed within kRange of
   // the view centre so pads stream in/out as you roam.
-  const float kGrid = 70.0f, kRange = 260.0f, kEps = 2.0f, kMaxSlope = 0.09f;
+  const float kGrid = 70.0f, kRange = range, kEps = 2.0f, kMaxSlope = 0.09f;
   const int kCandidates = 4; // probe several spots/cell, keep the flattest
   auto hash = [](int gx, int gy) -> uint32_t {
     uint32_t h = uint32_t(gx) * 0x9e3779b1u ^ uint32_t(gy) * 0x85ebca77u;
@@ -1365,17 +1381,22 @@ void SimulatorWidget::recomputeHelipads(float cx, float cy) {
         continue; // no flat-enough spot in this cell
       if ((bx - cx) * (bx - cx) + (by - cy) * (by - cy) > kRange * kRange)
         continue;
-      m_helipads.emplace_back(bx, by, m_terrainHeightAt(bx, by));
+      pads.emplace_back(bx, by, m_terrainHeightAt(bx, by));
     }
-  if (m_renderer)
-    m_renderer->setHelipads(m_helipads);
-  if (m_downRenderer)
-    m_downRenderer->setHelipads(m_helipads);
+  return pads;
 }
 
-void SimulatorWidget::appendHelipadCollision(
-    std::vector<QVector3D> &pos) const {
+void SimulatorWidget::appendHelipadCollision(std::vector<QVector3D> &pos,
+                                             const QRectF &window) const {
   const float R = vsim::SimRendererWidget::kHelipadRadiusM;
+  // Every pad of the window (pads are a pure function of the world, so the set
+  // does not depend on where the view has been); a margin of R keeps a pad
+  // straddling the edge, as the terrain under it is shipped too.
+  const QPointF mid = window.center();
+  const float reach =
+      float(std::hypot(window.width(), window.height()) * 0.5) + R;
+  const std::vector<QVector3D> pads =
+      helipadsAround(float(mid.x()), float(mid.y()), reach);
   const int N = 20; // collision tessellation (coarser than render is fine)
   // Every triangle is emitted with BOTH windings so it collides regardless of
   // the BVH's single/double-sided flag (the drone must rest on the deck top).
@@ -1387,7 +1408,10 @@ void SimulatorWidget::appendHelipadCollision(
     pos.push_back(c);
     pos.push_back(b);
   };
-  for (const QVector3D &pad : m_helipads) {
+  const QRectF reachRect = window.adjusted(-R, -R, R, R);
+  for (const QVector3D &pad : pads) {
+    if (!reachRect.contains(pad.x(), pad.y()))
+      continue;
     const float px = pad.x(), py = pad.y();
     const float zDeck =
         -pad.z() - vsim::SimRendererWidget::kHelipadDeckM; // top

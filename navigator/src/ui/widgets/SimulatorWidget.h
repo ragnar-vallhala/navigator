@@ -477,9 +477,13 @@ private:
   QVector3D m_lastHelipadCenter{1e9f, 1e9f,
                                 0}; // recompute only when view moves
   void recomputeHelipads(float cx, float cy);
+  // The pads within `range` metres of (cx, cy), home pad first: a pure function
+  // of the world's terrain, so any window can ask for exactly its own pads.
+  std::vector<QVector3D> helipadsAround(float cx, float cy, float range) const;
   // Append each helipad's solid cylinder (deck cap + side wall, double-sided) to
   // a collision triangle-soup so the drone physically lands on the pads.
-  void appendHelipadCollision(std::vector<QVector3D> &positions) const;
+  void appendHelipadCollision(std::vector<QVector3D> &positions,
+                              const QRectF &window) const;
   // NED z of the landing surface at (x,y): pad top when over a helipad, else
   // the terrain surface. Used by spawn/reset and the lift-onto-surface logic.
   float landingSurfaceZ(float x, float y) const;
