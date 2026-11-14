@@ -23,6 +23,7 @@
 #include "../../vsim/MeshLoader.h"
 #include "../../vsim/VehicleJson.h"
 #include "CollapsibleSection.h"
+#include "FlowLayout.h"
 
 #include <QComboBox>
 #include <QDoubleSpinBox>
@@ -70,7 +71,7 @@ void GeometryEditorWidget::buildUi() {
 
   // -- Save / Load vehicle (portable JSON, cross-project) --
   {
-    auto *row = new QHBoxLayout();
+    auto *row = new ui::FlowLayout(); // wraps when the panel is narrow
     auto *save = new ui::GhostButton(tr("Save Vehicle…"), this);
     save->setToolTip(tr("Export this vehicle (mesh path, transform, mass, "
                         "inertia, motors) to a portable .vveh file."));
@@ -79,8 +80,9 @@ void GeometryEditorWidget::buildUi() {
         tr("Import a vehicle .vveh file, e.g. from another project."));
     row->addWidget(save);
     row->addWidget(load);
-    row->addSpacing(12);
-    row->addWidget(new QLabel(tr("Preset:"), this));
+    auto *presetLay = new QHBoxLayout();
+    presetLay->setSpacing(4);
+    presetLay->addWidget(new QLabel(tr("Preset:"), this));
     presetCombo_ = new QComboBox(this);
     presetCombo_->setToolTip(
         tr("Load a built-in airframe (geometry; its tuned PID gains are sent "
@@ -88,8 +90,8 @@ void GeometryEditorWidget::buildUi() {
     presetCombo_->addItem(tr("Custom"), QString());
     for (const auto &p : vsim::airframePresets())
       presetCombo_->addItem(p.name, p.id);
-    row->addWidget(presetCombo_);
-    row->addStretch();
+    presetLay->addWidget(presetCombo_);
+    row->addItem(presetLay);
     root->addLayout(row);
     connect(save, &QPushButton::clicked, this,
             &GeometryEditorWidget::onSaveFile);
@@ -115,16 +117,19 @@ void GeometryEditorWidget::buildUi() {
     meshRow->addWidget(browse);
     v->addLayout(meshRow);
 
-    auto *numRow = new QHBoxLayout();
-    numRow->addWidget(new QLabel(tr("Scale (m/unit):"), g));
+    // Wraps when narrow: each label + field stays together on one line.
+    auto *numRow = new ui::FlowLayout();
+    auto pair = [g, numRow](const QString &label, QWidget *field) {
+      auto *l = new QHBoxLayout();
+      l->setSpacing(4);
+      l->addWidget(new QLabel(label, g));
+      l->addWidget(field);
+      numRow->addItem(l);
+    };
     scaleSpin_ = spin(1e-4, 1e4, 4, 0.1, 1.0);
-    numRow->addWidget(scaleSpin_);
-    numRow->addSpacing(12);
-    numRow->addWidget(new QLabel(tr("Mass:"), g));
+    pair(tr("Scale (m/unit):"), scaleSpin_);
     massSpin_ = spin(0.01, 100.0, 3, 0.05, 1.0, QStringLiteral(" kg"));
-    numRow->addWidget(massSpin_);
-    numRow->addSpacing(12);
-    numRow->addWidget(new QLabel(tr("Prop radius:"), g));
+    pair(tr("Mass:"), massSpin_);
     // Range matches the renderer/model clamp (buildDroneModel: 0.004-0.5 m).
     propRadiusSpin_ = spin(0.004, 0.5, 5, 0.005, 0.0622, QStringLiteral(" m"));
     propRadiusSpin_->setObjectName(QStringLiteral("propRadiusSpin"));
@@ -132,8 +137,7 @@ void GeometryEditorWidget::buildUi() {
         tr("Propeller radius (half the prop diameter). Sizes the drawn rotor "
            "discs and, in the simulator, ground effect and the contact "
            "footprint."));
-    numRow->addWidget(propRadiusSpin_);
-    numRow->addStretch();
+    pair(tr("Prop radius:"), propRadiusSpin_);
     auto *compute = new ui::PrimaryButton(tr("Load && Compute"), g);
     numRow->addWidget(compute);
     v->addLayout(numRow);
@@ -170,11 +174,13 @@ void GeometryEditorWidget::buildUi() {
 
     comLbl_ = new QLabel(g);
     comLbl_->setStyleSheet("font-family:monospace;");
+    comLbl_->setWordWrap(true); // long readout wraps instead of widening the panel
     v->addWidget(comLbl_);
 
     inertiaLbl_ = new QLabel(g);
     inertiaLbl_->setStyleSheet(QString("font-family:monospace; color:%1;")
                                    .arg(Theme::hex(Theme::kAccent)));
+    inertiaLbl_->setWordWrap(true);
     v->addWidget(inertiaLbl_);
 
     sec->setContentWidget(g);

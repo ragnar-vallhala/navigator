@@ -41,7 +41,7 @@ viewLay->addWidget(m_pipRail);
 
 m_renderer = new vsim::SimRendererWidget();
 m_rendererBox = QWidget::createWindowContainer(m_renderer, viewHost);
-m_rendererBox->setMinimumSize(400, 300);
+m_rendererBox->setMinimumSize(300, 300); // narrow enough for a laptop screen
 new NativeClip(m_rendererBox, m_renderer); // a short dock area must not let it overflow
 m_rendererBox->setFocusPolicy(Qt::StrongFocus); // G/R/X/Y/Z/Esc/WASD
 viewLay->addWidget(m_rendererBox, 1);
