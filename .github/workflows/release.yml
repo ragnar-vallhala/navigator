@@ -55,10 +55,10 @@ permissions:
 env:
   # The nav release bundled with Navigator (public repo ragnar-vallhala/nav).
   # The build needs a tag that carries nav-<ver>-Linux.deb, nav-<ver>-win64.zip
-  # and SHA256SUMS (nav PR #11 and later). v1.3.1 predates that layout, so the
-  # fetch step FAILS with an explanation until this is bumped to the first tag
-  # cut after it: that is intended, an unverifiable binary is not bundled.
-  NAV_VERSION: '1.3.1'
+  # and SHA256SUMS (nav PR #11 and later; v1.4.0 is the first). A tag from
+  # before that layout makes the fetch step FAIL with an explanation: that is
+  # intended, an unverifiable binary is not bundled.
+  NAV_VERSION: '1.4.0'
   # Firmware the SITL module comes from: keep equal to VAYU_FW_VERSION in ci.yml.
   VAYU_FW_VERSION: v0.2.1
 
