@@ -617,6 +617,9 @@ private slots:
   // had no collision in the engine and the vehicle sank through its deck to the
   // terrain (about 0.9 m low). Hills seed 5: pads taken from the live list,
   // each dropped on 1 m above its deck.
+  // Manual test: like the rest of this file it skips offscreen, so a CI pass
+  // does not cover it. Run it under xcb on a private display with the engine
+  // module (about a minute).
   void dropOnEveryPadRestsOnDeck() {
     if (!gl_)
       QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
