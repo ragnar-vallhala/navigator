@@ -75,6 +75,8 @@ public:
   void teleport(float x, float y, float up) {
     w_.placeVehicle(x, y, -(w_.m_terrainHeightAt(x, y) + up));
   }
+  // Place the running vehicle at an explicit NED pose, as the UI does.
+  void placeAt(float x, float y, float z) { w_.placeVehicle(x, y, z); }
   // Make every collision build take at least `ms` (a slow runner, on demand).
   void shipDelay(int ms) { w_.m_testShipDelayMs = ms; }
   bool running() const { return w_.m_sim != nullptr; }
@@ -607,6 +609,64 @@ private slots:
     const QVector3D p = a_->lastPos();
     const float alt = -p.z() - a_->groundAt(p.x(), p.y());
     QVERIFY2(alt >= -0.3f && alt < 3.0f, "not resting on the terrain");
+  }
+
+  // A vehicle dropped on ANY helipad (not just the home one) must rest on its
+  // deck. The pad collision used to be built from the pad list as it stood
+  // before the view followed the placement, so a pad the list did not yet hold
+  // had no collision in the engine and the vehicle sank through its deck to the
+  // terrain (about 0.9 m low). Hills seed 5: pads taken from the live list,
+  // each dropped on 1 m above its deck.
+  void dropOnEveryPadRestsOnDeck() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    if (!SitlModule::instance().available())
+      QSKIP("no engine module (set VAYU_SITL_MODULE)");
+    a_->changeWorld([](vsim::WorldConfig &c) {
+      QVERIFY(vsim::applyWorldPreset(c, QStringLiteral("hills"), 5));
+    });
+    if (!a_->running()) {
+      a_->start();
+      QVERIFY(a_->running());
+    }
+    QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 30000));
+    pump(1500);
+    const float kDeckM = vsim::SimRendererWidget::kHelipadDeckM;
+    int failed = 0;
+    // Two passes over the first ten non-home entries of the pad list, read
+    // afresh before every drop: the view (and with it the list) follows the
+    // vehicle, so the pads dropped on are not the ones known at Start and the
+    // collision window in force was planned around a different list.
+    const int kPasses = 2, kPerPass = 10;
+    int hops = 0;
+    for (int i = 0; i < kPasses * kPerPass; ++i) {
+      const std::vector<QVector3D> pads = a_->pads(); // a copy: the list moves
+      QVERIFY2(pads.size() > 3, "the world has no pads to drop on");
+      const QVector3D pad = pads[size_t(1 + i % kPerPass) % pads.size()];
+      ++hops;
+      const float deck = -pad.z() - kDeckM; // NED z of this pad's deck top
+      a_->placeAt(pad.x(), pad.y(), deck - 1.0f);
+      QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 30000));
+      pump(2500); // fall (~0.5 s) and settle
+      const QVector3D p = a_->lastPos();
+      const float rest = p.z() - deck; // negative: above the deck
+      qInfo("hop %d (%.1f %.1f): rest z - deck = %.3f", i,
+            static_cast<double>(pad.x()), static_cast<double>(pad.y()),
+            static_cast<double>(rest));
+      if (std::hypot(p.x() - pad.x(), p.y() - pad.y()) > 3.0f ||
+          std::fabs(rest + 0.04f) > 0.06f) {
+        ++failed;
+        qWarning("hop %d (%.1f %.1f): vehicle at (%.1f %.1f) rest %.3f", i,
+                 static_cast<double>(pad.x()), static_cast<double>(pad.y()),
+                 static_cast<double>(p.x()), static_cast<double>(p.y()),
+                 static_cast<double>(rest));
+      }
+    }
+    QVERIFY2(failed == 0,
+             qPrintable(QStringLiteral("%1 of %2 pad drops did not rest on "
+                                       "the deck")
+                            .arg(failed)
+                            .arg(hops)));
   }
 
   // Stop, then change the world again with the sim stopped.
