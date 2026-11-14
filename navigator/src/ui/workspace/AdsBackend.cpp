@@ -16,6 +16,7 @@
  */
 #include "AdsBackend.h"
 
+#include "PanelFrame.h"
 #include "ScreenClamp.h"
 
 #include <DockAreaWidget.h>
@@ -303,8 +304,13 @@ void AdsBackend::rebuild() {
     dw->setFeature(ads::CDockWidget::DockWidgetClosable, true);
     p.dock = dw;
     applyFixed(p);
-    if (p.widget)
-      dw->setWidget(p.widget, ads::CDockWidget::ForceNoScrollArea);
+    if (p.widget) {
+      // The panel's content minimum (capped, see PanelFrame) is the dock
+      // widget's minimum, not ADS's default 60x40.
+      dw->setWidget(new PanelFrame(p.widget),
+                    ads::CDockWidget::ForceNoScrollArea);
+      dw->setMinimumSizeHintMode(ads::CDockWidget::MinimumSizeHintFromContent);
+    }
     QObject::connect(dw, &ads::CDockWidget::viewToggled, m_dm.data(),
                      [this] { layoutChanged(); });
     QObject::connect(dw, &ads::CDockWidget::topLevelChanged, m_dm.data(),

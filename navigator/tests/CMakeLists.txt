@@ -401,6 +401,12 @@ if(TARGET navigator_workspace)
     target_link_libraries(tst_dock_shell PRIVATE navigator_workspace)
 endif()
 
+# Panels hosted by AdsBackend keep a content minimum size (PanelFrame).
+if(TARGET navigator_workspace)
+    navigator_test(tst_panel_min_size tst_panel_min_size.cpp)
+    target_link_libraries(tst_panel_min_size PRIVATE navigator_workspace)
+endif()
+
 # QOpenGLWidget inside the dock layer: skips on "offscreen" (see the file).
 if(TARGET navigator_workspace)
     navigator_test(tst_workspace_gl tst_workspace_gl.cpp
