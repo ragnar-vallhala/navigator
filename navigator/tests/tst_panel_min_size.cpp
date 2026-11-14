@@ -148,7 +148,9 @@ private slots:
                        m_dir.path());
   }
 
-  // The stand-ins really have the content minimum the table says.
+  // Only checks that the stand-ins were built to the table: the table holds the
+  // sizes measured in the real app at one point in time, so this proves nothing
+  // about the real panels, and the numbers go stale as panels change.
   void standInsMatchTable() {
     for (const PanelMin &p : kPanels) {
       QScopedPointer<QWidget> w(makePanel(p));
