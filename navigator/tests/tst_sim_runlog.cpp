@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 // Per-run log files of the real SimulatorWidget (gt-<stamp>.bin + ev-<stamp>.jsonl).
+// MANUAL xcb test: it skips offscreen, so a CI pass does not cover it.
 //
 //  - missingModuleLeavesNoLogs: a Start whose engine module cannot load must
 //    leave no gt/ev files (run with VAYU_SITL_MODULE pointing at a missing
