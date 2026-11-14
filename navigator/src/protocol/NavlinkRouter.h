@@ -18,6 +18,8 @@
 
 #include "core/Types.h" // AttitudeData, ...
 #include <QByteArray>
+#include <QString>
+#include <cstdint>
 #include <functional>
 
 // The single home for the GCS's NavLink v2 *receive* handler table. This is the
@@ -54,7 +56,36 @@ public:
   // (frame sysid) drive link liveness. The owner maps nav_state -> state name.
   std::function<void(uint8_t navState, uint64_t timestamp, uint8_t deviceId)>
       onHeartbeat;
-  std::function<void(const QString &line)> onLog; // STATUSTEXT
+  // STATUSTEXT, after chunk reassembly. onStatusText gets the severity (the
+  // navlink `severity` enum), the group id and the whole text; onLog is fed the
+  // same message as one display line prefixed with the severity, "[ERR] text".
+  std::function<void(uint8_t severity, uint16_t id, const QString &text)>
+      onStatusText;
+  std::function<void(const QString &line)> onLog;
+  // The id only groups the chunks of one message; it is not a fault id.
+  // Syslog-style label for a severity value ("ERR", "WARN", ...; "SEV n" if
+  // unknown).
+  static QString severityLabel(uint8_t severity);
+
+  // STATUSTEXT reassembly (see NavlinkRouter.cpp for the assumed convention).
+  // Called by the decoder thunk; public so the file-scope thunk can reach it.
+  void handleStatusText(uint8_t severity, uint16_t id, uint8_t chunkSeq,
+                        const char *text, size_t textCap);
+  // Emit every pending group whose first chunk is older than kStatusTextStaleMs
+  // as an incomplete message. feed() calls this on every frame; DroneProtocol
+  // also calls it from a 500 ms timer on the router's thread, so a message cut
+  // off by a quiet link still reaches the log.
+  void flushStale(qint64 nowMs);
+  void flushStale(); // same, using clockMs (default: monotonic clock)
+  // Emit every pending group now, oldest first, as incomplete. Call on link
+  // loss / close, before any state is dropped, so no text is lost.
+  void flushAll();
+  // Time source in ms (default: steady clock); tests inject a fake one.
+  std::function<qint64()> clockMs;
+
+  static constexpr qint64 kStatusTextStaleMs = 2000;
+  static constexpr int kStatusTextMaxGroups = 8;
+  static constexpr int kStatusTextMaxBytes = 1024; // pending text, all groups
   // FAULT_STATUS: one raised/cleared fault, name resolved from faults.json.
   std::function<void(const FaultEvent &)> onFault;
   std::function<void(const CalibrationUpdate &)> onCalibration;

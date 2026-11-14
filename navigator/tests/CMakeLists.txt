@@ -436,6 +436,12 @@ navigator_test(tst_faults
 target_include_directories(tst_faults PRIVATE ${SRC}/ui/widgets)
 target_link_libraries(tst_faults PRIVATE navlink_codec)
 
+# ---- STATUSTEXT: severity prefix + multi-chunk reassembly -----------------
+navigator_test(tst_statustext
+    tst_statustext.cpp
+    ${SRC}/protocol/NavlinkRouter.cpp)
+target_link_libraries(tst_statustext PRIVATE navlink_codec)
+
 # ---- World change leaves the vehicle on the ground (SITL builds only) -------
 # Drives the real SimulatorWidget (the Navigator sources minus main.cpp, built
 # a second time here: the widget is not in a library) through World-tab changes,
