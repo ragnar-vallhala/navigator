@@ -31,6 +31,7 @@
 
 #include "SimulatorWidget.h"
 
+#include <QLayout>
 #include <QApplication>
 #include <QScrollArea>
 #include <QSplitter>
@@ -110,6 +111,9 @@ private slots:
   void pageResizesToASmallWindow() {
     // Not shown: the page holds a GL window that cannot be created on a
     // runner without GL. A resize is clamped to the minimum size either way.
+    // Activate first so the minimum size is applied to the hidden page.
+    if (w_->layout())
+      w_->layout()->activate();
     w_->resize(1000, 600);
     QVERIFY2(w_->width() <= 1000,
              qPrintable(QString("page forced to %1 px wide").arg(w_->width())));
