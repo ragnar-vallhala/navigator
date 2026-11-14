@@ -24,6 +24,7 @@
 #include <QMap>
 
 #include <algorithm>
+#include <cstdlib>
 
 namespace vsim {
 
@@ -100,7 +101,7 @@ bool FlightEventLog::rc(qint64 tUs, const QVector<int> &channels,
                         const QString &source) {
   if (!m_file.isOpen())
     return false;
-  const bool changed = !m_haveRc || channels != m_lastRc;
+  const bool changed = !m_haveRc || rcChanged(m_lastRc, channels);
   if (!changed && tUs - m_lastRcT < kRcPeriodUs)
     return false;
   QJsonArray a;
@@ -191,6 +192,37 @@ QList<FlightEventLog::Run> FlightEventLog::listRuns(const QString &dir) {
   for (auto it = byStamp.cend(); it != byStamp.cbegin();) // newest first
     out.append(*--it);
   return out;
+}
+
+bool FlightEventLog::rcChanged(const QVector<int> &last,
+                               const QVector<int> &now) {
+  if (last.size() != now.size())
+    return true;
+  for (int i = 0; i < now.size(); ++i) {
+    const int d = std::abs(now[i] - last[i]);
+    if (i >= kRcFirstSwitch ? d != 0 : d > kRcDeadbandUs)
+      return true;
+  }
+  return false;
+}
+
+int FlightEventLog::countEvents(const QString &evPath, qint64 capBytes,
+                                bool *capped) {
+  if (capped)
+    *capped = false;
+  QFile f(evPath);
+  if (!f.open(QIODevice::ReadOnly))
+    return 0;
+  int lines = 0;
+  qint64 left = capBytes;
+  while (!f.atEnd() && left > 0) {
+    const QByteArray b = f.read(std::min<qint64>(1 << 16, left));
+    lines += b.count('\n');
+    left -= b.size();
+  }
+  if (capped && !f.atEnd())
+    *capped = true;
+  return std::max(0, lines - 1);
 }
 
 int FlightEventLog::countEvents(const QString &evPath) {

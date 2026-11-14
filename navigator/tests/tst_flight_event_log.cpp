@@ -167,6 +167,54 @@ private slots:
     QCOMPARE(FlightEventLog::countEvents(p), 13);
   }
 
+  void rcDeadbandIgnoresJitterButCatchesSteps() {
+    QTemporaryDir dir;
+    const QString p = dir.filePath("ev-db.jsonl");
+    FlightEventLog log;
+    QVERIFY(log.open(p, header()));
+    QVERIFY(log.rc(0, {1500, 1500, 1000, 1500, 1500, 1000}, "joystick"));
+    // +-1 / +-2 jitter on analog channels, 5 ms apart for 90 ms: no lines.
+    for (int i = 1; i <= 18; ++i) {
+      const int j = (i % 2) ? 2 : -2;
+      QVERIFY(!log.rc(i * 5000, {1500 + j, 1500 - j / 2, 1000 + j, 1500, 1500, 1000},
+                      "joystick"));
+    }
+    // Only the 10 Hz floor writes (identical to the last written within band).
+    QVERIFY(log.rc(100000, {1502, 1499, 1002, 1500, 1500, 1000}, "joystick"));
+    // Drift is measured against the last WRITTEN value: 1502 -> 1505 is a step of 3.
+    QVERIFY(log.rc(100100, {1505, 1499, 1002, 1500, 1500, 1000}, "joystick"));
+    // A step of 3 from the last written value writes immediately.
+    QVERIFY(!log.rc(100200, {1507, 1499, 1002, 1500, 1500, 1000}, "joystick"));
+    QVERIFY(log.rc(100300, {1509, 1499, 1002, 1500, 1500, 1000}, "joystick"));
+    // The arm channel and ch6 count on any change.
+    QVERIFY(log.rc(100400, {1509, 1499, 1002, 1500, 1501, 1000}, "joystick"));
+    QVERIFY(log.rc(100500, {1509, 1499, 1002, 1500, 1501, 1001}, "joystick"));
+    log.close();
+    QVERIFY(!FlightEventLog::rcChanged({1000}, {1002}));
+    QVERIFY(FlightEventLog::rcChanged({1000}, {1003}));
+    QVERIFY(FlightEventLog::rcChanged({1000}, {1000, 1000}));
+  }
+
+  void cappedCountAndLiveRun() {
+    QTemporaryDir dir;
+    const QString p = dir.filePath("ev-cap.jsonl");
+    FlightEventLog log;
+    QVERIFY(log.open(p, header()));
+    for (int i = 0; i < 200; ++i)
+      log.marker(i, "m");
+    log.close();
+    bool capped = true;
+    QCOMPARE(FlightEventLog::countEvents(p, 1 << 20, &capped), 200);
+    QVERIFY(!capped);
+    const int n = FlightEventLog::countEvents(p, 1000, &capped);
+    QVERIFY(capped);
+    QVERIFY(n > 0 && n < 200);
+    QVERIFY(FlightEventLog::isLiveRun("a", "a", true));
+    QVERIFY(!FlightEventLog::isLiveRun("a", "a", false));
+    QVERIFY(!FlightEventLog::isLiveRun("a", "b", true));
+    QVERIFY(!FlightEventLog::isLiveRun("", "", true));
+  }
+
   void backwardsTimestampIsClamped() {
     QTemporaryDir dir;
     const QString p = dir.filePath("ev-t.jsonl");

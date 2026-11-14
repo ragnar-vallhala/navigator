@@ -52,7 +52,7 @@ Every event has `t_us` (int, µs) and `kind`.
 | kind | extra fields | when |
 | --- | --- | --- |
 | `start` | none | right after the header (`t_us` 0) |
-| `rc` | `channels` (int array, µs, order roll, pitch, throttle, yaw, arm, ch6), `source` (`"joystick"`, `"uart"`, or `"disabled"` when RC is switched off in the UI) | when any channel changes, and at least every 100 ms (10 Hz) otherwise while the run is live |
+| `rc` | `channels` (int array, µs, order roll, pitch, throttle, yaw, arm, ch6), `source` (`"joystick"`, `"uart"`, or `"disabled"` when RC is switched off in the UI) | when a channel changes, and at least every 100 ms (10 Hz) otherwise while the run is live. Analog channels (roll, pitch, throttle, yaw) count as changed only when they differ by more than 2 µs from the last *written* value (joystick jitter is ignored, slow drift is not); any change of the arm channel or ch6 counts |
 | `mode` | `from` (string or null for the first report), `to`, `source` (`"rc"` or `"gcs"`) | the firmware reports a different flight mode (`STABILISE`, `ACRO`) or mode source |
 | `arm` | `armed` (bool) | the armed state seen in telemetry changes |
 | `fault` | `id` (string), `active` (bool), `detail` (string or null) | a simulator fault is injected (`active` true) or cleared |
@@ -117,6 +117,7 @@ Only files named exactly `gt-*.bin` or `ev-*.jsonl` in the log directory are
 ever touched, and never the run that is opening. The limit counts the new run.
 
 The **Flights** list under the log path shows the runs found in the log
-directory, newest first, with the size of both files and the event count, and
+directory, newest first, with the size of both files (the event count of the
+selected run is shown under the list, read capped at 4 MB, `>N` if capped), and
 buttons **Open folder**, **Copy path** and **Delete** (asks first; deletes both
-files of the run; the run being recorded cannot be deleted).
+files of the run; the run being recorded cannot be deleted, even if its `ev` file failed to open).

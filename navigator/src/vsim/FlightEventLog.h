@@ -37,6 +37,11 @@ class FlightEventLog {
 public:
   static constexpr const char *kSchema = "nav-flight-events/1";
   static constexpr qint64 kRcPeriodUs = 100000; // 10 Hz while live
+  // An analog RC channel (microseconds, 1000..2000) counts as changed only if
+  // it moved by more than this from the last WRITTEN value (joystick jitter).
+  static constexpr int kRcDeadbandUs = 2;
+  // Channels that are switches (arm, ch6): any change counts.
+  static constexpr int kRcFirstSwitch = 4;
 
   struct Header {
     QString runId;
@@ -94,6 +99,17 @@ public:
   static QList<Run> listRuns(const QString &dir);
   // Number of event lines after the header (cheap: counts newlines).
   static int countEvents(const QString &evPath);
+  // Capped variant for the GUI thread: reads at most `capBytes`; *capped is set
+  // when the file was longer (the count is then a lower bound).
+  static int countEvents(const QString &evPath, qint64 capBytes, bool *capped);
+  // True when `stamp` is the run being recorded (never delete such a run).
+  static bool isLiveRun(const QString &stamp, const QString &currentStamp,
+                        bool recording) {
+    return recording && !stamp.isEmpty() && stamp == currentStamp;
+  }
+  // The rc change test (exposed for tests): last written vs new channels.
+  static bool rcChanged(const QVector<int> &lastWritten,
+                        const QVector<int> &now);
   // Deletes the oldest runs (by stamp) so at most `keep` remain, never the run
   // `protectStamp` (which counts toward `keep`). keep <= 0 keeps everything.
   // Returns the number of files removed.

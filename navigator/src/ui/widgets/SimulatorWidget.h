@@ -404,6 +404,8 @@ private:
   QString m_lastModeStr;
   QPushButton *m_markerBtn = nullptr;
   QListWidget *m_flightsList = nullptr;
+  QLabel *m_flightsInfo = nullptr; // event count of the selected run
+  QString m_runStamp;              // stamp of the run being recorded, or ""
   QSpinBox *m_logKeepSpin = nullptr;
   int m_logKeepRuns = 50;
 

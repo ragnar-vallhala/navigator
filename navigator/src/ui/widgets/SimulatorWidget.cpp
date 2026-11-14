@@ -2740,6 +2740,7 @@ void SimulatorWidget::openNewLogFile() {
   // Retention first (never the run opening now), then the events sidecar.
   vsim::FlightEventLog::prune(m_logDir, m_logKeepRuns, stamp);
   m_lastModeStr.clear();
+  m_runStamp = stamp; // the run being recorded, whether or not ev opened
   m_stopReason = QStringLiteral("user");
   if (!m_events.open(dir.absoluteFilePath(QString("ev-%1.jsonl").arg(stamp)),
                      eventHeader(stamp)))
@@ -2835,6 +2836,7 @@ void SimulatorWidget::closeLogFile() {
     if (m_markerBtn)
       m_markerBtn->setEnabled(false);
   }
+  m_runStamp.clear();
   if (!m_runLog) {
     refreshFlights();
     return;
@@ -2852,6 +2854,8 @@ void SimulatorWidget::refreshFlights() {
   if (!m_flightsList)
     return;
   m_flightsList->clear();
+  if (m_flightsInfo)
+    m_flightsInfo->clear();
   const auto kb = [](qint64 b) {
     return b >= 1024 * 1024 ? QString("%1 MB").arg(b / 1048576.0, 0, 'f', 1)
                             : QString("%1 KB").arg((b + 1023) / 1024);
@@ -2862,12 +2866,11 @@ void SimulatorWidget::refreshFlights() {
                                : QString("   gt: %1").arg(kb(r.gtBytes));
     text += r.evPath.isEmpty()
                 ? QStringLiteral("   ev: -")
-                : QString("   ev: %1, %2 events")
-                      .arg(kb(r.evBytes))
-                      .arg(vsim::FlightEventLog::countEvents(r.evPath));
+                : QString("   ev: %1").arg(kb(r.evBytes));
     auto *it = new QListWidgetItem(text, m_flightsList);
     it->setData(Qt::UserRole, r.gtPath.isEmpty() ? r.evPath : r.gtPath);
     it->setData(Qt::UserRole + 1, r.stamp);
+    it->setData(Qt::UserRole + 2, r.evPath);
   }
 }
 

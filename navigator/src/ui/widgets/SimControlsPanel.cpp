@@ -536,6 +536,10 @@ void SimulatorWidget::buildSimControls(QWidget *host) {
   m_flightsList->setStyleSheet(
       QStringLiteral("font-family: monospace; font-size: 11px;"));
   sv->addWidget(m_flightsList);
+  m_flightsInfo = new QLabel(simBody);
+  m_flightsInfo->setStyleSheet(
+      QStringLiteral("font-family: monospace; font-size: 11px;"));
+  sv->addWidget(m_flightsInfo);
   auto *flightRow = new QHBoxLayout();
   auto *fOpen = new ui::GhostButton(tr("Open folder"), simBody);
   auto *fCopy = new ui::GhostButton(tr("Copy path"), simBody);
@@ -547,9 +551,24 @@ void SimulatorWidget::buildSimControls(QWidget *host) {
   flightRow->addStretch();
   sv->addLayout(flightRow);
   connect(m_flightsList, &QListWidget::currentItemChanged, this,
-          [fOpen, fCopy, fDel](QListWidgetItem *cur) {
+          [this, fOpen, fCopy, fDel](QListWidgetItem *cur) {
             for (auto *b : {fOpen, fCopy, fDel})
               b->setEnabled(cur != nullptr);
+            m_flightsInfo->clear();
+            if (!cur)
+              return;
+            const QString stamp = cur->data(Qt::UserRole + 1).toString();
+            fDel->setEnabled(!vsim::FlightEventLog::isLiveRun(
+                stamp, m_runStamp, !m_runStamp.isEmpty()));
+            // Event count only for the selected run, read capped (GUI thread).
+            const QString ev = cur->data(Qt::UserRole + 2).toString();
+            if (ev.isEmpty())
+              return;
+            constexpr qint64 kCap = 4 * 1024 * 1024;
+            bool capped = false;
+            const int n = vsim::FlightEventLog::countEvents(ev, kCap, &capped);
+            m_flightsInfo->setText(
+                tr("%1: %2%3 events").arg(stamp, capped ? ">" : "").arg(n));
           });
   connect(fOpen, &QPushButton::clicked, this, [this] {
     QDesktopServices::openUrl(QUrl::fromLocalFile(m_logDir));
@@ -563,7 +582,8 @@ void SimulatorWidget::buildSimControls(QWidget *host) {
     if (!it)
       return;
     const QString stamp = it->data(Qt::UserRole + 1).toString();
-    if (m_events.isOpen() && m_events.path().contains(stamp)) {
+    if (vsim::FlightEventLog::isLiveRun(stamp, m_runStamp,
+                                        !m_runStamp.isEmpty())) {
       QMessageBox::information(this, tr("Delete flight"),
                                tr("This run is still being recorded."));
       return;
