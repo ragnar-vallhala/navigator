@@ -1611,6 +1611,8 @@ void MainWindow::onUiTimer() {
     }
     if (s.armed != m_armed) {
       m_armed = s.armed;
+      if (m_simulatorWidget)
+        m_simulatorWidget->noteArmed(m_armed);
       if (m_faultsPanel)
         m_faultsPanel->setArmed(m_armed);
       if (m_toolbar)

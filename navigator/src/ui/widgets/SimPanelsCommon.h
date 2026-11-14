@@ -214,6 +214,9 @@ inline void pushFirmwareMotorGeometry(const vsim::GeometryConfig &g) {
 
 inline constexpr const char *kRepoRootSettingKey = "simulator/repoRoot";
 inline constexpr const char *kLogDirSettingKey = "simulator/logDir";
+// How many runs (gt-*.bin + ev-*.jsonl pairs) to keep in the log dir; 0 = all.
+inline constexpr const char *kLogKeepRunsSettingKey = "simulator/logKeepRuns";
+inline constexpr int kLogKeepRunsDefault = 50;
 inline constexpr const char *kGeomGroup = "simulator/geometry";
 inline constexpr const char *kWorldGroup = "simulator/world";
 inline constexpr const char *kAudioKey = "simulator/propAudio";

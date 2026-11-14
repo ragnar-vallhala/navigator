@@ -26,6 +26,7 @@
 #include "vsim/ChunkStreamer.h"
 #include "vsim/procgen/Flora.h"
 #include "vsim/RcBridge.h"
+#include "vsim/FlightEventLog.h"
 #include "GeometryEditorWidget.h"
 #include "WorldEditorWidget.h"
 #include "SimHudWidget.h"
@@ -68,6 +69,7 @@ class QSlider;
 class QComboBox;
 class QSpinBox;
 class QPlainTextEdit;
+class QListWidget;
 class QProcess;
 class SimViewPanel;
 class SimVehiclePanel;
@@ -189,6 +191,11 @@ public slots:
   // syncs the Acro checkbox without re-issuing a command, and shows the source
   // (RC switch vs GCS override).
   void setFlightModeStatus(quint8 mode, quint8 source);
+  // Armed state as the GCS sees it (edge from the telemetry snapshot); recorded
+  // in the run's flight event log. No-op while no run is logging.
+  void noteArmed(bool armed);
+  // Free-text marker into the run's flight event log (no-op without a run).
+  void addMarker(const QString &text);
 
   // Set the prop-audio default (Settings ▸ Alerts ▸ Sim prop audio). Drives the
   // in-panel "Prop audio" checkbox, which in turn enables PropAudio.
@@ -336,6 +343,12 @@ private:
   // firmware/docs/journal/log-analysis/parse_gt.py.
   void openNewLogFile();
   void closeLogFile();
+  // ---- flight events (ev-*.jsonl next to gt-*.bin) ----
+  qint64 runUs() const { return m_runClock.nsecsElapsed() / 1000; }
+  void logFault(const QString &id, bool active, const QString &detail = {});
+  vsim::FlightEventLog::Header eventHeader(const QString &stamp) const;
+  void refreshFlights();
+  void onMarkerClicked();
   // Append one ground-truth record for this pose snapshot (no-op if no log open).
   void logGroundTruth(vsim::SimSnapshot snap);
 
@@ -386,6 +399,13 @@ private:
   std::unique_ptr<QFile> m_runLog;  // open while sim running
   qint64 m_runLogBytes = 0;
   QElapsedTimer m_runClock; // monotonic per-record t_us base
+  vsim::FlightEventLog m_events; // ev-*.jsonl, same stamp + t_us base as gt
+  QString m_stopReason = QStringLiteral("user"); // recorded in the stop event
+  QString m_lastModeStr;
+  QPushButton *m_markerBtn = nullptr;
+  QListWidget *m_flightsList = nullptr;
+  QSpinBox *m_logKeepSpin = nullptr;
+  int m_logKeepRuns = 50;
 
   // ---- shared iface + in-app sim ----
 
