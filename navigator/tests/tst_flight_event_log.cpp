@@ -338,6 +338,111 @@ private slots:
     QCOMPARE(FlightEventLog::listRuns(d).size(), 4);
     QCOMPARE(FlightEventLog::prune(d, -1, ""), 0);
   }
+
+  // ---- unique run names ----------------------------------------------------
+  // Two runs opened at the very same instant (the same second, even the same
+  // millisecond) get different names; neither file is overwritten; gt and ev
+  // of a run share the stamp; listRuns returns newest first.
+  void sameSecondRunsGetDistinctNames() {
+    QTemporaryDir dir;
+    const QString d = dir.path();
+    const QDateTime t0(QDate(2026, 11, 15), QTime(10, 0, 0, 100));
+    QList<QString> stamps;
+    for (int i = 0; i < 5; ++i) {
+      // Starts 0, 150, 300, 450 ms apart (same second) plus a repeat of t0.
+      const QDateTime when = t0.addMSecs(i == 4 ? 0 : i * 150);
+      QFile gt;
+      QString stamp;
+      QVERIFY(FlightEventLog::createRunGt(d, when, &gt, &stamp));
+      gt.write(QByteArray("run") + QByteArray::number(i));
+      FlightEventLog ev;
+      QVERIFY(ev.open(d + "/ev-" + stamp + ".jsonl", header(), true));
+      ev.close();
+      gt.close();
+      QVERIFY2(!stamps.contains(stamp), qPrintable(stamp));
+      stamps << stamp;
+      QVERIFY(QFile::exists(d + "/gt-" + stamp + ".bin"));
+    }
+    QCOMPARE(QDir(d).entryList({"gt-*.bin"}).size(), 5);
+    QCOMPARE(QDir(d).entryList({"ev-*.jsonl"}).size(), 5);
+    // The repeat of t0 took the tie-break, and no earlier file was touched.
+    QCOMPARE(stamps[0], QString("2026-11-15_10-00-00-100"));
+    QCOMPARE(stamps[4], QString("2026-11-15_10-00-00-100-0001"));
+    for (int i = 0; i < 5; ++i) {
+      QFile f(d + "/gt-" + stamps[i] + ".bin");
+      QVERIFY(f.open(QIODevice::ReadOnly));
+      QCOMPARE(f.readAll(), QByteArray("run") + QByteArray::number(i));
+    }
+    const auto runs = FlightEventLog::listRuns(d);
+    QCOMPARE(runs.size(), 5);
+    for (const auto &r : runs) {
+      QVERIFY(!r.gtPath.isEmpty());
+      QVERIFY(!r.evPath.isEmpty());
+    }
+    // Newest first: 450 ms, 300, 150, then the tie-break of 100, then 100.
+    QCOMPARE(runs[0].stamp, QString("2026-11-15_10-00-00-550"));
+    QCOMPARE(runs[1].stamp, QString("2026-11-15_10-00-00-400"));
+    QCOMPARE(runs[2].stamp, QString("2026-11-15_10-00-00-250"));
+    QCOMPARE(runs[3].stamp, QString("2026-11-15_10-00-00-100-0001"));
+    QCOMPARE(runs[4].stamp, QString("2026-11-15_10-00-00-100"));
+  }
+
+  void tieBreakNeverOverwritesAnEvFile() {
+    QTemporaryDir dir;
+    const QString d = dir.path();
+    const QDateTime t(QDate(2026, 11, 15), QTime(10, 0, 0, 5));
+    touch(d + "/ev-2026-11-15_10-00-00-005.jsonl", "keep"); // orphan ev
+    QFile gt;
+    QString stamp;
+    QVERIFY(FlightEventLog::createRunGt(d, t, &gt, &stamp));
+    QCOMPARE(stamp, QString("2026-11-15_10-00-00-005-0001"));
+    FlightEventLog ev;
+    QVERIFY(ev.open(d + "/ev-" + stamp + ".jsonl", header(), true));
+    // The exclusive open refuses an existing file.
+    FlightEventLog again;
+    QVERIFY(!again.open(d + "/ev-" + stamp + ".jsonl", header(), true));
+    QFile orphan(d + "/ev-2026-11-15_10-00-00-005.jsonl");
+    QVERIFY(orphan.open(QIODevice::ReadOnly));
+    QCOMPARE(orphan.readAll(), QByteArray("keep"));
+  }
+
+  void oldFormatStampsSortWithNewOnes() {
+    QTemporaryDir dir;
+    const QString d = dir.path();
+    touch(d + "/gt-2026-11-15_09-59-59.bin"); // old format
+    touch(d + "/ev-2026-11-15_09-59-59.jsonl");
+    touch(d + "/gt-2026-11-15_10-00-00.bin"); // old format, same second
+    const QDateTime t(QDate(2026, 11, 15), QTime(10, 0, 0, 0));
+    QFile gt;
+    QString stamp;
+    QVERIFY(FlightEventLog::createRunGt(d, t, &gt, &stamp));
+    QFile gt2;
+    QString stamp2;
+    QVERIFY(FlightEventLog::createRunGt(d, t, &gt2, &stamp2));
+    gt.close();
+    gt2.close();
+    touch(d + "/gt-2026-11-15_10-00-01.bin"); // old format, next second
+    const auto runs = FlightEventLog::listRuns(d);
+    QCOMPARE(runs.size(), 5);
+    QCOMPARE(runs[0].stamp, QString("2026-11-15_10-00-01"));
+    QCOMPARE(runs[1].stamp, stamp2);
+    QCOMPARE(runs[2].stamp, stamp);
+    QCOMPARE(runs[3].stamp, QString("2026-11-15_10-00-00"));
+    QCOMPARE(runs[4].stamp, QString("2026-11-15_09-59-59"));
+    // Retention keeps the newest and drops the oldest pair whole.
+    QCOMPARE(FlightEventLog::prune(d, 4, stamp2), 2);
+    QVERIFY(!QFile::exists(d + "/gt-2026-11-15_09-59-59.bin"));
+    QVERIFY(!QFile::exists(d + "/ev-2026-11-15_09-59-59.jsonl"));
+  }
+
+  void stampsSortAsTime() {
+    const QDateTime a(QDate(2026, 1, 2), QTime(3, 4, 5, 9));
+    QVERIFY(FlightEventLog::makeStamp(a) < FlightEventLog::makeStamp(a.addMSecs(1)));
+    QVERIFY(FlightEventLog::makeStamp(a, 0) < FlightEventLog::makeStamp(a, 1));
+    QVERIFY(FlightEventLog::makeStamp(a, 9) < FlightEventLog::makeStamp(a, 10));
+    QVERIFY(FlightEventLog::makeStamp(a, 9999) <
+            FlightEventLog::makeStamp(a.addMSecs(1), 0));
+  }
 };
 
 QTEST_MAIN(TstFlightEventLog)
