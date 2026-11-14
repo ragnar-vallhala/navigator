@@ -2857,7 +2857,7 @@ void SimulatorWidget::refreshFlights() {
   if (m_flightsInfo)
     m_flightsInfo->clear();
   const auto kb = [](qint64 b) {
-    return b >= 1024 * 1024 ? QString("%1 MB").arg(b / 1048576.0, 0, 'f', 1)
+    return b >= 1024LL * 1024 ? QString("%1 MB").arg(b / 1048576.0, 0, 'f', 1)
                             : QString("%1 KB").arg((b + 1023) / 1024);
   };
   for (const auto &r : vsim::FlightEventLog::listRuns(m_logDir)) {

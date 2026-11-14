@@ -176,7 +176,7 @@ private slots:
     // +-1 / +-2 jitter on analog channels, 5 ms apart for 90 ms: no lines.
     for (int i = 1; i <= 18; ++i) {
       const int j = (i % 2) ? 2 : -2;
-      QVERIFY(!log.rc(i * 5000, {1500 + j, 1500 - j / 2, 1000 + j, 1500, 1500, 1000},
+      QVERIFY(!log.rc(qint64(i) * 5000, {1500 + j, 1500 - j / 2, 1000 + j, 1500, 1500, 1000},
                       "joystick"));
     }
     // Only the 10 Hz floor writes (identical to the last written within band).

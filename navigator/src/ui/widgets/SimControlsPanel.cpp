@@ -564,7 +564,7 @@ void SimulatorWidget::buildSimControls(QWidget *host) {
             const QString ev = cur->data(Qt::UserRole + 2).toString();
             if (ev.isEmpty())
               return;
-            constexpr qint64 kCap = 4 * 1024 * 1024;
+            constexpr qint64 kCap = 4LL * 1024 * 1024;
             bool capped = false;
             const int n = vsim::FlightEventLog::countEvents(ev, kCap, &capped);
             m_flightsInfo->setText(
