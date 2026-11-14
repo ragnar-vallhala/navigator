@@ -133,6 +133,7 @@ private:
   QLineEdit *meshEdit_ = nullptr;
   QDoubleSpinBox *scaleSpin_ = nullptr;
   QDoubleSpinBox *massSpin_ = nullptr;
+  QDoubleSpinBox *propRadiusSpin_ = nullptr;
   QDoubleSpinBox *transX_ = nullptr;
   QDoubleSpinBox *transY_ = nullptr;
   QDoubleSpinBox *transZ_ = nullptr;
