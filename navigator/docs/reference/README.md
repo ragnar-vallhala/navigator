@@ -6,6 +6,8 @@ the formal requirements. Edited in place as the code changes; not deleted.
 - [gcs-architecture.md](gcs-architecture.md) — **the whole Navigator in diagrams**:
   the worker-thread telemetry engine + ~30 Hz UI decoupling, the source FSM, RX decode,
   command tx, in-app sim hosting, and record/replay (Mermaid; verified against source).
+- [flight-events.md](flight-events.md) — the per-run `ev-*.jsonl` flight event log
+  that pairs with the `gt-*.bin` physics log: schema, time base, retention.
 - [requirements.md](requirements.md) — the engineering spec: system + functional
   requirements (by subsystem, with status), phase plan, architecture map, and
   maintenance rules. The tables are the contract.

@@ -18,6 +18,11 @@
 
 #include "SimPanelsCommon.h"
 
+#include <QApplication>
+#include <QClipboard>
+#include <QListWidget>
+#include <QMessageBox>
+
 SimControlsPanel::SimControlsPanel(SimulatorWidget &sim, QWidget *parent) : QWidget(parent) {
   // Same policy as the CollapsibleSection it wraps, so the panel sizes as the
   // bare section did inside the World page.
@@ -477,6 +482,7 @@ void SimulatorWidget::buildSimControls(QWidget *host) {
   connect(m_logDirEdit, &QLineEdit::editingFinished, this, [this] {
     m_logDir = m_logDirEdit->text();
     QSettings().setValue(kLogDirSettingKey, m_logDir);
+    refreshFlights();
   });
   logRow->addWidget(m_logDirEdit, 1);
   auto *openBtn = new ui::GhostButton(tr("Open"), simBody);
@@ -487,12 +493,114 @@ void SimulatorWidget::buildSimControls(QWidget *host) {
   logRow->addWidget(openBtn);
   sv->addLayout(logRow);
 
+  auto *keepRow = new QHBoxLayout();
+  keepRow->addWidget(new QLabel(tr("Keep last runs:"), simBody));
+  m_logKeepSpin = new QSpinBox(simBody);
+  m_logKeepSpin->setRange(0, 100000);
+  m_logKeepSpin->setSpecialValueText(tr("all"));
+  m_logKeepSpin->setValue(m_logKeepRuns);
+  m_logKeepSpin->setToolTip(
+      tr("When a run starts, delete the oldest runs (gt-*.bin together with "
+         "ev-*.jsonl) beyond this many. 0 / all keeps everything."));
+  connect(m_logKeepSpin, qOverload<int>(&QSpinBox::valueChanged), this,
+          [this](int v) {
+            m_logKeepRuns = v;
+            QSettings().setValue(kLogKeepRunsSettingKey, v);
+          });
+  keepRow->addWidget(m_logKeepSpin);
+  keepRow->addStretch();
+  sv->addLayout(keepRow);
+
   m_logPathLabel = new ui::ElidedLabel(simBody);
   m_logPathLabel->setFullText(tr("Current log: (none)"));
   m_logPathLabel->setStyleSheet(
       QString("color: %1; font-family: monospace; font-size: 11px;")
           .arg(Theme::hex(Theme::kTextMuted)));
-  sv->addWidget(m_logPathLabel);
+  auto *pathRow = new QHBoxLayout();
+  pathRow->addWidget(m_logPathLabel, 1);
+  m_markerBtn = new ui::GhostButton(tr("Add marker"), simBody);
+  m_markerBtn->setToolTip(
+      tr("Write a free-text marker into this run's flight event log"));
+  m_markerBtn->setEnabled(false);
+  connect(m_markerBtn, &QPushButton::clicked, this,
+          &SimulatorWidget::onMarkerClicked);
+  pathRow->addWidget(m_markerBtn);
+  sv->addLayout(pathRow);
+
+  // Flights: the runs found in the log dir, newest first.
+  sv->addWidget(new QLabel(tr("Flights:"), simBody));
+  m_flightsList = new QListWidget(simBody);
+  m_flightsList->setObjectName(QStringLiteral("simFlightsList"));
+  m_flightsList->setMinimumHeight(90);
+  m_flightsList->setMaximumHeight(130);
+  m_flightsList->setStyleSheet(
+      QStringLiteral("font-family: monospace; font-size: 11px;"));
+  sv->addWidget(m_flightsList);
+  m_flightsInfo = new QLabel(simBody);
+  m_flightsInfo->setStyleSheet(
+      QStringLiteral("font-family: monospace; font-size: 11px;"));
+  sv->addWidget(m_flightsInfo);
+  auto *flightRow = new QHBoxLayout();
+  auto *fOpen = new ui::GhostButton(tr("Open folder"), simBody);
+  auto *fCopy = new ui::GhostButton(tr("Copy path"), simBody);
+  auto *fDel = new ui::GhostButton(tr("Delete"), simBody);
+  for (auto *b : {fOpen, fCopy, fDel}) {
+    b->setEnabled(false);
+    flightRow->addWidget(b);
+  }
+  flightRow->addStretch();
+  sv->addLayout(flightRow);
+  connect(m_flightsList, &QListWidget::currentItemChanged, this,
+          [this, fOpen, fCopy, fDel](QListWidgetItem *cur) {
+            for (auto *b : {fOpen, fCopy, fDel})
+              b->setEnabled(cur != nullptr);
+            m_flightsInfo->clear();
+            if (!cur)
+              return;
+            const QString stamp = cur->data(Qt::UserRole + 1).toString();
+            fDel->setEnabled(!vsim::FlightEventLog::isLiveRun(
+                stamp, m_runStamp, !m_runStamp.isEmpty()));
+            // Event count only for the selected run, read capped (GUI thread).
+            const QString ev = cur->data(Qt::UserRole + 2).toString();
+            if (ev.isEmpty())
+              return;
+            constexpr qint64 kCap = 4LL * 1024 * 1024;
+            bool capped = false;
+            const int n = vsim::FlightEventLog::countEvents(ev, kCap, &capped);
+            m_flightsInfo->setText(
+                tr("%1: %2%3 events").arg(stamp, capped ? ">" : "").arg(n));
+          });
+  connect(fOpen, &QPushButton::clicked, this, [this] {
+    QDesktopServices::openUrl(QUrl::fromLocalFile(m_logDir));
+  });
+  connect(fCopy, &QPushButton::clicked, this, [this] {
+    if (auto *it = m_flightsList->currentItem())
+      QApplication::clipboard()->setText(it->data(Qt::UserRole).toString());
+  });
+  connect(fDel, &QPushButton::clicked, this, [this] {
+    auto *it = m_flightsList->currentItem();
+    if (!it)
+      return;
+    const QString stamp = it->data(Qt::UserRole + 1).toString();
+    if (vsim::FlightEventLog::isLiveRun(stamp, m_runStamp,
+                                        !m_runStamp.isEmpty())) {
+      QMessageBox::information(this, tr("Delete flight"),
+                               tr("This run is still being recorded."));
+      return;
+    }
+    if (QMessageBox::question(
+            this, tr("Delete flight"),
+            tr("Delete the log files of run %1 (gt and ev)?").arg(stamp)) !=
+        QMessageBox::Yes)
+      return;
+    for (const auto &r : vsim::FlightEventLog::listRuns(m_logDir))
+      if (r.stamp == stamp)
+        for (const QString &p : {r.gtPath, r.evPath})
+          if (!p.isEmpty())
+            QFile::remove(p);
+    refreshFlights();
+  });
+  refreshFlights();
 
   m_log = new QPlainTextEdit(simBody);
   m_log->setReadOnly(true);

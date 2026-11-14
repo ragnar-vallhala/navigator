@@ -102,6 +102,11 @@ target_include_directories(tst_vfs_dir PRIVATE ${SRC}/vsim ${CMAKE_CURRENT_SOURC
 navigator_test(tst_sim_paths tst_sim_paths.cpp ${SRC}/vsim/SimPaths.cpp)
 target_include_directories(tst_sim_paths PRIVATE ${SRC}/vsim)
 
+# ---- Per-run flight event log (ev-*.jsonl) + run retention ----------------
+navigator_test(tst_flight_event_log
+    tst_flight_event_log.cpp ${SRC}/vsim/FlightEventLog.cpp)
+target_include_directories(tst_flight_event_log PRIVATE ${SRC}/vsim)
+
 # ---- SitlModule load-failure text (needs only the ABI header) ---------------
 if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
   navigator_test(tst_sitl_module_error

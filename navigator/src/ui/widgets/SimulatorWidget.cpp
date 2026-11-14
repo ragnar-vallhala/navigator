@@ -18,6 +18,18 @@
 #include <QThread>
 #include <cmath>
 #include "SimPanelsCommon.h"
+#include "../../vsim/FlightEventLog.h"
+#include "../../vsim/VehicleJson.h"
+
+#include <QApplication>
+#include <QClipboard>
+#include <QInputDialog>
+#include <QListWidget>
+#include <QMessageBox>
+
+#ifndef NAVIGATOR_VERSION
+#define NAVIGATOR_VERSION "dev"
+#endif
 #include "SimAutotunePanel.h"
 #include "SimControlsPanel.h"
 #include "SimVehiclePanel.h"
@@ -108,6 +120,8 @@ SimulatorWidget::SimulatorWidget(QWidget *parent) : QWidget(parent) {
   m_repoRoot =
       settings.value(kRepoRootSettingKey, defaultRepoRoot()).toString();
   m_logDir = settings.value(kLogDirSettingKey, vsim::defaultLogDir()).toString();
+  m_logKeepRuns =
+      settings.value(kLogKeepRunsSettingKey, kLogKeepRunsDefault).toInt();
 
   // Route firmware UART2 bytes through our queued slot. Once the module boots
   // the telemetry chain, packets begin flowing into onUartBytes() on the GUI
@@ -139,6 +153,16 @@ SimulatorWidget::SimulatorWidget(QWidget *parent) : QWidget(parent) {
             [this](const QString &s) { appendLog("rc", s); });
     connect(m_rc, &RcBridge::channelsUpdated, this,
             [this](int r, int pi, int t, int y, int a, int c6) {
+              if (m_events.isOpen()) {
+                // Order = the bridge's: roll, pitch, throttle, yaw, arm, ch6.
+                QString src = QStringLiteral("disabled");
+                if (m_rcEnable && m_rcEnable->isChecked())
+                  src = m_rcSource && m_rcSource->currentData().toInt() ==
+                                          RcBridge::Uart
+                            ? QStringLiteral("uart")
+                            : QStringLiteral("joystick");
+                m_events.rc(runUs(), {r, pi, t, y, a, c6}, src);
+              }
               if (m_rcReadout)
                 m_rcReadout->setText(
                     QString("RC: R%1 P%2 T%3 Y%4 A%5 C6:%6%7")
@@ -200,6 +224,7 @@ SimulatorWidget::~SimulatorWidget() {
   // dangling-pointer crash risk.
   if (SitlModule::instance().available())
     SitlModule::instance().api()->shutdown();
+  m_stopReason = QStringLiteral("exit");
   stopInAppSim();
   // A collision build may still be running on the pool: let it finish (<~100 ms)
   // and delete its temp file, so nothing outlives the widget.
@@ -1818,10 +1843,46 @@ void SimulatorWidget::setFlightModeStatus(quint8 mode, quint8 source) {
   }
   const QString modeStr = QString("%1 (%2)").arg(
       acro ? tr("ACRO") : tr("STABILISE"), gcs ? tr("GCS") : tr("RC"));
+  // Event log: untranslated names, one event per change of mode or source.
+  const QString evMode =
+      acro ? QStringLiteral("ACRO") : QStringLiteral("STABILISE");
+  const QString evKey = evMode + (gcs ? "/gcs" : "/rc");
+  if (evKey != m_lastModeStr) {
+    if (m_events.isOpen())
+      m_events.mode(runUs(), m_lastModeStr.section('/', 0, 0), evMode,
+                    gcs ? QStringLiteral("gcs") : QStringLiteral("rc"));
+    m_lastModeStr = evKey;
+  }
   if (m_flightModeLabel)
     m_flightModeLabel->setText(tr("mode: ") + modeStr);
   if (m_hud)
     m_hud->setFlightMode(modeStr); // show it in the viewport HUD too
+}
+
+void SimulatorWidget::noteArmed(bool armed) {
+  if (m_events.isOpen())
+    m_events.arm(runUs(), armed);
+}
+
+void SimulatorWidget::addMarker(const QString &text) {
+  if (m_events.isOpen() && !text.trimmed().isEmpty())
+    m_events.marker(runUs(), text.trimmed());
+}
+
+void SimulatorWidget::logFault(const QString &id, bool active,
+                               const QString &detail) {
+  if (m_events.isOpen())
+    m_events.fault(runUs(), id, active, detail);
+}
+
+void SimulatorWidget::onMarkerClicked() {
+  if (!m_events.isOpen())
+    return;
+  bool ok = false;
+  const QString text = QInputDialog::getText(
+      this, tr("Add marker"), tr("Marker text:"), QLineEdit::Normal, {}, &ok);
+  if (ok)
+    addMarker(text);
 }
 
 void SimulatorWidget::hudSetImu(const float acc[3], const float gyr[3]) {
@@ -2273,6 +2334,7 @@ void SimulatorWidget::onSimWorkerExited() {
   if (!m_sim)
     return;
   appendLog("vsim", "[worker exited — resetting to Stopped]");
+  m_stopReason = QStringLiteral("fault");
   stopInAppSim();
 }
 
@@ -2675,6 +2737,18 @@ void SimulatorWidget::openNewLogFile() {
     m_runLogBytes += 20;
   }
   m_runClock.start(); // monotonic per-record timestamp base
+  // Retention first (never the run opening now), then the events sidecar.
+  vsim::FlightEventLog::prune(m_logDir, m_logKeepRuns, stamp);
+  m_lastModeStr.clear();
+  m_runStamp = stamp; // the run being recorded, whether or not ev opened
+  m_stopReason = QStringLiteral("user");
+  if (!m_events.open(dir.absoluteFilePath(QString("ev-%1.jsonl").arg(stamp)),
+                     eventHeader(stamp)))
+    appendLog("log", QString("[events log open failed for %1]").arg(stamp));
+  else
+    m_events.start(0);
+  if (m_markerBtn)
+    m_markerBtn->setEnabled(m_events.isOpen());
   if (m_logPathLabel) {
     m_logPathLabel->setFullText(QString("Ground-truth log: %1").arg(path));
     m_logPathLabel->setStyleSheet(
@@ -2682,6 +2756,7 @@ void SimulatorWidget::openNewLogFile() {
             .arg(Theme::hex(Theme::kOk)));
   }
   appendLog("log", QString("[opened %1 — physics ground truth]").arg(path));
+  refreshFlights();
 }
 
 // One ground-truth record per pose snapshot. Layout (little-endian, packed,
@@ -2730,15 +2805,73 @@ void SimulatorWidget::logGroundTruth(vsim::SimSnapshot snap) {
               QString("logged %1 KB ground truth").arg(m_runLogBytes / 1024));
 }
 
+vsim::FlightEventLog::Header
+SimulatorWidget::eventHeader(const QString &stamp) const {
+  vsim::FlightEventLog::Header h;
+  h.runId = stamp;
+  h.appVersion = QStringLiteral(NAVIGATOR_VERSION);
+  const SitlModule &mod = SitlModule::instance();
+  if (mod.available() && mod.api())
+    h.sdkVersion = int(mod.api()->abi_version);
+  h.moduleBuildId = mod.buildId();
+  // No vehicle file exists: the geometry lives in QSettings, so hash the
+  // canonical (compact, key-sorted) JSON of the geometry this run uses.
+  if (m_geomEditor)
+    h.vehicleSha256 = vsim::FlightEventLog::sha256Hex(
+        QJsonDocument(vsim::geometryToJson(m_geomEditor->physicsConfig()))
+            .toJson(QJsonDocument::Compact));
+  if (m_worldEditor) {
+    h.worldPreset = m_worldEditor->config().worldPreset;
+    h.worldSeed = double(m_worldEditor->config().proceduralSeed);
+  }
+  h.gtFile = QStringLiteral("gt-%1.bin").arg(stamp);
+  h.t0UnixMs = QDateTime::currentMSecsSinceEpoch();
+  return h;
+}
+
 void SimulatorWidget::closeLogFile() {
-  if (!m_runLog)
+  if (m_events.isOpen()) {
+    m_events.stop(runUs(), m_stopReason);
+    m_events.close();
+    if (m_markerBtn)
+      m_markerBtn->setEnabled(false);
+  }
+  m_runStamp.clear();
+  if (!m_runLog) {
+    refreshFlights();
     return;
+  }
   if (m_runLog->isOpen()) {
     m_runLog->flush();
     appendLog("log", QString("[closed: %1 bytes total]").arg(m_runLogBytes));
     m_runLog->close();
   }
   m_runLog.reset();
+  refreshFlights();
+}
+
+void SimulatorWidget::refreshFlights() {
+  if (!m_flightsList)
+    return;
+  m_flightsList->clear();
+  if (m_flightsInfo)
+    m_flightsInfo->clear();
+  const auto kb = [](qint64 b) {
+    return b >= 1024LL * 1024 ? QString("%1 MB").arg(b / 1048576.0, 0, 'f', 1)
+                            : QString("%1 KB").arg((b + 1023) / 1024);
+  };
+  for (const auto &r : vsim::FlightEventLog::listRuns(m_logDir)) {
+    QString text = r.stamp;
+    text += r.gtPath.isEmpty() ? QStringLiteral("   gt: -")
+                               : QString("   gt: %1").arg(kb(r.gtBytes));
+    text += r.evPath.isEmpty()
+                ? QStringLiteral("   ev: -")
+                : QString("   ev: %1").arg(kb(r.evBytes));
+    auto *it = new QListWidgetItem(text, m_flightsList);
+    it->setData(Qt::UserRole, r.gtPath.isEmpty() ? r.evPath : r.gtPath);
+    it->setData(Qt::UserRole + 1, r.stamp);
+    it->setData(Qt::UserRole + 2, r.evPath);
+  }
 }
 
 void SimulatorWidget::appendLog(const QString &tag, const QString &text) {

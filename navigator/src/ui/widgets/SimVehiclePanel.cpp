@@ -151,6 +151,8 @@ QWidget *SimulatorWidget::buildFaultPanel() {
     connect(m_killBtn[i], &QPushButton::toggled, this, [this, i](bool on) {
       m_motorKill[i] = on;
       pushFaults();
+      logFault(QString("motor%1_kill").arg(i + 1), on,
+               QString("motor %1 killed").arg(i + 1));
       appendLog("fault", on ? tr("motor %1 killed").arg(i + 1)
                             : tr("motor %1 restored").arg(i + 1));
     });
@@ -167,6 +169,8 @@ QWidget *SimulatorWidget::buildFaultPanel() {
     // alone, so unchecking this restores exactly the prior RC state.
     if (m_rc)
       m_rc->setLinkLost(on);
+    logFault(QStringLiteral("rc_link_loss"), on,
+             QStringLiteral("RC link loss"));
     appendLog("fault",
               on ? tr("RC link loss injected") : tr("RC link restored"));
   });

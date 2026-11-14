@@ -238,6 +238,7 @@ set(GCS_SITL_SOURCES
     src/vsim/SitlModule.cpp
     src/vsim/VfsDir.cpp
     src/vsim/SimPaths.cpp
+    src/vsim/FlightEventLog.cpp
     src/vsim/SimRendererWidget.cpp
     src/vsim/MeshLoader.cpp
     src/vsim/WorldMeshBuilder.cpp
@@ -279,6 +280,7 @@ set(GCS_SITL_HEADERS
     src/ui/widgets/SimHudWidget.h
     src/vsim/VsimTypes.h
     src/vsim/VehicleJson.h
+    src/vsim/FlightEventLog.h
     src/vsim/AirframePresets.h
     src/vsim/SimWorker.h
     src/vsim/SimRendererWidget.h
