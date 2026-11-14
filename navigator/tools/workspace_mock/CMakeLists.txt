@@ -71,6 +71,7 @@ add_library(navigator_workspace STATIC
     ${WS_DIR}/WorkspaceManager.h
     ${WS_DIR}/DockBackend.h
     ${WS_DIR}/LayoutSpec.h
+    ${WS_DIR}/PanelFrame.h
     ${WS_DIR}/PanelRegistry.h
     ${WS_DIR}/ScreenClamp.h)
 target_include_directories(navigator_workspace PUBLIC ${WS_DIR})

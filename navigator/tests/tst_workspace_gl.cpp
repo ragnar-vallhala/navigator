@@ -23,6 +23,7 @@
 #include "AttitudeWidget.h"
 #include "Drone3DWidget.h"
 #include "GlPanel.h"
+#include "PanelFrame.h"
 #include "WorkspaceManager.h"
 
 #include <QElapsedTimer>
@@ -147,6 +148,12 @@ private slots:
     auto *b = f.wm->backend();
     if (!f.warmUp())
       QFAIL("the GL view never produced a first frame (stalled at start-up)");
+    // AdsBackend hosts every panel in a PanelFrame (a scroll area): this is the
+    // run that shows a GL panel keeps rendering inside one.
+    bool framed = false;
+    for (QWidget *p = f.gl->parentWidget(); p && !framed; p = p->parentWidget())
+      framed = dynamic_cast<PanelFrame *>(p) != nullptr;
+    QVERIFY2(framed, "the GL panel is not hosted in a PanelFrame");
     QVERIFY(f.renders("docked"));
     b->floatPanel("gl");
     QVERIFY(b->panelState("gl").floating);
