@@ -334,7 +334,7 @@ private:
   void cancelWorldShip(); // drop in-flight + queued collision ships
   // Invoked when the SimWorker exits on its own (spawn failure, startup-grace
   // timeout, daemon death) so the UI doesn't get stuck in the Running state.
-  void onSimWorkerExited();
+  void onSimWorkerExited(quint64 gen);
 
   // Per-run log records the PHYSICS ground truth (vsim SimSnapshot), NOT the FC
   // telemetry — that is captured separately via Export. So a run yields both the
@@ -422,6 +422,7 @@ private:
   bool m_uartRxDrainPending = false;
   bool m_sitlStarted = false;
   vsim::SimWorker *m_sim = nullptr;
+  quint64 m_simGen = 0; // bumped per worker: tells a stale stoppedCleanly apart
 
   // Endless procedural terrain streaming (active only for the "endless" biome).
   vsim::ChunkStreamer m_chunkStreamer;

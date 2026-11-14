@@ -16,6 +16,7 @@
  */
 #pragma once
 
+#include <QDateTime>
 #include <QFile>
 #include <QJsonObject>
 #include <QJsonValue>
@@ -61,7 +62,8 @@ public:
   FlightEventLog &operator=(const FlightEventLog &) = delete;
 
   // Creates (truncates) `path` and writes the header line. False on failure.
-  bool open(const QString &path, const Header &h);
+  // With `exclusive` the file must not exist yet (it is never overwritten).
+  bool open(const QString &path, const Header &h, bool exclusive = false);
   bool isOpen() const { return m_file.isOpen(); }
   QString path() const { return m_file.fileName(); }
   qint64 eventCount() const { return m_events; }
@@ -94,6 +96,17 @@ public:
     qint64 gtBytes = 0;
     qint64 evBytes = 0;
   };
+  // Run stamp: local time to the millisecond, `yyyy-MM-dd_HH-mm-ss-zzz`, plus
+  // `-NNNN` (zero-padded, so it sorts) when `tieBreak` > 0. Stamps sort
+  // lexicographically in start order; an old-format stamp (no ms) sorts just
+  // before the new stamps of the same second.
+  static QString makeStamp(const QDateTime &when, int tieBreak = 0);
+  // Opens gt-<stamp>.bin in `dir` for writing, never overwriting an existing
+  // file: on a name clash (or when ev-<stamp>.jsonl already exists) the next
+  // tie-break is tried. `gt` is left open on success and `*stamp` is set;
+  // false when no free name could be created.
+  static bool createRunGt(const QString &dir, const QDateTime &when, QFile *gt,
+                          QString *stamp);
   // Runs in `dir`, newest stamp first. Only files named exactly gt-*.bin or
   // ev-*.jsonl are considered.
   static QList<Run> listRuns(const QString &dir);

@@ -6,7 +6,7 @@ Navigator writes four kinds of files. This chapter says what each is, where it g
 |---|---|---|
 | `rec_<yyyyMMdd-hhmmss>.bin` | automatic recording on connect | VREC, raw inbound bytes |
 | `export-<yyyyMMdd-HHmmss>.bin` | File > Export Log (Ctrl+E) | VREC, whole packets, filtered by type |
-| `gt-<yyyy-MM-dd_HH-mm-ss>.bin` | in-app simulator, one per run | VGT1, physics ground truth |
+| `gt-<yyyy-MM-dd_HH-mm-ss-zzz>.bin` | in-app simulator, one per run | VGT1, physics ground truth |
 | `navigator-<UTC date>.log`, `session_<stamp>.log` | the text loggers | plain text |
 
 ## The VREC recording format
