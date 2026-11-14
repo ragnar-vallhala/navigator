@@ -617,9 +617,9 @@ private slots:
   // had no collision in the engine and the vehicle sank through its deck to the
   // terrain (about 0.9 m low). Hills seed 5: pads taken from the live list,
   // each dropped on 1 m above its deck.
-  // Manual test: like the rest of this file it skips offscreen, so a CI pass
-  // does not cover it. Run it under xcb on a private display with the engine
-  // module (about a minute).
+  // Needs xcb and the engine module: it skips offscreen (plain ctest), and
+  // CI's "tst_world_change_floor (xcb on Xvfb ...)" step runs it, one process
+  // per case (about a minute).
   void dropOnEveryPadRestsOnDeck() {
     if (!gl_)
       QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
@@ -632,7 +632,16 @@ private slots:
       a_->start();
       QVERIFY(a_->running());
     }
-    QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 30000));
+    // Online and placed on the home pad first (the engine's own pose), as the
+    // other cases do: a first drop sent before the engine is posting is lost.
+    QVERIFY(waitFor(
+        [&] {
+          return a_->logText().contains(
+                     QStringLiteral("world mesh \u2192 daemon")) &&
+                 !a_->shipBusy() && altAbove(*a_) > 0.0f &&
+                 altAbove(*a_) < 3.0f;
+        },
+        30000));
     pump(1500);
     const float kDeckM = vsim::SimRendererWidget::kHelipadDeckM;
     int failed = 0;
