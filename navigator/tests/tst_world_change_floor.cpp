@@ -303,6 +303,93 @@ private slots:
     QVERIFY2(above < 1.0f, "parked vehicle is not on the home pad");
   }
 
+
+  // Every shipped preset (not just a sample), stopped, then restored by a fresh
+  // widget as the next launch does.
+  void everyPresetStoppedAndRestored_data() {
+    QTest::addColumn<QString>("preset");
+    for (const auto &p : vsim::worldPresetList())
+      QTest::newRow(qPrintable(p.first)) << p.first;
+  }
+  void everyPresetStoppedAndRestored() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    QFETCH(QString, preset);
+    bool applied = false;
+    a_->changeWorld([&](vsim::WorldConfig &c) {
+      applied = vsim::applyWorldPreset(c, preset, 17);
+      c.worldPreset = preset;
+    });
+    QVERIFY2(applied, "unknown preset");
+    pump(200);
+    qInfo("%s stopped: alt=%.2f cam=%.2f above deck=%.2f", qPrintable(preset),
+          altAbove(*a_), camAbove(*a_), aboveDeck(*a_));
+    QVERIFY2(altAbove(*a_) >= 0.0f, "vehicle below the new ground");
+    QVERIFY2(aboveDeck(*a_) >= 0.0f, "vehicle inside the helipad");
+    QVERIFY2(camAbove(*a_) >= 0.0f, "camera below the new ground");
+    a_->persist();
+    pump(300);
+    auto *b = new SimulatorWidget();
+    restored_.push_back(b);
+    SimulatorWidgetTestAccess ab(*b);
+    b->resize(1200, 800);
+    b->show();
+    QVERIFY(QTest::qWaitForWindowExposed(b));
+    pump(500);
+    qInfo("%s restored: above deck=%.2f", qPrintable(preset), aboveDeck(ab));
+    QVERIFY2(aboveDeck(ab) >= 0.0f, "restored vehicle is inside the helipad");
+    QVERIFY2(aboveDeck(ab) < 1.0f, "restored vehicle is not on the pad");
+  }
+
+  // Sim Running and the vehicle airborne (not landed): each preset change
+  // brings it back down onto the new ground's pad, never into it.
+  void inFlightChangesPlaceVehicleOnGround() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    if (!SitlModule::instance().available())
+      QSKIP("no engine module (set VAYU_SITL_MODULE)");
+    a_->changeWorld(changes()[1].edit);
+    if (!a_->running()) {
+      a_->start();
+      QVERIFY(a_->running());
+    }
+    // Online and placed: the engine's own pose, on the pad (the stopped-state
+    // park is also "on the pad", so wait for the collision to have shipped).
+    QVERIFY(waitFor(
+        [&] {
+          return a_->logText().contains(QStringLiteral("world mesh \u2192 daemon")) &&
+                 !a_->shipBusy() && altAbove(*a_) > 0.0f && altAbove(*a_) < 3.0f;
+        },
+        30000));
+    for (const auto &pr : vsim::worldPresetList()) {
+      pump(1500);
+      a_->teleport(0.0f, 0.0f, 40.0f); // airborne, 40 m up
+      QVERIFY(waitFor([&] { return !a_->shipBusy() && altAbove(*a_) > 5.0f; },
+                      30000));
+      QVERIFY(altAbove(*a_) > 5.0f);
+      bool applied = false;
+      a_->changeWorld([&](vsim::WorldConfig &c) {
+        applied = vsim::applyWorldPreset(c, pr.first, 5);
+        c.worldPreset = pr.first;
+      });
+      QVERIFY2(applied, qPrintable(pr.first));
+      pump(300);
+      QVERIFY2(waitFor([&] { return !a_->shipBusy(); }, 30000),
+               qPrintable(pr.first));
+      pump(3000);
+      qInfo("in flight -> %s: alt=%.2f cam=%.2f above deck=%.2f",
+            qPrintable(pr.first), altAbove(*a_), camAbove(*a_), aboveDeck(*a_));
+      // On the new ground's pad: not below it, not still up at 40 m, and not
+      // re-seated somewhere off the pad. The home pad sits about 0.9 m above
+      // the ground and the vehicle about 0.04 m above its deck.
+      QVERIFY2(altAbove(*a_) >= -0.05f, qPrintable(pr.first));
+      QVERIFY2(altAbove(*a_) < 1.5f, qPrintable(pr.first));
+      QVERIFY2(aboveDeck(*a_) >= -0.05f, qPrintable(pr.first));
+      QVERIFY2(aboveDeck(*a_) < 1.0f, qPrintable(pr.first));
+      QVERIFY2(camAbove(*a_) >= 0.0f, qPrintable(pr.first));
+    }
+  }
+
   // Sim Running against the real engine: after each change (and the collision
   // build it triggers) the vehicle ends up on the new ground, at rest.
   void runningChangesPlaceVehicleOnGround() {
