@@ -439,8 +439,11 @@ namespace {
 //  - for id != 0, chunk_seq orders the chunks from 0, a chunk whose 50-byte
 //    text is NUL-terminated is the last one (earlier chunks fill all 50 bytes),
 //    and the message is complete when seqs 0..last are all present;
-//  - a message that never completes (lost chunk, or an exact multiple of 50
-//    bytes with no terminating chunk) is flushed after kStatusTextStaleMs with
+//  - a text whose length is an exact multiple of 50 ends with one extra, empty
+//    (NUL-first) chunk, which is the terminating chunk (navlink ABI.md, STATUSTEXT
+//    chunks); an empty chunk is accepted like any other terminating chunk;
+//  - a message that never completes (lost chunk, or a sender that does not send
+//    the terminating chunk) is flushed after kStatusTextStaleMs with
 //    " [...]" appended; text is never dropped.
 // Default time source: monotonic, immune to wall-clock steps.
 qint64 monotonicMs() {

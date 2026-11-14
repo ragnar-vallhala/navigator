@@ -128,6 +128,20 @@ private slots:
                                   "end"});
   }
 
+  void exactMultipleOf50EndsWithEmptyChunk() {
+    Rig g;
+    const QByteArray b(50, 'b');
+    g.send(6, kFull50, 21, 0);
+    g.send(6, b, 21, 1);
+    QVERIFY(g.lines.isEmpty());
+    g.send(6, QByteArray(), 21, 2); // empty terminating chunk
+    QCOMPARE(g.lines, QStringList{QStringLiteral("[INFO] ") + kFull50 + b});
+    // complete, so nothing is left to flush as incomplete
+    g.now += NavlinkRouter::kStatusTextStaleMs;
+    g.r.flushStale(g.now);
+    QCOMPARE(g.lines.size(), 1);
+  }
+
   void missingChunkFlushedAsIncomplete() {
     Rig g;
     g.send(4, kFull50, 11, 0);
