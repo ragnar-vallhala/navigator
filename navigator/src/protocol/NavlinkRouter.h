@@ -72,10 +72,15 @@ public:
   void handleStatusText(uint8_t severity, uint16_t id, uint8_t chunkSeq,
                         const char *text, size_t textCap);
   // Emit every pending group whose first chunk is older than kStatusTextStaleMs
-  // as an incomplete message. feed() calls this with the clock; callers may
-  // also call it from a timer.
+  // as an incomplete message. feed() calls this on every frame; DroneProtocol
+  // also calls it from a 500 ms timer on the router's thread, so a message cut
+  // off by a quiet link still reaches the log.
   void flushStale(qint64 nowMs);
-  // Time source in ms (default: wall clock); tests inject a fake one.
+  void flushStale(); // same, using clockMs (default: monotonic clock)
+  // Emit every pending group now, oldest first, as incomplete. Call on link
+  // loss / close, before any state is dropped, so no text is lost.
+  void flushAll();
+  // Time source in ms (default: steady clock); tests inject a fake one.
   std::function<qint64()> clockMs;
 
   static constexpr qint64 kStatusTextStaleMs = 2000;

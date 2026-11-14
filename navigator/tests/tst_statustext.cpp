@@ -154,6 +154,39 @@ private slots:
     QCOMPARE(g.lines[1], QStringLiteral("[INFO] other"));
   }
 
+  void quietLinkFlushedByTimerCall() {
+    Rig g;
+    g.send(3, kFull50, 21, 0); // partial; the link then goes quiet
+    g.r.flushStale();          // clock not advanced yet
+    QVERIFY(g.lines.isEmpty());
+    g.now += NavlinkRouter::kStatusTextStaleMs + 1;
+    g.r.flushStale(g.now);
+    QCOMPARE(g.lines,
+             QStringList{QStringLiteral("[ERR] ") + kFull50 + " [...]"});
+    g.r.flushStale(g.now + 100000);
+    g.r.flushStale();
+    QCOMPARE(g.lines.size(), 1);
+  }
+
+  void flushAllEmitsEverythingOldestFirst() {
+    Rig g;
+    g.send(3, kFull50, 1, 0);
+    g.now += 10;
+    g.send(4, QByteArray(50, 'b'), 2, 0);
+    g.now += 10;
+    g.send(6, "x", 3, 1); // seq 0 missing
+    QVERIFY(g.lines.isEmpty());
+    g.r.flushAll();
+    QCOMPARE(g.lines.size(), 3);
+    QCOMPARE(g.lines[0], QStringLiteral("[ERR] ") + kFull50 + " [...]");
+    QCOMPARE(g.lines[1],
+             QStringLiteral("[WARN] ") + QByteArray(50, 'b') + " [...]");
+    QCOMPARE(g.lines[2], QStringLiteral("[INFO] x [...]"));
+    g.r.flushAll();
+    g.r.flushStale(g.now + 100000);
+    QCOMPARE(g.lines.size(), 3);
+  }
+
   void interleavedGroups() {
     Rig g;
     g.send(3, kFull50, 1, 0);

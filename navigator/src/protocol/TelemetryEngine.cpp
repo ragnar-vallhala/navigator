@@ -53,9 +53,17 @@ TelemetryEngine::TelemetryEngine(QObject *parent)
 
   // --- Forward transport status/error/tx to the GUI (auto-queued). ---
   connect(m_serial, &SerialManager::connectionStateChanged, this,
-          [this](bool c) { emit connectionStateChanged(c, /*isUdp=*/false); });
+          [this](bool c) {
+            if (!c)
+              m_protocol->flushPendingLog();
+            emit connectionStateChanged(c, /*isUdp=*/false);
+          });
   connect(m_udp, &UdpManager::connectionStateChanged, this,
-          [this](bool c) { emit connectionStateChanged(c, /*isUdp=*/true); });
+          [this](bool c) {
+            if (!c)
+              m_protocol->flushPendingLog();
+            emit connectionStateChanged(c, /*isUdp=*/true);
+          });
   connect(m_serial, &SerialManager::errorOccurred, this,
           [this](const QString &m) { emit errorOccurred(m, /*isUdp=*/false); });
   connect(m_udp, &UdpManager::errorOccurred, this,
@@ -203,6 +211,7 @@ void TelemetryEngine::bindUdp(int port) {
 }
 
 void TelemetryEngine::closeLinks() {
+  m_protocol->flushPendingLog(); // before the transports close
   m_udp->close();
   m_serial->close();
 }

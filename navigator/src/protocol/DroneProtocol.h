@@ -21,6 +21,7 @@
 #include <QByteArray>
 #include <QObject>
 #include <QString>
+#include <QTimer>
 
 /**
  * Decodes the binary NavLink v2 telemetry stream emitted by the Vayu firmware
@@ -39,6 +40,8 @@ public slots:
   // Retained for the Advanced ▸ CRC toggle, but now a no-op: the NavLink v2
   // parser always verifies CRC-16 and there is no bypass.
   void setCrcCheck(bool) {}
+  // Link went down / closed: emit any half-received STATUSTEXT as incomplete.
+  void flushPendingLog();
 
 signals:
   void imuReceived(const ImuData &data);
@@ -72,6 +75,7 @@ signals:
 
 private:
   QByteArray m_buffer;
+  QTimer *m_flushTimer = nullptr; // stale STATUSTEXT groups, router thread
   void parseBuffer();
 
   // NavLink v2 receive path (navlink/INTEGRATION.md). parseBuffer() demuxes v2

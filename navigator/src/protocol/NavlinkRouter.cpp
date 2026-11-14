@@ -19,6 +19,7 @@
 #include "core/MathUtils.h" // float16_to_float32 (IMU delta reconstruction)
 #include <QDateTime>        // t4 capture for TIME_SYNC
 #include <QtGlobal>
+#include <chrono>
 #include <map>
 #include <vector>
 
@@ -441,6 +442,12 @@ namespace {
 //  - a message that never completes (lost chunk, or an exact multiple of 50
 //    bytes with no terminating chunk) is flushed after kStatusTextStaleMs with
 //    " [...]" appended; text is never dropped.
+// Default time source: monotonic, immune to wall-clock steps.
+qint64 monotonicMs() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
 const QString kIncomplete = QStringLiteral(" [...]");
 } // namespace
 
@@ -470,7 +477,7 @@ static void flushGroup(NavlinkRouter *r, const StGroup &g,
 void NavlinkRouter::handleStatusText(uint8_t severity, uint16_t id,
                                      uint8_t chunkSeq, const char *text,
                                      size_t textCap) {
-  const qint64 now = clockMs ? clockMs() : QDateTime::currentMSecsSinceEpoch();
+  const qint64 now = clockMs ? clockMs() : monotonicMs();
   flushStale(now);
   size_t n = 0;
   while (n < textCap && text[n] != '\0')
@@ -528,6 +535,20 @@ void NavlinkRouter::handleStatusText(uint8_t severity, uint16_t id,
   }
 }
 
+void NavlinkRouter::flushStale() {
+  flushStale(clockMs ? clockMs() : monotonicMs());
+}
+
+void NavlinkRouter::flushAll() {
+  auto &st = d_->st;
+  while (!st.empty()) {
+    const StGroup g = st.front();
+    d_->stBytes -= g.bytes;
+    st.erase(st.begin());
+    flushGroup(this, g, false);
+  }
+}
+
 void NavlinkRouter::flushStale(qint64 nowMs) {
   auto &st = d_->st;
   while (!st.empty() && nowMs - st.front().firstMs >= kStatusTextStaleMs) {
@@ -577,7 +598,7 @@ NavlinkRouter::NavlinkRouter() : d_(new Impl) {
 NavlinkRouter::~NavlinkRouter() { delete d_; }
 
 void NavlinkRouter::feed(const QByteArray &f) {
-  flushStale(clockMs ? clockMs() : QDateTime::currentMSecsSinceEpoch());
+  flushStale(clockMs ? clockMs() : monotonicMs());
   navlink_parser_push(&d_->parser, &d_->handlers,
                       reinterpret_cast<const uint8_t *>(f.constData()),
                       static_cast<size_t>(f.size()));

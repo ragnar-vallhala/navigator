@@ -18,7 +18,19 @@
 #include <QString>
 #include <cstdint>
 
+void DroneProtocol::flushPendingLog() { m_v2Router.flushAll(); }
+
 DroneProtocol::DroneProtocol(QObject *parent) : QObject(parent) {
+  // The router is not thread-safe and feed() runs on the engine's worker
+  // thread (this object is a child of TelemetryEngine, which is moved there).
+  // A child timer follows its parent through moveToThread(), so this fires on
+  // the same thread as feed(): a half-received STATUSTEXT is flushed even when
+  // the link goes quiet.
+  m_flushTimer = new QTimer(this);
+  m_flushTimer->setInterval(500);
+  connect(m_flushTimer, &QTimer::timeout, this,
+          [this] { m_v2Router.flushStale(); });
+  m_flushTimer->start();
   // Wire the v2 router's leaf hooks to our existing Qt signals. Adding a leaf is
   // a one-liner here; the generated codec stays inside NavlinkRouter.
   m_v2Router.onAttitude = [this](const AttitudeData &a) {
