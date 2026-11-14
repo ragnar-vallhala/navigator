@@ -272,7 +272,8 @@ private slots:
     uint8_t buf[NAVLINK_MAX_FRAME];
     const size_t n = navlink_statustext_encode(buf, &m, 0, 1, 1);
     r.feed(QByteArray(reinterpret_cast<const char *>(buf), int(n)));
-    QCOMPARE(lines, QStringList{QStringLiteral("hello")});
+    // Format changed on purpose: the line now carries the severity prefix.
+    QCOMPARE(lines, QStringList{QStringLiteral("[ERR] hello")});
   }
 
   void panelBadgeAndButtons() {

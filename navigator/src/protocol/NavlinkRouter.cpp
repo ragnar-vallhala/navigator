@@ -19,6 +19,8 @@
 #include "core/MathUtils.h" // float16_to_float32 (IMU delta reconstruction)
 #include <QDateTime>        // t4 capture for TIME_SYNC
 #include <QtGlobal>
+#include <map>
+#include <vector>
 
 extern "C" {
 #include "navlink_msgs.h" // the generated codec — included ONLY here (RX side)
@@ -237,13 +239,8 @@ void thunkSystemHealth(void *ctx, const navlink_frame_hdr_t *,
 
 void thunkStatustext(void *ctx, const navlink_frame_hdr_t *,
                      const navlink_statustext_t *m) {
-  auto *r = static_cast<NavlinkRouter *>(ctx);
-  if (!r->onLog)
-    return;
-  size_t n = 0;
-  while (n < sizeof(m->text) && m->text[n] != '\0')
-    n++;
-  r->onLog(QString::fromLatin1(m->text, static_cast<int>(n)));
+  static_cast<NavlinkRouter *>(ctx)->handleStatusText(
+      m->severity, m->id, m->chunk_seq, m->text, sizeof(m->text));
 }
 
 void thunkFaultStatus(void *ctx, const navlink_frame_hdr_t *,
@@ -389,10 +386,157 @@ void thunkDefault(void *ctx, const navlink_frame_hdr_t *, uint32_t msgid,
 }
 } // namespace
 
+namespace {
+// One pending multi-chunk STATUSTEXT message.
+struct StGroup {
+  uint16_t id = 0;
+  uint8_t severity = 0;
+  qint64 firstMs = 0;
+  std::map<uint8_t, QByteArray> chunks; // chunk_seq -> bytes up to the NUL
+  int lastSeq = -1;                     // smallest seq whose text ended early
+  int bytes = 0;
+};
+} // namespace
+
 struct NavlinkRouter::Impl {
   navlink_parser_t parser;
   navlink_handlers_t handlers;
+  // Pending multi-chunk STATUSTEXT groups, oldest first.
+  std::vector<StGroup> st;
+  int stBytes = 0;
 };
+
+QString NavlinkRouter::severityLabel(uint8_t severity) {
+  switch (severity) {
+  case NAVLINK_SEVERITY_EMERGENCY:
+    return QStringLiteral("EMERG");
+  case NAVLINK_SEVERITY_ALERT:
+    return QStringLiteral("ALERT");
+  case NAVLINK_SEVERITY_CRITICAL:
+    return QStringLiteral("CRIT");
+  case NAVLINK_SEVERITY_ERROR:
+    return QStringLiteral("ERR");
+  case NAVLINK_SEVERITY_WARNING:
+    return QStringLiteral("WARN");
+  case NAVLINK_SEVERITY_NOTICE:
+    return QStringLiteral("NOTICE");
+  case NAVLINK_SEVERITY_INFO:
+    return QStringLiteral("INFO");
+  case NAVLINK_SEVERITY_DEBUG:
+    return QStringLiteral("DEBUG");
+  default:
+    return QStringLiteral("SEV %1").arg(severity);
+  }
+}
+
+namespace {
+// STATUSTEXT chunk convention. navlink/dialect.json only says `id` "groups
+// multi-chunk messages" and gives `chunk_seq` (u8); it defines no "unchunked"
+// id, no total, no last-chunk flag. Assumptions made here (the safest reading):
+//  - id 0 is never grouped: the frame is a whole message, emitted at once
+//    (also keeps firmware that leaves id/chunk_seq zeroed working);
+//  - for id != 0, chunk_seq orders the chunks from 0, a chunk whose 50-byte
+//    text is NUL-terminated is the last one (earlier chunks fill all 50 bytes),
+//    and the message is complete when seqs 0..last are all present;
+//  - a message that never completes (lost chunk, or an exact multiple of 50
+//    bytes with no terminating chunk) is flushed after kStatusTextStaleMs with
+//    " [...]" appended; text is never dropped.
+const QString kIncomplete = QStringLiteral(" [...]");
+} // namespace
+
+static void emitStatusText(NavlinkRouter *r, uint8_t severity, uint16_t id,
+                           const QString &text) {
+  if (r->onStatusText)
+    r->onStatusText(severity, id, text);
+  if (r->onLog)
+    r->onLog(QStringLiteral("[%1] %2")
+                 .arg(NavlinkRouter::severityLabel(severity), text));
+}
+
+static void flushGroup(NavlinkRouter *r, const StGroup &g,
+                       bool complete) {
+  QByteArray joined;
+  for (const auto &kv : g.chunks) {
+    if (complete && g.lastSeq >= 0 && kv.first > g.lastSeq)
+      break;
+    joined += kv.second;
+  }
+  QString text = QString::fromLatin1(joined);
+  if (!complete)
+    text += kIncomplete;
+  emitStatusText(r, g.severity, g.id, text);
+}
+
+void NavlinkRouter::handleStatusText(uint8_t severity, uint16_t id,
+                                     uint8_t chunkSeq, const char *text,
+                                     size_t textCap) {
+  const qint64 now = clockMs ? clockMs() : QDateTime::currentMSecsSinceEpoch();
+  flushStale(now);
+  size_t n = 0;
+  while (n < textCap && text[n] != '\0')
+    n++;
+  const QByteArray bytes(text, static_cast<qsizetype>(n));
+  const bool terminal = n < textCap;
+  if (id == 0) {
+    emitStatusText(this, severity, id, QString::fromLatin1(bytes));
+    return;
+  }
+  auto &st = d_->st;
+  auto it = st.begin();
+  while (it != st.end() && it->id != id)
+    ++it;
+  if (it == st.end()) {
+    if (terminal && chunkSeq == 0) { // whole message in one chunk
+      emitStatusText(this, severity, id, QString::fromLatin1(bytes));
+      return;
+    }
+    StGroup g;
+    g.id = id;
+    g.severity = severity;
+    g.firstMs = now;
+    st.push_back(g);
+    it = st.end() - 1;
+  }
+  if (it->chunks.count(chunkSeq) != 0) // resend of a chunk we already hold
+    return;
+  it->chunks[chunkSeq] = bytes;
+  it->bytes += static_cast<int>(n);
+  d_->stBytes += static_cast<int>(n);
+  if (chunkSeq == 0)
+    it->severity = severity; // the first chunk's severity labels the message
+  if (terminal && (it->lastSeq < 0 || chunkSeq < it->lastSeq))
+    it->lastSeq = chunkSeq;
+  if (it->lastSeq >= 0) {
+    bool all = true;
+    for (int s = 0; s <= it->lastSeq && all; s++)
+      all = it->chunks.count(static_cast<uint8_t>(s)) != 0;
+    if (all) {
+      const StGroup g = *it;
+      d_->stBytes -= g.bytes;
+      st.erase(it);
+      flushGroup(this, g, true);
+      return;
+    }
+  }
+  // Caps: oldest group goes first, as incomplete, never silently dropped.
+  while (!st.empty() && (static_cast<int>(st.size()) > kStatusTextMaxGroups ||
+                         d_->stBytes > kStatusTextMaxBytes)) {
+    const StGroup g = st.front();
+    d_->stBytes -= g.bytes;
+    st.erase(st.begin());
+    flushGroup(this, g, false);
+  }
+}
+
+void NavlinkRouter::flushStale(qint64 nowMs) {
+  auto &st = d_->st;
+  while (!st.empty() && nowMs - st.front().firstMs >= kStatusTextStaleMs) {
+    const StGroup g = st.front();
+    d_->stBytes -= g.bytes;
+    st.erase(st.begin());
+    flushGroup(this, g, false);
+  }
+}
 
 NavlinkRouter::NavlinkRouter() : d_(new Impl) {
   navlink_parser_init(&d_->parser);
@@ -433,6 +577,7 @@ NavlinkRouter::NavlinkRouter() : d_(new Impl) {
 NavlinkRouter::~NavlinkRouter() { delete d_; }
 
 void NavlinkRouter::feed(const QByteArray &f) {
+  flushStale(clockMs ? clockMs() : QDateTime::currentMSecsSinceEpoch());
   navlink_parser_push(&d_->parser, &d_->handlers,
                       reinterpret_cast<const uint8_t *>(f.constData()),
                       static_cast<size_t>(f.size()));
