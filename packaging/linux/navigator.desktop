@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Navigator
+GenericName=Drone ground station
+Comment=Drone ground control station and in-app simulator
+Exec=Navigator
+Icon=navigator
+Terminal=false
+Categories=Utility;Engineering;

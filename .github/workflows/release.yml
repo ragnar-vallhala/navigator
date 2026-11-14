@@ -1,0 +1,334 @@
+# Release packaging for Navigator: a Linux AppImage and a Windows installer,
+# one SHA256SUMS over both, built from a version tag.
+#
+#   push tag  v*        build both, checksum, then the (stubbed) publish job
+#   workflow_dispatch   the same build as a DRY RUN: artifacts are attached to
+#                       the run and nothing is published, whatever the inputs
+#
+# Channel: a tag with a prerelease suffix (v0.3.0-beta.1, v0.3.0-rc.2) is
+# `beta`, a plain vX.Y.Z is `stable`. On dispatch the `channel` input decides.
+# Artifact names carry both, e.g.
+#   navigator-0.3.0-stable-linux-x86_64.AppImage
+#   navigator-0.3.0-stable-windows-x64-setup.exe
+#   SHA256SUMS                      (one file, covers every artifact of the run)
+#
+# What is NOT here yet, on purpose:
+#   * publishing. The upload to get.navrobotec.in waits for the publish
+#     contract, and creating a GitHub Release needs the owner's OK. The
+#     `release` job at the bottom only prints what it would do.
+#   * code signing (Windows installer and AppImage are unsigned).
+#   * the app's own version string: the CMake project version is fixed in the
+#     tree, so the About box does not show the tag yet. The artifact names and
+#     the installer carry the tag version.
+#
+# Third-party actions are pinned by full commit SHA (resolved from the tag with
+# `gh api repos/<owner>/<repo>/git/ref/tags/<tag>`); the comment gives the tag.
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version for the artifact names, without a leading v (e.g. 0.3.0 or 0.3.0-beta.1)'
+        required: true
+        type: string
+      channel:
+        description: 'Release channel'
+        required: true
+        type: choice
+        options: [stable, beta]
+        default: beta
+
+# One run per ref; a release is never cancelled half way by a newer push.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# Least privilege: every job only reads the repository. Publishing, when it is
+# wired up, will need its own job-level permissions (see `release`).
+permissions:
+  contents: read
+
+env:
+  # The nav release bundled with Navigator (public repo ragnar-vallhala/nav).
+  # The build needs a tag that carries nav-<ver>-Linux.deb, nav-<ver>-win64.zip
+  # and SHA256SUMS (nav PR #11 and later). v1.3.1 predates that layout, so the
+  # fetch step FAILS with an explanation until this is bumped to the first tag
+  # cut after it: that is intended, an unverifiable binary is not bundled.
+  NAV_VERSION: '1.3.1'
+  # Firmware the SITL module comes from: keep equal to VAYU_FW_VERSION in ci.yml.
+  VAYU_FW_VERSION: v0.2.1
+
+jobs:
+  meta:
+    name: Version and channel
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      channel: ${{ steps.v.outputs.channel }}
+    steps:
+      - id: v
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          IN_VERSION: ${{ inputs.version }}
+          IN_CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          # Values come in through env, never interpolated into the script.
+          if [ "$EVENT" = push ]; then
+            version=${REF_NAME#v}
+            case "$version" in *-*) channel=beta ;; *) channel=stable ;; esac
+          else
+            version=${IN_VERSION#v}
+            channel=$IN_CHANNEL
+          fi
+          if ! printf '%s' "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::'$version' is not a version like 1.2.3 or 1.2.3-beta.1"; exit 1
+          fi
+          case "$channel" in stable|beta) ;; *) echo "::error::bad channel"; exit 1 ;; esac
+          # A prerelease version can not be published as stable, nor the reverse.
+          case "$version" in
+            *-*) [ "$channel" = beta ] || { echo "::error::prerelease version needs channel beta"; exit 1; } ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "version $version, channel $channel (event $EVENT)"
+
+  linux:
+    name: Linux AppImage (x86_64)
+    needs: meta
+    # ubuntu-24.04, pinned (not -latest): it is the release ci.yml builds and
+    # tests on today, so its Qt 6.4.2 is the Qt this code is known to build
+    # against. 22.04 would give an AppImage that runs on older glibc (the
+    # usual reason to build AppImages on the oldest distro) but ships Qt
+    # 6.2.4, which nothing here has built; an AppImage built on 24.04 needs
+    # glibc >= 2.39 on the user's machine. Revisit with a Qt 6.4+ from another
+    # source (aqtinstall) if older distros matter.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      CHANNEL: ${{ needs.meta.outputs.channel }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          submodules: recursive
+      - name: Install build and packaging dependencies
+        timeout-minutes: 20
+        run: |
+          apt_retry() { # bounded attempts: a hung mirror must not eat the job
+            for a in 1 2 3; do
+              sudo timeout -k 10 300 apt-get -o Acquire::Retries=3 \
+                -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+                -o DPkg::Lock::Timeout=120 "$@" && return 0
+              echo "apt-get $1 failed or timed out (attempt $a), retrying"
+              sudo dpkg --configure -a || true
+              sleep 10
+            done
+            return 1
+          }
+          apt_retry update
+          # Build deps as in ci.yml; the flashing tools nav drives (st-flash,
+          # openocd, avrdude) are bundled from these packages; the xcb libs are
+          # what the Qt xcb platform plugin needs to be deployed with.
+          apt_retry install -y cmake ninja-build curl file desktop-file-utils \
+            qt6-base-dev qt6-base-private-dev qt6-base-dev-tools qt6-serialport-dev \
+            libgl1-mesa-dev libassimp-dev libpulse-dev \
+            libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-render-util0 libxcb-shape0 libxcb-xkb1 \
+            stlink-tools openocd avrdude
+      - name: Fetch the firmware SITL SDK
+        env:
+          # vayu is private: read-only token, vayu Contents only (see ci.yml).
+          GH_TOKEN: ${{ secrets.VAYU_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::VAYU_RELEASE_TOKEN is not set or not visible to this run;" \
+                 "vayu is private, so the SITL SDK cannot be fetched without it."
+            exit 1
+          fi
+          ASSET="vayu-sitl-sdk-${VAYU_FW_VERSION}-linux-x86_64.tar.gz"
+          gh release download "${VAYU_FW_VERSION}" \
+            --repo ragnar-vallhala/vayu --pattern "${ASSET}"
+          tar xzf "$ASSET"
+          rm -f "$ASSET"
+          echo "engine build id: $(cat vayu-sitl-sdk/BUILD_ID)"
+          grep -q "^${VAYU_FW_VERSION} " vayu-sitl-sdk/BUILD_ID \
+            || { echo "SDK is not ${VAYU_FW_VERSION}"; exit 1; }
+          test -f vayu-sitl-sdk/include/vayu_sitl_abi.h
+          test -f vayu-sitl-sdk/lib/libvayu_sitl.so
+      - name: Configure + build (Release, SITL ON)
+        # Same configuration as ci.yml's navigator job, minus tests, tidy and
+        # the grass option (off by default, as in the installed app).
+        run: |
+          cmake -S navigator -B navigator/build-rel -G Ninja \
+                -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+                -DNAVIGATOR_BUILD_TESTS=OFF -DNAVIGATOR_WORKSPACE_MOCK=OFF
+          cmake --build navigator/build-rel
+          # As ci.yml: a half-fetched SDK must not silently build SITL out.
+          grep -q 'NAVIGATOR_HAS_SITL' navigator/build-rel/compile_commands.json \
+            || { echo "SITL is off -- the SDK was not picked up"; exit 1; }
+      - name: Fetch nav (pinned, checksum verified)
+        run: tools/release/fetch-nav.sh linux "$NAV_VERSION" "$RUNNER_TEMP/nav"
+      - name: Build the AppImage
+        env:
+          REQUIRE_FLASH_TOOLS: '1'
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          BUILD_DIR="$PWD/navigator/build-rel" SDK_DIR="$PWD/vayu-sitl-sdk" \
+          NAV_DIR="$RUNNER_TEMP/nav" OUT_DIR="$RUNNER_TEMP/out" \
+          TOOLS_DIR="$RUNNER_TEMP/tools" WORK_DIR="$RUNNER_TEMP/work" \
+            tools/release/build-appimage.sh
+          # The same notices that are inside the image, for the release page.
+          cp "$RUNNER_TEMP/work/AppDir/usr/share/doc/navigator/THIRD-PARTY-NOTICES.md" \
+             "$RUNNER_TEMP/out/navigator-${VERSION}-${CHANNEL}-THIRD-PARTY-NOTICES-linux.md"
+          ls -l "$RUNNER_TEMP/out"
+      - name: Smoke test the AppImage (xcb on Xvfb, software GL, 10 s)
+        # It must start and stay up. A crash on start exits early, a healthy
+        # app is stopped by the timeout (exit 124).
+        env:
+          QT_QPA_PLATFORM: xcb
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: |
+          sudo apt-get install -y xvfb libgl1-mesa-dri >/dev/null
+          img="$RUNNER_TEMP/out/navigator-${VERSION}-${CHANNEL}-linux-x86_64.AppImage"
+          priv=$(mktemp -d)
+          rc=0
+          XDG_CONFIG_HOME="$priv/c" XDG_DATA_HOME="$priv/d" HOME="$priv/h" \
+          VAYU_VFS_DIR="$priv/vfs" VSIM_FIFO_SUFFIX="rel$$" \
+            timeout -k 5 10 xvfb-run -a -s "-screen 0 1280x800x24 +extension GLX" "$img" || rc=$?
+          echo "exit code $rc (124 = still running when stopped, expected)"
+          [ "$rc" -eq 124 ]
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: navigator-linux
+          path: ${{ runner.temp }}/out/navigator-*
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    name: Windows installer (MSYS2 UCRT64, GCS-only)
+    needs: meta
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      CHANNEL: ${{ needs.meta.outputs.channel }}
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          submodules: recursive
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-qt6-serialport
+            git curl unzip
+      - name: Configure + build (Release, GCS-only)
+        # As the windows job of ci.yml; SITL needs a POSIX host.
+        run: |
+          cmake -S navigator -B build-win -G Ninja \
+                -DCMAKE_BUILD_TYPE=Release -DNAVIGATOR_SITL=OFF \
+                -DNAVIGATOR_BUILD_TESTS=OFF -DNAVIGATOR_WORKSPACE_MOCK=OFF
+          cmake --build build-win -j"$(nproc)"
+      - name: Bundle Navigator.exe with its Qt and runtime DLLs
+        run: bash tools/windows/deploy-navigator-msys.sh "$PWD/build-win"
+      - name: Fetch nav (pinned, checksum verified)
+        run: tools/release/fetch-nav.sh windows "$NAV_VERSION" "$PWD/nav-win"
+      - name: Licences and third-party notices
+        run: |
+          mkdir -p licensedir
+          cp LICENSE.md licensedir/LICENSE.md
+          tools/release/make-notices.sh windows licensedir/licenses \
+            licensedir/THIRD-PARTY-NOTICES.md "$PWD/build-win/dist"
+      - name: Build the installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; }
+          if (-not (Test-Path $iscc)) { throw "Inno Setup not found" }
+          $ws = $env:GITHUB_WORKSPACE
+          New-Item -ItemType Directory -Force "$ws\out" | Out-Null
+          & $iscc "/DAppVersion=$env:VERSION" "/DAppChannel=$env:CHANNEL" `
+            "/DDistDir=$ws\build-win\dist" "/DNavDir=$ws\nav-win" `
+            "/DLicenseDir=$ws\licensedir" "/DOutDir=$ws\out" "$ws\tools\windows\navigator.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          Copy-Item "$ws\licensedir\THIRD-PARTY-NOTICES.md" "$ws\out\navigator-$env:VERSION-$env:CHANNEL-THIRD-PARTY-NOTICES-windows.md"
+          Get-ChildItem "$ws\out"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: navigator-windows
+          path: out/navigator-*
+          if-no-files-found: error
+          retention-days: 14
+
+  checksums:
+    name: SHA256SUMS
+    needs: [meta, linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: navigator-*
+          merge-multiple: true
+          path: dist
+      - name: One SHA256SUMS over every artifact of this run
+        run: |
+          ls -l dist
+          tools/release/sha256sums.sh dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: navigator-SHA256SUMS
+          path: dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+
+  # Publishing is a STUB. It runs only for a pushed tag (never for a dispatch
+  # dry run), downloads what the build produced, and stops there.
+  release:
+    name: Publish (stub)
+    needs: [meta, checksums]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read   # a GitHub Release would need `contents: write`: only with the owner's OK
+    environment: release   # create this environment with required reviewers before the first tag
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: navigator-*
+          merge-multiple: true
+          path: dist
+      - name: Verify what would be published
+        run: |
+          cd dist && ls -l && sha256sum -c SHA256SUMS
+      - name: Publish
+        # Not wired up. Upload to get.navrobotec.in waits for Gauri's publish
+        # contract (upload method, path layout, CI secret); GitHub Release
+        # creation needs ashu's OK per repo. `if: false` keeps both off. The
+        # intended shape, for whoever turns this on:
+        #   upload: dist/* to get.navrobotec.in/navigator/<channel>/<version>/
+        #   release: a draft GitHub Release for the tag, assets dist/*,
+        #            prerelease when channel == beta
+        if: false
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          CHANNEL: ${{ needs.meta.outputs.channel }}
+        run: |
+          echo "would publish navigator $VERSION ($CHANNEL): $(ls dist | tr '\n' ' ')"
