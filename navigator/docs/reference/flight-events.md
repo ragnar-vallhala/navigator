@@ -8,8 +8,15 @@ Every simulator run writes two files into the log directory (Simulator panel,
 | `gt-<stamp>.bin` | physics ground truth, binary (unchanged; see `parse_gt.py`) |
 | `ev-<stamp>.jsonl` | what happened during the run: RC input, mode, arm, injected faults, markers |
 
-`<stamp>` is the local start time, `yyyy-MM-dd_HH-mm-ss`, and is identical for
-the two files of a run. The writer is `vsim::FlightEventLog`
+`<stamp>` is the local start time to the millisecond, `yyyy-MM-dd_HH-mm-ss-zzz`
+(for example `2026-11-15_09-30-12-482`), and is identical for the two files of a
+run. Files are created without overwriting: if the name is already taken (two
+runs in the same millisecond, or a leftover `ev-` file), a zero-padded counter
+is appended (`...-482-0001`, `-0002`, ...), so stamps still sort in start
+order. Runs written by older versions use `yyyy-MM-dd_HH-mm-ss` (no
+milliseconds); they list and sort alongside the new ones. A Start that fails
+before the first ground-truth record (missing engine module, engine boot
+failure) leaves no files behind. The writer is `vsim::FlightEventLog`
 (`src/vsim/FlightEventLog.{h,cpp}`), opened when the gt log opens and closed
 when it closes. Each line is flushed as it is written, so a crash leaves a
 readable prefix (a half-written last line is possible; readers should skip a
