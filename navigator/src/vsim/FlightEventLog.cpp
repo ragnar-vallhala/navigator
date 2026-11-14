@@ -47,10 +47,38 @@ QString stampOf(const QString &name, const QString &prefix,
 }
 } // namespace
 
-bool FlightEventLog::open(const QString &path, const Header &h) {
+QString FlightEventLog::makeStamp(const QDateTime &when, int tieBreak) {
+  QString s = when.toString(QStringLiteral("yyyy-MM-dd_HH-mm-ss-zzz"));
+  if (tieBreak > 0)
+    s += QStringLiteral("-%1").arg(tieBreak, 4, 10, QLatin1Char('0'));
+  return s;
+}
+
+bool FlightEventLog::createRunGt(const QString &dir, const QDateTime &when,
+                                 QFile *gt, QString *stamp) {
+  constexpr int kMaxTries = 10000;
+  const QDir d(dir);
+  for (int n = 0; n < kMaxTries; ++n) {
+    const QString s = makeStamp(when, n);
+    if (QFileInfo::exists(d.absoluteFilePath(QStringLiteral("ev-%1.jsonl").arg(s))))
+      continue;
+    gt->setFileName(d.absoluteFilePath(QStringLiteral("gt-%1.bin").arg(s)));
+    if (gt->open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+      *stamp = s;
+      return true;
+    }
+    if (!QFileInfo::exists(gt->fileName()))
+      return false; // not a name clash: the directory is unusable
+  }
+  return false;
+}
+
+bool FlightEventLog::open(const QString &path, const Header &h,
+                          bool exclusive) {
   close();
   m_file.setFileName(path);
-  if (!m_file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+  if (!m_file.open(QIODevice::WriteOnly |
+                   (exclusive ? QIODevice::NewOnly : QIODevice::Truncate)))
     return false;
   m_lastT = 0;
   m_events = 0;
