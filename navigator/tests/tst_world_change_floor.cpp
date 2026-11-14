@@ -315,10 +315,12 @@ private slots:
     if (!gl_)
       QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
     QFETCH(QString, preset);
+    bool applied = false;
     a_->changeWorld([&](vsim::WorldConfig &c) {
-      QVERIFY(vsim::applyWorldPreset(c, preset, 17));
+      applied = vsim::applyWorldPreset(c, preset, 17);
       c.worldPreset = preset;
     });
+    QVERIFY2(applied, "unknown preset");
     pump(200);
     qInfo("%s stopped: alt=%.2f cam=%.2f above deck=%.2f", qPrintable(preset),
           altAbove(*a_), camAbove(*a_), aboveDeck(*a_));
@@ -365,18 +367,25 @@ private slots:
       QVERIFY(waitFor([&] { return !a_->shipBusy() && altAbove(*a_) > 5.0f; },
                       30000));
       QVERIFY(altAbove(*a_) > 5.0f);
+      bool applied = false;
       a_->changeWorld([&](vsim::WorldConfig &c) {
-        QVERIFY(vsim::applyWorldPreset(c, pr.first, 5));
+        applied = vsim::applyWorldPreset(c, pr.first, 5);
         c.worldPreset = pr.first;
       });
+      QVERIFY2(applied, qPrintable(pr.first));
       pump(300);
       QVERIFY2(waitFor([&] { return !a_->shipBusy(); }, 30000),
                qPrintable(pr.first));
       pump(3000);
       qInfo("in flight -> %s: alt=%.2f cam=%.2f above deck=%.2f",
             qPrintable(pr.first), altAbove(*a_), camAbove(*a_), aboveDeck(*a_));
+      // On the new ground's pad: not below it, not still up at 40 m, and not
+      // re-seated somewhere off the pad. The home pad sits about 0.9 m above
+      // the ground and the vehicle about 0.04 m above its deck.
       QVERIFY2(altAbove(*a_) >= -0.05f, qPrintable(pr.first));
+      QVERIFY2(altAbove(*a_) < 1.5f, qPrintable(pr.first));
       QVERIFY2(aboveDeck(*a_) >= -0.05f, qPrintable(pr.first));
+      QVERIFY2(aboveDeck(*a_) < 1.0f, qPrintable(pr.first));
       QVERIFY2(camAbove(*a_) >= 0.0f, qPrintable(pr.first));
     }
   }
