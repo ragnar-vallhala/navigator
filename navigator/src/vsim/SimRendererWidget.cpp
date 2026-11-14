@@ -213,6 +213,15 @@ void main() {
     base = (mod(k, 2.0) < 0.5) ? vec3(0.80, 0.14, 0.08) : vec3(0.92, 0.92, 0.88);
   }
   vec3 lit  = base * (ambient + sunCol * wrap * 0.95 * shadowFactor(v_world, n, sun));
+  if (u_bands > 0.5) {
+    // A survey pole is a thin vertical marker seen against bright snow and
+    // rock, often from its sun-shaded side or in a terrain shadow; with only
+    // ambient light its red/white bands both read as black. Light it from a
+    // floor so the bands stay legible, and let the terrain shadow darken it
+    // only partly.
+    float sf = mix(1.0, shadowFactor(v_world, n, sun), 0.3);
+    lit = base * (max(ambient, vec3(0.45)) + sunCol * wrap * 0.55 * sf);
+  }
   // Aerial perspective: fade toward the sky behind the surface with distance,
   // so the streamed-terrain edge dissolves into haze.
   vec3 vdir = dist > 1e-4 ? toFrag / dist : vec3(0.0, 0.0, 1.0);
