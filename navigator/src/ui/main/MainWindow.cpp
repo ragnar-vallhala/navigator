@@ -1611,8 +1611,10 @@ void MainWindow::onUiTimer() {
     }
     if (s.armed != m_armed) {
       m_armed = s.armed;
+#ifdef NAVIGATOR_HAS_SITL
       if (m_simulatorWidget)
         m_simulatorWidget->noteArmed(m_armed);
+#endif
       if (m_faultsPanel)
         m_faultsPanel->setArmed(m_armed);
       if (m_toolbar)
