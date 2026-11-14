@@ -335,20 +335,33 @@ float shadowMapFactor(vec3 wpos, vec3 nrm, vec3 lightDir) {
   float ndl = clamp(dot(n, normalize(lightDir)), 0.0, 1.0);
   // Normal-offset: push the receiver off its own surface — more at grazing sun
   // angles where one shadow texel covers many fragments — so the depth compare
-  // samples clear of the caster. This is what kills the terraced self-shadow
-  // banding (acne) on slopes; a flat constant bias cannot.
+  // samples clear of the caster.
   vec3 wp = wpos + n * (0.05 + 0.35 * (1.0 - ndl));
   vec4 lp = u_lightvp * vec4(wp, 1.0);
   vec3 p = lp.xyz / lp.w * 0.5 + 0.5;
-  if (p.x <= 0.0 || p.x >= 1.0 || p.y <= 0.0 || p.y >= 1.0 || p.z >= 1.0) return 1.0;
-  // Slope-scaled depth bias on top of the offset (grows toward grazing).
-  float bias = clamp(0.0008 * tan(acos(ndl)), 0.0004, 0.004);
+  // Receiver-plane depth: how the fragment's own light-space depth changes per
+  // shadow texel in u and v. Each PCF tap is compared against the depth the
+  // fragment's own surface has AT THAT TAP, not at the centre; a constant or
+  // normal-based bias cannot do that on a faceted slope at a grazing sun, and
+  // the leftover shows as hatched / terraced bands on steep faces (shadow acne).
+  // The derivatives are taken before any early return so they stay uniform.
+  vec3 dpx = dFdx(p), dpy = dFdy(p);
+  float det = dpx.x * dpy.y - dpx.y * dpy.x;
+  vec2 dz = vec2(0.0);
+  if (abs(det) > 1e-14)
+    dz = vec2(dpx.z * dpy.y - dpx.y * dpy.z, dpx.x * dpy.z - dpx.z * dpy.x) / det;
   float texel = 1.0 / 2048.0;
+  dz = clamp(dz * texel, vec2(-0.02), vec2(0.02)); // depth change per texel step
+  if (p.x <= 0.0 || p.x >= 1.0 || p.y <= 0.0 || p.y >= 1.0 || p.z >= 1.0) return 1.0;
+  // Small constant on top of the plane term; grows toward grazing sun, where the
+  // plane estimate (2x2 pixel derivatives on a faceted surface) is least exact.
+  float bias = 0.0015 + 0.0035 * (1.0 - ndl);
   float s = 0.0;
   for (int dx = -1; dx <= 1; ++dx)
     for (int dy = -1; dy <= 1; ++dy) {
       float d = texture(u_shadowtex, p.xy + vec2(dx, dy) * texel).r;
-      s += (p.z - bias > d) ? 0.0 : 1.0;
+      float ref = p.z + dz.x * float(dx) + dz.y * float(dy);
+      s += (ref - bias > d) ? 0.0 : 1.0;
     }
   return s / 9.0;
 }
