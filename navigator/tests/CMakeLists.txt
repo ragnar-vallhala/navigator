@@ -337,6 +337,10 @@ navigator_test(tst_box_inertia
     ${SRC}/vsim/AirframePresets.cpp)
 target_include_directories(tst_box_inertia PRIVATE ${SRC}/vsim)
 
+# ---- Stopping a stuck worker thread without terminate() (pure, no engine) ---
+navigator_test(tst_thread_retire tst_thread_retire.cpp)
+target_include_directories(tst_thread_retire PRIVATE ${SRC}/vsim)
+
 # ---- Main-window size fitted to the screen (pure, no widget) ---------------
 navigator_test(tst_window_fit tst_window_fit.cpp)
 target_include_directories(tst_window_fit PRIVATE ${SRC}/ui/main)

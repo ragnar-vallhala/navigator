@@ -19,6 +19,7 @@
 #include <cmath>
 #include "SimPanelsCommon.h"
 #include "../../vsim/FlightEventLog.h"
+#include "../../vsim/ThreadRetire.h"
 #include "../../vsim/VehicleJson.h"
 
 #include <QApplication>
@@ -2310,12 +2311,23 @@ void SimulatorWidget::stopInAppSim() {
   if (m_holdTimer)
     m_holdTimer->stop();
   m_sim->requestStop();
-  if (!m_sim->wait(2000)) {
-    m_sim->terminate();
-    m_sim->wait(1000);
+  // A worker stuck inside the engine (it can hang in the firmware's
+  // attitude_task semaphore wait under load, so run_step never returns) must
+  // not be terminate()d: that kills it mid-engine call and crashes Navigator.
+  // Give it a bounded time, then leave it running and say so.
+  const bool engineStopped = vsim::joinOrAbandon(m_sim, 3000);
+  if (engineStopped) {
+    m_sim->deleteLater();
+  } else {
+    // Drop every connection (it may still emit) and never delete it.
+    QObject::disconnect(m_sim, nullptr, nullptr, nullptr);
+    appendLog(QStringLiteral("sim"),
+              tr("The simulator engine did not stop and is left running. "
+                 "Restart Navigator to run the simulator again."));
   }
-  m_sim->deleteLater();
   m_sim = nullptr;
+  if (!engineStopped)
+    blockStartUntilRestart(tr("engine hung, restart Navigator"));
   // The worker (engine host) is down: the published world blob is dead weight.
   // Start re-ships it. Not removed at ship end: the engine reads it after that.
   QFile::remove(worldBlobPath());
