@@ -49,6 +49,7 @@ class SimulatorWidgetTestAccess {
 public:
   explicit SimulatorWidgetTestAccess(SimulatorWidget &w) : w_(w) {}
   QStackedWidget *stack() const { return w_.m_rightStack; }
+  bool imuDropout() const { return w_.m_imuDropout; }
 
 private:
   SimulatorWidget &w_;
@@ -148,6 +149,20 @@ private slots:
       QVERIFY2(kill->isEnabled(), qPrintable(t + " disabled"));
       QVERIFY(!kill->isHidden());
     }
+  }
+
+  // The IMU dropout toggle must drive the flag that pushFaults() sends to the
+  // engine (vsim_ctl_faults_t.imu_dropout); it used to be dead code. Offscreen
+  // check of the flag only; that the engine reacts is a manual run (see PR).
+  void imuDropoutToggleSetsTheFaultFlag() {
+    auto *box = w_->findChild<QCheckBox *>(QStringLiteral("ImuDropoutCheck"));
+    QVERIFY2(box, "IMU dropout checkbox not found");
+    QVERIFY(box->isEnabled());
+    QVERIFY(!a_->imuDropout());
+    box->setChecked(true);
+    QVERIFY2(a_->imuDropout(), "toggle did not set the dropout flag");
+    box->setChecked(false);
+    QVERIFY(!a_->imuDropout());
   }
 
   void sectionTitlesAreClean() {

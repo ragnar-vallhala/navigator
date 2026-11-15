@@ -534,7 +534,8 @@ private:
 
   // ---- Fault injection (mockup Vehicle ▸ Fault Injection) ----
   bool m_motorKill[4] = {false, false, false, false};
-  bool m_imuDropout = false; // driven by the Sensor Models IMU enable
+  bool m_imuDropout = false; // the Fault Injection "IMU dropout" checkbox
+  class QCheckBox *m_imuDropoutChk = nullptr;
   QPushButton *m_killBtn[4] = {nullptr, nullptr, nullptr, nullptr};
   QWidget *buildFaultPanel(); // kill-motor / RC-loss / GPS-glitch group
   void pushFaults();          // current fault flags → SimWorker

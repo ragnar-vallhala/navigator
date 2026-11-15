@@ -162,6 +162,22 @@ QWidget *SimulatorWidget::buildFaultPanel() {
   killRow->addStretch();
   v->addLayout(killRow);
 
+  // IMU dropout: vsim_ctl_faults_t.imu_dropout freezes the IMU sample (stuck
+  // sensor); sent with the kill flags by pushFaults().
+  m_imuDropoutChk = new QCheckBox(tr("IMU dropout (stuck sensor)"), grp);
+  m_imuDropoutChk->setObjectName(QStringLiteral("ImuDropoutCheck"));
+  m_imuDropoutChk->setToolTip(
+      tr("Freeze the IMU sample at its last reading while flying"));
+  connect(m_imuDropoutChk, &QCheckBox::toggled, this, [this](bool on) {
+    m_imuDropout = on;
+    pushFaults();
+    logFault(QStringLiteral("imu_dropout"), on,
+             QStringLiteral("IMU dropout"));
+    appendLog("fault",
+              on ? tr("IMU dropout injected") : tr("IMU restored"));
+  });
+  v->addWidget(m_imuDropoutChk);
+
   auto *rcLoss = new QCheckBox(tr("RC link loss (→ firmware failsafe)"), grp);
   rcLoss->setToolTip(tr("Stop feeding RC so the firmware enters failsafe"));
   connect(rcLoss, &QCheckBox::toggled, this, [this](bool on) {
