@@ -89,12 +89,12 @@ public:
     if (silent)
       return true;
     if (m_active) {
-      reply([=, this] { up->onCommandAck(xfer::kMsgidXferOpen, reqSeq, xfer::kResTempRejected); });
+      reply([=] { up->onCommandAck(xfer::kMsgidXferOpen, reqSeq, xfer::kResTempRejected); });
       return true;
     }
     if (openResult != xfer::kResAccepted) {
       const quint8 r = openResult;
-      reply([=, this] { up->onCommandAck(xfer::kMsgidXferOpen, reqSeq, r); });
+      reply([=] { up->onCommandAck(xfer::kMsgidXferOpen, reqSeq, r); });
       return true;
     }
     m_active = true;
@@ -103,10 +103,10 @@ public:
     file.clear();
     m_doneSent = false;
     if (sendAccept)
-      reply([=, this] { up->onCommandAck(xfer::kMsgidXferOpen, reqSeq, xfer::kResAccepted); });
+      reply([=] { up->onCommandAck(xfer::kMsgidXferOpen, reqSeq, xfer::kResAccepted); });
     if (sendInfo) {
       const quint16 c = chunk;
-      reply([=, this] { up->onXferInfo(s, xfer::kResAccepted, c, 0xFFFFFFFFu); });
+      reply([=] { up->onXferInfo(s, xfer::kResAccepted, c, 0xFFFFFFFFu); });
     }
     m_ackTimer.start();
     return true;
