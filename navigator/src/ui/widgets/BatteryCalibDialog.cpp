@@ -22,6 +22,7 @@
 #include <QFileDialog>
 #include <QLabel>
 #include <QMessageBox>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QSaveFile>
 #include <QVBoxLayout>
@@ -72,16 +73,34 @@ BatteryCalibDialog::BatteryCalibDialog(QWidget *parent) : QDialog(parent) {
   v->addWidget(m_resultLbl);
 
   auto *note = new QLabel(
-      tr("Navigator cannot upload files to the vehicle yet. Save the file, "
-         "copy it to the SD card as %1, then reboot the vehicle: the "
-         "calibration is read once at start-up.")
+      tr("Upload sends the file to the vehicle's SD card as %1 over the "
+         "link. Or save it and copy it to the card yourself. Either way, "
+         "reboot the vehicle afterwards: the calibration is read once at "
+         "start-up.")
           .arg(QString::fromLatin1(batcal::kCardPath)),
       this);
   note->setWordWrap(true);
   v->addWidget(note);
 
+  m_uploadBar = new QProgressBar(this);
+  m_uploadBar->setRange(0, 100);
+  m_uploadBar->setVisible(false);
+  v->addWidget(m_uploadBar);
+  m_uploadLbl = new QLabel(this);
+  m_uploadLbl->setWordWrap(true);
+  m_uploadLbl->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  v->addWidget(m_uploadLbl);
+
   auto *bb = new QDialogButtonBox(this);
+  m_uploadBtn =
+      bb->addButton(tr("Upload to vehicle"), QDialogButtonBox::ActionRole);
   m_saveBtn = bb->addButton(tr("Save batcal.bin…"), QDialogButtonBox::ActionRole);
+  connect(m_uploadBtn, &QPushButton::clicked, this, [this] {
+    if (m_uploading && m_uploader)
+      m_uploader->cancel();
+    else
+      startUpload();
+  });
   bb->addButton(QDialogButtonBox::Close);
   connect(m_saveBtn, &QPushButton::clicked, this,
           &BatteryCalibDialog::saveClicked);
@@ -90,6 +109,7 @@ BatteryCalibDialog::BatteryCalibDialog(QWidget *parent) : QDialog(parent) {
 
   setLive(0, false);
   refit();
+  updateUploadUi();
 }
 
 void BatteryCalibDialog::setLive(quint16 counts, bool usable) {
@@ -123,6 +143,7 @@ void BatteryCalibDialog::refit() {
   if (!m_have[0] || !m_have[1]) {
     m_resultLbl->setText(tr("Capture both points to fit."));
     m_saveBtn->setEnabled(false);
+    updateUploadUi();
     return;
   }
   QVector<batcal::Point> pts{m_pt[0], m_pt[1]};
@@ -145,6 +166,7 @@ void BatteryCalibDialog::refit() {
   }
   m_resultLbl->setText(t);
   m_saveBtn->setEnabled(m_fit.ok);
+  updateUploadUi();
 }
 
 QByteArray BatteryCalibDialog::blob() const {
@@ -183,4 +205,113 @@ void BatteryCalibDialog::saveClicked() {
       tr("Saved. Copy it to the SD card as %1 and reboot the vehicle for it "
          "to take effect.")
           .arg(QString::fromLatin1(batcal::kCardPath)));
+}
+
+void BatteryCalibDialog::setUploader(XferUploader *u) {
+  if (m_uploader == u)
+    return;
+  if (m_uploader)
+    m_uploader->disconnect(this);
+  m_uploader = u;
+  if (u) {
+    connect(u, &XferUploader::progress, this,
+            &BatteryCalibDialog::onUploadProgress);
+    connect(u, &XferUploader::finished, this,
+            &BatteryCalibDialog::onUploadFinished);
+  }
+  updateUploadUi();
+}
+
+void BatteryCalibDialog::setUploadAvailable(bool available, const QString &why) {
+  m_uploadAvail = available;
+  m_uploadWhy = why;
+  if (!available && m_uploading && m_uploader)
+    m_uploader->cancel(); // link no longer allows transmit
+  updateUploadUi();
+}
+
+bool BatteryCalibDialog::uploadEnabled() const {
+  return m_uploadBtn->isEnabled();
+}
+
+QString BatteryCalibDialog::uploadStatus() const { return m_uploadLbl->text(); }
+
+void BatteryCalibDialog::updateUploadUi() {
+  if (m_uploading) {
+    m_uploadBtn->setText(tr("Cancel upload"));
+    m_uploadBtn->setEnabled(true);
+    m_uploadBtn->setToolTip(QString());
+    return;
+  }
+  m_uploadBtn->setText(tr("Upload to vehicle"));
+  const bool ok = m_uploader && m_uploadAvail && m_fit.ok;
+  m_uploadBtn->setEnabled(ok);
+  QString tip;
+  if (!m_uploader)
+    tip = tr("File upload is not available here.");
+  else if (!m_uploadAvail)
+    tip = m_uploadWhy.isEmpty() ? tr("No live link to the vehicle.") : m_uploadWhy;
+  else if (!m_fit.ok)
+    tip = tr("Capture both points first.");
+  m_uploadBtn->setToolTip(tip);
+}
+
+bool BatteryCalibDialog::startUpload() {
+  if (m_uploading || !m_uploader || !m_uploadAvail || !m_fit.ok)
+    return false;
+  const QByteArray b = blob();
+  if (b.isEmpty())
+    return false;
+  m_uploading = true;
+  m_uploadBar->setValue(0);
+  m_uploadBar->setVisible(true);
+  m_uploadLbl->setText(tr("Uploading %1 ...").arg(QString::fromLatin1(batcal::kCardPath)));
+  if (!m_uploader->start(QString::fromLatin1(batcal::kCardPath), b)) {
+    m_uploading = false;
+    m_uploadBar->setVisible(false);
+    m_uploadLbl->setText(tr("Upload not started: %1").arg(m_uploader->lastError()));
+    updateUploadUi();
+    return false;
+  }
+  updateUploadUi();
+  return true;
+}
+
+void BatteryCalibDialog::onUploadProgress(quint32 acked, quint32 total) {
+  if (!m_uploading)
+    return;
+  m_uploadBar->setValue(total ? int(100LL * acked / total) : 0);
+}
+
+void BatteryCalibDialog::onUploadFinished(XferUploader::Result r,
+                                          const QString &msg) {
+  if (!m_uploading)
+    return; // someone else's upload
+  m_uploading = false;
+  m_uploadBar->setVisible(r == XferUploader::Result::Ok);
+  if (r == XferUploader::Result::Ok) {
+    m_uploadBar->setValue(100);
+    m_uploadLbl->setText(
+        tr("Uploaded %1 to the vehicle. Reboot the vehicle for the "
+           "calibration to take effect.")
+            .arg(QString::fromLatin1(batcal::kCardPath)));
+  } else if (r == XferUploader::Result::Cancelled) {
+    m_uploadLbl->setText(
+        tr("Upload cancelled. The vehicle's %1 may be missing or partial; "
+           "upload again or copy the saved file to the card.")
+            .arg(QString::fromLatin1(batcal::kCardPath)));
+  } else {
+    m_uploadLbl->setText(
+        tr("Upload failed: %1. The vehicle's %2 may be incomplete (it is "
+           "replaced when an upload opens); retry, or use Save and copy the "
+           "file to the card.")
+            .arg(msg, QString::fromLatin1(batcal::kCardPath)));
+  }
+  updateUploadUi();
+}
+
+void BatteryCalibDialog::done(int r) {
+  if (m_uploading && m_uploader)
+    m_uploader->cancel();
+  QDialog::done(r);
 }

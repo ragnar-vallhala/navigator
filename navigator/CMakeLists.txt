@@ -98,6 +98,7 @@ set(GCS_SOURCES
     src/core/ViewHistory.cpp
     src/core/CalibrationWizard.cpp
     src/core/BatteryCalib.cpp
+    src/core/XferUploader.cpp
     src/ui/widgets/BatteryCalibDialog.cpp
     src/core/CsvExport.cpp
     src/core/Logger.cpp
@@ -178,6 +179,8 @@ set(GCS_HEADERS
     src/ui/widgets/PacketAnalyzerWidget.h
     src/ui/main/SettingsWidget.h
     src/core/BatteryCalib.h
+    src/core/XferUploader.h
+    src/protocol/XferWireLink.h
     src/core/BatteryAlert.h
     src/ui/widgets/BatteryCalibDialog.h
     src/protocol/PacketDissector.h

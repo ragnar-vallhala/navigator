@@ -98,6 +98,14 @@ public:
   // COMMAND_ACK: the FC's response to a command, correlated by (command,reqSeq).
   std::function<void(uint32_t command, uint8_t reqSeq, uint8_t result)>
       onCommandAck;
+  // XFER_INFO / XFER_ACK from the vehicle on an upload session (see
+  // core/XferUploader.h). XFER_DATA / XFER_SACK are download-side: unused.
+  std::function<void(uint8_t session, uint8_t result, uint16_t chunkSize,
+                     uint32_t totalSize)>
+      onXferInfo;
+  std::function<void(uint8_t session, uint8_t flags, uint8_t result,
+                     uint32_t nextOffset)>
+      onXferAck;
   // SYSTEM_HEALTH: decoded but has no GCS consumer today (parity with v1, which
   // never surfaced it). A hook is provided for when one is added.
   std::function<void(uint32_t txOverflow, uint32_t imuDrop, uint32_t logWrap,

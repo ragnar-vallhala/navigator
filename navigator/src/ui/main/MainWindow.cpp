@@ -21,7 +21,9 @@
 #include "../core/FaultsModel.h"
 #include "../core/Notify.h"
 #include "../core/SettingsManager.h"
+#include "../core/XferUploader.h"
 #include "../protocol/CommandCodec.h"
+#include "../protocol/XferWireLink.h"
 #include "../replay/ReplaySource.h"
 #include "../ui/widgets/AboutDialog.h"
 #include "../ui/widgets/BatteryCalibDialog.h"
@@ -79,6 +81,8 @@
 // 0:pid.bin (host VFS -> $VAYU_VFS_DIR, default /tmp/vayu_vfs), so a tune
 // survives a sim restart.
 #endif
+
+MainWindow::~MainWindow() = default;
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   setWindowTitle("Vayu GCS — Ground Control Station");
@@ -150,7 +154,24 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             }
             refreshConnectionPill();
             updateExportEnabled();
+            refreshXferAvailability();
           });
+
+  // XFER upload client: frames go out through the single tx choke point, and
+  // only on a real vehicle link (never Sim / Replay, see xferUploadAvailability).
+  m_xferLink = std::make_unique<XferWireLink>([this](const QByteArray &f) {
+    if (m_source.state() != SourceState::Fc)
+      return false;
+    sendToFc(f);
+    return true;
+  });
+  m_xfer = new XferUploader(m_xferLink.get(), this);
+  connect(m_engine->protocol(), &DroneProtocol::xferInfoReceived, m_xfer,
+          &XferUploader::onXferInfo);
+  connect(m_engine->protocol(), &DroneProtocol::xferAckReceived, m_xfer,
+          &XferUploader::onXferAck);
+  connect(m_engine->protocol(), &DroneProtocol::commandAckReceived, m_xfer,
+          &XferUploader::onCommandAck);
 
   // Engine link signals — forwarded from the (worker-thread) transports, so
   // these arrive auto-queued on the GUI thread. The live byte→parser path is
@@ -2066,6 +2087,39 @@ void MainWindow::openBatteryCalibration() {
   }
   auto *d = new BatteryCalibDialog(this);
   d->setAttribute(Qt::WA_DeleteOnClose);
+  d->setUploader(m_xfer);
   m_batteryCalibDialog = d;
+  refreshXferAvailability();
   d->show();
+}
+
+// Upload needs a live, commandable vehicle link. Choice: Fc only.
+//  - Replay and Idle: txAllowed() is false, nothing can be sent.
+//  - Sim: txAllowed() is true, but the XFER service (a task that needs the
+//    card/VFS and the xfer providers) has not been verified to run inside the
+//    in-app SITL module, so an upload there could only hang until it times out.
+//    It stays refused until that is confirmed on the module.
+bool MainWindow::xferUploadAvailability(QString *why) const {
+  QString w;
+  bool ok = false;
+  if (!m_source.txAllowed()) {
+    w = m_source.isReplay() ? tr("Read-only while replaying a log.")
+                            : tr("Connect to the vehicle first.");
+  } else if (m_source.state() == SourceState::Sim) {
+    w = tr("File upload is not supported in the in-app simulator; connect to "
+           "a real vehicle.");
+  } else {
+    ok = true;
+  }
+  if (why)
+    *why = w;
+  return ok;
+}
+
+void MainWindow::refreshXferAvailability() {
+  if (!m_batteryCalibDialog)
+    return;
+  QString why;
+  const bool ok = xferUploadAvailability(&why);
+  m_batteryCalibDialog->setUploadAvailable(ok, why);
 }

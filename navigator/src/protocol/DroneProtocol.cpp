@@ -97,6 +97,14 @@ DroneProtocol::DroneProtocol(QObject *parent) : QObject(parent) {
                          .arg(reqSeq)
                          .arg(res));
   };
+  m_v2Router.onXferInfo = [this](uint8_t session, uint8_t result,
+                                 uint16_t chunk, uint32_t total) {
+    emit xferInfoReceived(session, result, chunk, total);
+  };
+  m_v2Router.onXferAck = [this](uint8_t session, uint8_t flags, uint8_t result,
+                                uint32_t next) {
+    emit xferAckReceived(session, flags, result, next);
+  };
   // onSystemHealth intentionally left unset: no GCS consumer (parity with v1).
   m_v2Router.onDefault = [this](uint32_t msgid, int len) {
     emit logReceived(

@@ -74,4 +74,14 @@ QByteArray encodeTimeSyncRequestWide(quint8 seq, quint64 t1,
 QByteArray encodeTaskNameRequest(int taskId, quint8 devId = 42,
                                  quint32 tsMs = 0);
 
+// XFER (bulk transfer) upload frames, GCS -> FC. File mode, service 0 (SD).
+// `path` is truncated to the 31 characters XFER_OPEN.arg can carry.
+QByteArray encodeXferOpen(quint8 session, quint8 reqSeq, const QByteArray &path,
+                          quint8 devId = 42);
+// One XFER_DATA chunk (<= 247 bytes; extra is dropped). flags: see xfer::kFlag*.
+QByteArray encodeXferData(quint8 session, quint8 flags, quint32 offset,
+                          const QByteArray &payload);
+QByteArray encodeXferClose(quint8 session, quint8 reqSeq, quint8 result,
+                           quint8 devId = 42);
+
 } // namespace CommandCodec
