@@ -23,9 +23,6 @@
 #include <QRegularExpression>
 #include <QStandardPaths>
 
-#ifdef __linux__
-#endif
-
 namespace vsim {
 
 QString defaultLogDir() {
@@ -54,13 +51,12 @@ QString worldBlobPath(const QString &suffix) {
 
 #ifdef __linux__
 namespace {
-// True if any process we can inspect has `path` mapped (the engine mmaps the
-// world blob for as long as it runs). /proc/<pid>/maps of other users is not
-// readable; those processes cannot be inspected and are treated as not mapping.
-bool mappedByAnyProcess(const QString &path) {
-  const QByteArray want = QFile::encodeName(QFileInfo(path).canonicalFilePath());
-  if (want.isEmpty())
-    return false;
+// The concatenated /proc/<pid>/maps of every process we can inspect, read once
+// per sweep (the engine mmaps the world blob for as long as it runs). Maps of
+// other users' processes are not readable; those are treated as mapping
+// nothing.
+QByteArray readAllMaps() {
+  QByteArray all;
   const QFileInfoList procs = QDir(QStringLiteral("/proc"))
                                   .entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
   for (const QFileInfo &p : procs) {
@@ -72,10 +68,14 @@ bool mappedByAnyProcess(const QString &path) {
     if (!maps.open(QIODevice::ReadOnly))
       continue;
     // readAll, not atEnd/readLine: /proc files report size 0.
-    if (maps.readAll().contains(want))
-      return true;
+    all += maps.readAll();
   }
-  return false;
+  return all;
+}
+
+bool isMapped(const QByteArray &allMaps, const QString &path) {
+  const QByteArray want = QFile::encodeName(QFileInfo(path).canonicalFilePath());
+  return !want.isEmpty() && allMaps.contains(want);
 }
 } // namespace
 #endif
@@ -88,6 +88,10 @@ int sweepStaleWorldTmp(const QString &dir, qint64 minAgeSecs) {
   static const QRegularExpression re(
       QStringLiteral("^vsim_world.*\\.bin(\\.[0-9]+\\.tmp)?$"));
   int removed = 0;
+#ifdef __linux__
+  QByteArray allMaps; // read lazily, once, only if an old file turns up
+  bool mapsRead = false;
+#endif
   const QDateTime now = QDateTime::currentDateTime();
   const QFileInfoList list = QDir(dir).entryInfoList(
       {QStringLiteral("vsim_world*.bin"), QStringLiteral("vsim_world*.tmp")},
@@ -99,7 +103,11 @@ int sweepStaleWorldTmp(const QString &dir, qint64 minAgeSecs) {
       continue;
 #ifdef __linux__
     // Old but still mapped by a running engine (another Navigator): keep.
-    if (mappedByAnyProcess(fi.absoluteFilePath()))
+    if (!mapsRead) {
+      allMaps = readAllMaps();
+      mapsRead = true;
+    }
+    if (isMapped(allMaps, fi.absoluteFilePath()))
       continue;
 #endif
     if (QFile::remove(fi.absoluteFilePath()))
