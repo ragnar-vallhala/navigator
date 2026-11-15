@@ -16,6 +16,7 @@
  */
 #pragma once
 
+#include "../../vsim/UserPresets.h"
 #include "../../vsim/VsimTypes.h"
 
 #include <QMatrix4x4>
@@ -29,6 +30,7 @@ class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
 class QLineEdit;
+class QPushButton;
 
 // GeometryEditorWidget — Gazebo-style airframe setup for the in-app sim.
 // Pick a mesh (STL/OBJ/PLY/glTF), compute its mass properties (CoM + full
@@ -89,7 +91,16 @@ public:
   // Show which built-in preset is loaded in the Preset combo ("" = Custom)
   // without emitting presetChosen().
   void setPresetId(const QString &id);
-  QString presetId() const; // current preset id, "" = custom
+  QString presetId() const; // current built-in preset id, "" = custom/user
+
+  // User presets (saved vehicles listed after the built-ins in the combo).
+  // Save the current form under `name`; the combo then shows it.
+  vsim::UserPresetStore::SaveResult saveUserPreset(const QString &name,
+                                                   bool overwrite);
+  // Delete a user preset by name; the combo goes back to Custom if it was on it.
+  bool deleteUserPreset(const QString &name);
+  // Name of the user preset the combo shows, "" if it shows Custom/a built-in.
+  QString userPresetName() const;
 
   const std::vector<QVector3D> &meshPositions() const { return meshPos_; }
   const std::vector<QVector3D> &meshNormals() const { return meshNrm_; }
@@ -114,11 +125,15 @@ private slots:
   void onSaveFile(); // export the vehicle to a portable .json
   void onLoadFile(); // import a vehicle .json
   void onPresetActivated(int index);
+  void onSavePreset();   // prompt for a name, save the form as a user preset
+  void onDeletePreset(); // confirm, delete the selected user preset
   void onFormEdited(); // a manual edit: the vehicle is now custom
   void onBoxEdited();  // mass / motor layout edited: refresh the box inertia
 
 private:
   void buildUi();
+  void refreshUserPresets(const QString &select); // rebuild the user entries
+  void updatePresetButtons();
   void syncConfigToUi();             // cfg_ → widgets
   void syncUiToConfig();             // widgets → cfg_ (mass, scale, motors)
   void showMassProps();              // refresh inertia / CoM labels from cfg_
@@ -135,6 +150,9 @@ private:
 
   bool syncing_ = false; // form being loaded from a config, not edited
   QComboBox *presetCombo_ = nullptr;
+  QPushButton *savePresetBtn_ = nullptr;
+  QPushButton *delPresetBtn_ = nullptr;
+  int builtinPresetCount_ = 0; // combo entries before the user presets
   QLineEdit *meshEdit_ = nullptr;
   QDoubleSpinBox *scaleSpin_ = nullptr;
   QDoubleSpinBox *massSpin_ = nullptr;
