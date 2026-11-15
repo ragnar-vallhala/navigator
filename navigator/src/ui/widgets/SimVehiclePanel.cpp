@@ -63,15 +63,15 @@ void SimulatorWidget::buildVehiclePage(ui::MinWidthScrollArea *scroll) {
         "geom",
         tr("geometry applied (m=%1 kg)").arg(m_geomEditor->config().mass));
   });
-  // Vehicle page = geometry editor + the Fault Injection panel (mockup
-  // groups them in the vehicle config column).
+  // Vehicle page = geometry editor + sensor models. The Fault Injection panel
+  // is NOT here: this page is locked while the sim runs, and faults are
+  // injected in flight, so it lives on the World page (buildWorldPage).
   auto *vehWrap = new QWidget();
   auto *vehV = new QVBoxLayout(vehWrap);
   vehV->setContentsMargins(0, 0, 0, 0);
   vehV->setSpacing(6);
   vehV->addWidget(m_geomEditor);
   vehV->addWidget(buildSensorPanel());
-  vehV->addWidget(buildFaultPanel());
   vehV->addStretch();
 
   scroll->setWidgetResizable(true);
@@ -137,6 +137,7 @@ QWidget *SimulatorWidget::buildFaultPanel() {
   // Mockup Vehicle ▸ Fault Injection: kill any rotor mid-flight, drop the RC
   // feed (firmware failsafe), or a GPS glitch (no GPS model in SITL yet).
   auto *grp = new QGroupBox(tr("Fault Injection"), this);
+  grp->setObjectName(QStringLiteral("FaultPanel"));
   auto *v = new QVBoxLayout(grp);
   v->setSpacing(6);
 
@@ -160,6 +161,22 @@ QWidget *SimulatorWidget::buildFaultPanel() {
   }
   killRow->addStretch();
   v->addLayout(killRow);
+
+  // IMU dropout: vsim_ctl_faults_t.imu_dropout freezes the IMU sample (stuck
+  // sensor); sent with the kill flags by pushFaults().
+  m_imuDropoutChk = new QCheckBox(tr("IMU dropout (stuck sensor)"), grp);
+  m_imuDropoutChk->setObjectName(QStringLiteral("ImuDropoutCheck"));
+  m_imuDropoutChk->setToolTip(
+      tr("Freeze the IMU sample at its last reading while flying"));
+  connect(m_imuDropoutChk, &QCheckBox::toggled, this, [this](bool on) {
+    m_imuDropout = on;
+    pushFaults();
+    logFault(QStringLiteral("imu_dropout"), on,
+             QStringLiteral("IMU dropout"));
+    appendLog("fault",
+              on ? tr("IMU dropout injected") : tr("IMU restored"));
+  });
+  v->addWidget(m_imuDropoutChk);
 
   auto *rcLoss = new QCheckBox(tr("RC link loss (→ firmware failsafe)"), grp);
   rcLoss->setToolTip(tr("Stop feeding RC so the firmware enters failsafe"));

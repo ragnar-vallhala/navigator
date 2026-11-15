@@ -31,7 +31,11 @@
 
 #include "SimulatorWidget.h"
 
+#include <QCheckBox>
+#include <QComboBox>
+#include <QGroupBox>
 #include <QLayout>
+#include <QPushButton>
 #include <QApplication>
 #include <QScrollArea>
 #include <QSplitter>
@@ -46,6 +50,7 @@ class SimulatorWidgetTestAccess {
 public:
   explicit SimulatorWidgetTestAccess(SimulatorWidget &w) : w_(w) {}
   QStackedWidget *stack() const { return w_.m_rightStack; }
+  bool imuDropout() const { return w_.m_imuDropout; }
 
 private:
   SimulatorWidget &w_;
@@ -117,6 +122,64 @@ private slots:
     w_->resize(1000, 600);
     QVERIFY2(w_->width() <= 1000,
              qPrintable(QString("page forced to %1 px wide").arg(w_->width())));
+  }
+
+  // Fault injection is meant for use in flight. Starting the sim locks the
+  // Vehicle page (and tab) and forces the World page, so the Fault Injection
+  // panel must live on a page that stays reachable, not on the Vehicle page.
+  // Runs offscreen (no engine needed): checks where the panel lives and that
+  // its controls are enabled; the running-sim behaviour is a manual xcb check.
+  void faultPanelLivesOnTheFlightPage() {
+    QStackedWidget *st = a_->stack();
+    QVERIFY(st && st->count() >= 2);
+    auto *fault = w_->findChild<QGroupBox *>(QStringLiteral("FaultPanel"));
+    QVERIFY2(fault, "Fault Injection panel not found");
+    QVERIFY2(st->widget(1)->isAncestorOf(fault),
+             "fault panel is not on the World page (the page forced while "
+             "the sim runs)");
+    QVERIFY2(!st->widget(0)->isAncestorOf(fault),
+             "fault panel is on the Vehicle page, which is locked in flight");
+    QVERIFY(fault->isEnabled());
+    for (int i = 1; i <= 4; ++i) {
+      const QString t = QStringLiteral("M%1").arg(i);
+      QPushButton *kill = nullptr;
+      for (auto *b : fault->findChildren<QPushButton *>())
+        if (b->text() == t)
+          kill = b;
+      QVERIFY2(kill, qPrintable("no kill button " + t));
+      QVERIFY2(kill->isEnabled(), qPrintable(t + " disabled"));
+      QVERIFY(!kill->isHidden());
+    }
+  }
+
+  // The IMU dropout toggle must drive the flag that pushFaults() sends to the
+  // engine (vsim_ctl_faults_t.imu_dropout); it used to be dead code. Offscreen
+  // check of the flag only; that the engine reacts is a manual run (see PR).
+  void imuDropoutToggleSetsTheFaultFlag() {
+    auto *box = w_->findChild<QCheckBox *>(QStringLiteral("ImuDropoutCheck"));
+    QVERIFY2(box, "IMU dropout checkbox not found");
+    QVERIFY(box->isEnabled());
+    QVERIFY(!a_->imuDropout());
+    box->setChecked(true);
+    QVERIFY2(a_->imuDropout(), "toggle did not set the dropout flag");
+    box->setChecked(false);
+    QVERIFY(!a_->imuDropout());
+  }
+
+  // The IMU/Physics/Render rate combos have no effect on the engine, so they
+  // are hidden. Offscreen: no combo listing "NNN Hz" may be visible on the page.
+  void nonFunctionalRateCombosAreHidden() {
+    int hz = 0;
+    // Judge visibility relative to the World page: the stack hides the pages
+    // that are not current, which would make this pass vacuously.
+    QWidget *world = a_->stack()->widget(1);
+    for (auto *c : world->findChildren<QComboBox *>()) {
+      if (c->count() == 0 || !c->itemText(0).endsWith(QStringLiteral(" Hz")))
+        continue;
+      ++hz;
+      QVERIFY2(!c->isVisibleTo(world), "a rate combo is still shown");
+    }
+    QCOMPARE(hz, 3); // they still exist (settings stay), just hidden
   }
 
   void sectionTitlesAreClean() {

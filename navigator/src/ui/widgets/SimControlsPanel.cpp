@@ -219,9 +219,18 @@ void SimulatorWidget::buildSimControls(QWidget *host) {
   }
 
   // -- Loop rates (IMU/firmware, physics substeps, render) --
+  // HIDDEN, not fixed: measured on a running engine these combos change
+  // nothing (~61 poses/s and ~975 ticks/s whatever is chosen; SimWorker emits
+  // a pose every 16 steps). Kept built, with their saved values, so they can
+  // be un-hidden once the engine honours them; pushRatesToSim() still sends
+  // the stored (default) values, which is harmless.
   {
     QSettings st;
-    auto *rg = new QGridLayout();
+    auto *ratesBox = new QWidget(simBody);
+    ratesBox->setObjectName(QStringLiteral("RateCombos"));
+    ratesBox->setVisible(false);
+    auto *rg = new QGridLayout(ratesBox);
+    rg->setContentsMargins(0, 0, 0, 0);
     rg->setHorizontalSpacing(6);
     auto mkCombo = [&](const QList<int> &opts, int def, const char *key,
                        const QString &tip) {
@@ -261,7 +270,7 @@ void SimulatorWidget::buildSimControls(QWidget *host) {
     rg->addWidget(physC, 0, 3);
     rg->addWidget(new QLabel(tr("Render:")), 1, 0);
     rg->addWidget(poseC, 1, 1);
-    sv->addLayout(rg);
+    sv->addWidget(ratesBox);
   }
 
   m_simPoseLabel = new QLabel(tr("pose: -"), simBody);

@@ -127,6 +127,9 @@ void SimulatorWidget::buildWorldPage(ui::MinWidthScrollArea *scroll) {
 
   // ---- Simulation controls: Start/Stop/Reset, rates, status (sim.controls) ----
   pv->addWidget(new SimControlsPanel(*this, page));
+  // Fault injection stays reachable while flying (the Vehicle page is locked
+  // then), so it sits with the run controls.
+  pv->addWidget(buildFaultPanel());
   pv->addStretch();
 
   scroll->setWidgetResizable(true);
