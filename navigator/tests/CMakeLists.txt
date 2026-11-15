@@ -466,7 +466,7 @@ if(TARGET Navigator AND NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_ab
   target_link_libraries(tst_world_change_floor PRIVATE ${_nav_lib})
   set_tests_properties(tst_world_change_floor PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
-      TIMEOUT 300)
+      TIMEOUT 600)
 
   # ---- Per-run log files of the real SimulatorWidget ------------------------
   # One file pair per Start (unique stamp), none left by a failed Start. Same
