@@ -56,8 +56,20 @@ target_link_libraries(tst_battery_alert PRIVATE navlink_codec)
 navigator_test(tst_battery_calib
     tst_battery_calib.cpp
     ${SRC}/core/BatteryCalib.cpp
+    ${SRC}/core/XferUploader.cpp
     ${SRC}/ui/widgets/BatteryCalibDialog.cpp)
 target_include_directories(tst_battery_calib PRIVATE ${SRC}/core)
+
+# ---- XFER upload client vs a fake peer, wire encoders, calib dialog upload --
+navigator_test(tst_xfer_uploader
+    tst_xfer_uploader.cpp
+    ${SRC}/core/XferUploader.cpp
+    ${SRC}/core/BatteryCalib.cpp
+    ${SRC}/ui/widgets/BatteryCalibDialog.cpp
+    ${SRC}/protocol/CommandCodec.cpp
+    ${SRC}/core/crc.cpp)
+target_include_directories(tst_xfer_uploader PRIVATE ${SRC}/core ${SRC}/protocol)
+target_link_libraries(tst_xfer_uploader PRIVATE navlink_codec)
 
 # ---- RC bridge failsafe policy (NO_SIGNAL on link loss, arm gating) --------
 navigator_test(tst_rc_frame tst_rc_frame.cpp)

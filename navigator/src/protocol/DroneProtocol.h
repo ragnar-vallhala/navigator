@@ -69,6 +69,11 @@ signals:
   void taskNameReceived(int taskId, const QString &name);
   // FC's COMMAND_ACK for a sent command, correlated by (command msgid, reqSeq).
   void commandAckReceived(quint32 command, quint8 reqSeq, quint8 result);
+  // Upload-session replies (XFER_INFO / XFER_ACK); feed core/XferUploader.
+  void xferInfoReceived(quint8 session, quint8 result, quint16 chunkSize,
+                        quint32 totalSize);
+  void xferAckReceived(quint8 session, quint8 flags, quint8 result,
+                       quint32 nextOffset);
   void timeSyncRequested();
   void unknownPacket(const QByteArray &raw);
   void packetReceived(const QByteArray &packet);

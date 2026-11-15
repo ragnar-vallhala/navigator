@@ -17,12 +17,14 @@
 #pragma once
 
 #include "../../core/BatteryCalib.h"
+#include "../../core/XferUploader.h"
 
 #include <QByteArray>
 #include <QDialog>
 
 class QDoubleSpinBox;
 class QLabel;
+class QProgressBar;
 class QPushButton;
 
 // Two-point battery divider calibration. The operator reads the live raw count
@@ -31,9 +33,11 @@ class QPushButton;
 // residuals, refuses an out-of-band result, and produces the 16-byte
 // 0:batcal.bin blob.
 //
-// There is NO upload from here: Navigator has no file-transfer (XFER) client
-// yet, so the blob is saved to a file the operator copies to the card. The
-// vehicle must be rebooted after the file is on the card.
+// "Upload to vehicle" sends the blob to 0:batcal.bin over the XFER file-transfer
+// client (core/XferUploader), when the owner says a transmit-capable link is up
+// (setUploadAvailable). "Save batcal.bin" writes the same blob to a file the
+// operator can copy to the card by hand. Either way the vehicle must be
+// rebooted afterwards: the calibration is read once at start-up.
 class BatteryCalibDialog : public QDialog {
   Q_OBJECT
 public:
@@ -48,6 +52,21 @@ public:
   bool capture(int i);
   void setVolts(int i, double volts);
 
+  // The uploader to use (not owned; must outlive the dialog). Null disables
+  // the upload button.
+  void setUploader(XferUploader *u);
+  // Whether the upload may be started now. When not, `why` is shown as the
+  // button's tooltip and in the status line. Re-checked on every call; an
+  // upload already running is cancelled if the link stops allowing it.
+  void setUploadAvailable(bool available, const QString &why = QString());
+  bool uploadEnabled() const;
+  bool uploading() const { return m_uploading; }
+  // Start the upload as the button would. False when it cannot start.
+  bool startUpload();
+  QString uploadStatus() const;
+
+  void done(int r) override; // cancels a running upload
+
   const batcal::Fit &fit() const { return m_fit; }
   QByteArray blob() const; // empty unless the fit is ok
   bool saveTo(const QString &path, QString *err = nullptr) const;
@@ -55,6 +74,9 @@ public:
 private:
   void refit();
   void saveClicked();
+  void updateUploadUi();
+  void onUploadProgress(quint32 acked, quint32 total);
+  void onUploadFinished(XferUploader::Result r, const QString &msg);
 
   QDoubleSpinBox *m_volts[2] = {nullptr, nullptr};
   QLabel *m_pointLbl[2] = {nullptr, nullptr};
@@ -62,6 +84,13 @@ private:
   QLabel *m_liveLbl = nullptr;
   QLabel *m_resultLbl = nullptr;
   QPushButton *m_saveBtn = nullptr;
+  QPushButton *m_uploadBtn = nullptr;
+  QProgressBar *m_uploadBar = nullptr;
+  QLabel *m_uploadLbl = nullptr;
+  XferUploader *m_uploader = nullptr;
+  bool m_uploadAvail = false;
+  bool m_uploading = false;
+  QString m_uploadWhy;
   quint16 m_live = 0;
   bool m_liveOk = false;
   bool m_have[2] = {false, false};

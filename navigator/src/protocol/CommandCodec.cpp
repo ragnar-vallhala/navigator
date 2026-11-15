@@ -16,6 +16,9 @@
  */
 #include "CommandCodec.h"
 
+#include <algorithm>
+#include <cstring>
+
 extern "C" {
 #include "navlink_msgs.h" // NavLink v2 generated codec
 }
@@ -198,6 +201,52 @@ QByteArray encodeTaskNameRequest(int taskId, quint8 devId, quint32 tsMs) {
   uint8_t buf[NAVLINK_MAX_FRAME];
   size_t n = navlink_perf_taskname_request_encode(buf, &m, nextSeq(), 0xFF, 1);
   return frame(buf, n);
+}
+
+QByteArray encodeXferOpen(quint8 session, quint8 reqSeq, const QByteArray &path,
+                          quint8 devId) {
+  navlink_xfer_open_t m{};
+  m.target_sys = devId;
+  m.target_comp = 1;
+  m.req_seq = reqSeq;
+  m.session = session;
+  m.dir = 1;  // upload (GCS -> FC)
+  m.mode = 0; // file
+  m.service_id = 0;
+  m.offset_start = 0;
+  m.rate_hz = 0;
+  const size_t n = std::min<size_t>(sizeof(m.arg) - 1, size_t(path.size()));
+  std::memcpy(m.arg, path.constData(), n);
+  uint8_t buf[NAVLINK_MAX_FRAME];
+  const size_t len = navlink_xfer_open_encode(buf, &m, nextSeq(), 0xFF, 1);
+  return frame(buf, len);
+}
+
+QByteArray encodeXferData(quint8 session, quint8 flags, quint32 offset,
+                          const QByteArray &payload) {
+  navlink_xfer_data_t m{};
+  m.session = session;
+  m.flags = flags;
+  const size_t n = std::min<size_t>(sizeof(m.data), size_t(payload.size()));
+  m.len = static_cast<uint8_t>(n);
+  m.offset = offset;
+  std::memcpy(m.data, payload.constData(), n);
+  uint8_t buf[NAVLINK_MAX_FRAME];
+  const size_t len = navlink_xfer_data_encode(buf, &m, nextSeq(), 0xFF, 1);
+  return frame(buf, len);
+}
+
+QByteArray encodeXferClose(quint8 session, quint8 reqSeq, quint8 result,
+                           quint8 devId) {
+  navlink_xfer_close_t m{};
+  m.target_sys = devId;
+  m.target_comp = 1;
+  m.req_seq = reqSeq;
+  m.session = session;
+  m.result = result;
+  uint8_t buf[NAVLINK_MAX_FRAME];
+  const size_t len = navlink_xfer_close_encode(buf, &m, nextSeq(), 0xFF, 1);
+  return frame(buf, len);
 }
 
 } // namespace CommandCodec

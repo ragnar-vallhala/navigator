@@ -36,6 +36,7 @@
 #include "SourceController.h"
 #include "SimSource.h"
 #include <functional>
+#include <memory>
 #include "ViewHistory.h"
 #include "core/BatteryAlert.h"
 #include "core/BatteryEstimator.h"
@@ -68,7 +69,7 @@ class MainWindow : public QMainWindow {
 
 public:
   explicit MainWindow(QWidget *parent = nullptr);
-  ~MainWindow() override = default;
+  ~MainWindow() override;
 
 protected:
   void closeEvent(QCloseEvent *event) override;
@@ -195,6 +196,12 @@ private:
   QPointer<class BatteryCalibDialog> m_batteryCalibDialog;
   void announceBattery(const battery::AlertTracker::Result &r);
   void openBatteryCalibration();
+  // XFER file upload (battery calibration). Only a real vehicle link is used:
+  // the in-app simulator and replay are refused (see xferUploadAvailability).
+  std::unique_ptr<class XferWireLink> m_xferLink;
+  class XferUploader *m_xfer = nullptr;
+  bool xferUploadAvailability(QString *why) const;
+  void refreshXferAvailability();
   AttitudeSink *m_attitude = nullptr;
   LogPanel *m_logPanel = nullptr;
   FaultsPanel *m_faultsPanel = nullptr;

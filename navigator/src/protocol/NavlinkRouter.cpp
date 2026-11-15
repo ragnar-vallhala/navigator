@@ -379,6 +379,20 @@ void thunkCommandAck(void *ctx, const navlink_frame_hdr_t *,
     r->onCommandAck(m->command, m->req_seq, m->result);
 }
 
+void thunkXferInfo(void *ctx, const navlink_frame_hdr_t *,
+                   const navlink_xfer_info_t *m) {
+  auto *r = static_cast<NavlinkRouter *>(ctx);
+  if (r->onXferInfo)
+    r->onXferInfo(m->session, m->result, m->chunk_size, m->total_size);
+}
+
+void thunkXferAck(void *ctx, const navlink_frame_hdr_t *,
+                  const navlink_xfer_ack_t *m) {
+  auto *r = static_cast<NavlinkRouter *>(ctx);
+  if (r->onXferAck)
+    r->onXferAck(m->session, m->flags, m->result, m->next_offset);
+}
+
 void thunkDefault(void *ctx, const navlink_frame_hdr_t *, uint32_t msgid,
                   const uint8_t *, size_t len) {
   auto *r = static_cast<NavlinkRouter *>(ctx);
@@ -591,6 +605,8 @@ NavlinkRouter::NavlinkRouter() : d_(new Impl) {
   d_->handlers.on_perf_taskname = thunkPerfTaskname;
   d_->handlers.on_time_sync = thunkTimeSync;
   d_->handlers.on_command_ack = thunkCommandAck;
+  d_->handlers.on_xfer_info = thunkXferInfo;
+  d_->handlers.on_xfer_ack = thunkXferAck;
   // Sensible default so an unhandled leaf is never silent, even if the owner
   // didn't override onDefault.
   onDefault = [](uint32_t msgid, int len) {
