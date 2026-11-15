@@ -17,6 +17,7 @@
 // battery::AlertTracker: thresholds, hysteresis, debounce, announce-once.
 
 #include "BatteryAlert.h"
+#include "SettingsManager.h"
 
 #include <QtTest>
 
@@ -70,6 +71,8 @@ private slots:
   void flickeringPackHoldsLevelSilently();
   void lostPackClearsAfterGrace();
   void crossedThresholdsCollapse();
+  void thresholdsSurviveSettingsRoundTrip();
+  void oldSettingsStreamKeepsDefaults();
 };
 
 void TstBatteryAlert::okAboveWarn() {
@@ -228,4 +231,42 @@ void TstBatteryAlert::crossedThresholdsCollapse() {
 }
 
 QTEST_MAIN(TstBatteryAlert)
+void TstBatteryAlert::thresholdsSurviveSettingsRoundTrip() {
+  GcsSettings a;
+  a.batteryWarnV = 3.62;
+  a.batteryCritV = 3.41;
+  QByteArray buf;
+  {
+    QDataStream out(&buf, QIODevice::WriteOnly);
+    out << a;
+  }
+  GcsSettings b;
+  QDataStream in(buf);
+  in >> b;
+  QCOMPARE(b.batteryWarnV, 3.62);
+  QCOMPARE(b.batteryCritV, 3.41);
+}
+
+// A settings file written before these fields existed ends after batteryCells;
+// reading it must leave the defaults rather than fail or read garbage.
+void TstBatteryAlert::oldSettingsStreamKeepsDefaults() {
+  GcsSettings a;
+  QByteArray buf;
+  {
+    QDataStream out(&buf, QIODevice::WriteOnly);
+    out << a;
+  }
+  // Drop the two appended doubles (8 bytes each) from the end.
+  buf.chop(16);
+  GcsSettings b;
+  b.batteryWarnV = 0.0;
+  b.batteryCritV = 0.0;
+  QDataStream in(buf);
+  in >> b;
+  QCOMPARE(in.status(), QDataStream::Ok);
+  QCOMPARE(b.batteryWarnV, 0.0); // untouched: not in the stream
+  QCOMPARE(b.batteryCritV, 0.0);
+  QCOMPARE(b.batteryCells, a.batteryCells);
+}
+
 #include "tst_battery_alert.moc"

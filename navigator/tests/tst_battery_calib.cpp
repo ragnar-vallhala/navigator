@@ -41,6 +41,7 @@ private slots:
   void refusesDegenerateInput();
   void refusesOutOfBand();
   void nanIsRejected();
+  void bandIsJudgedOnStoredFloats();
   void blobLayout();
   void blobEmptyWhenOutOfBand();
   void dialogProducesBlob();
@@ -105,6 +106,20 @@ void TstBatteryCalib::nanIsRejected() {
   QCOMPARE(batcal::bandErrors(nan, 0.0).size(), 1);
   QCOMPARE(batcal::bandErrors(0.01, nan).size(), 1);
   QVERIFY(batcal::pack(nan, 0.0).isEmpty());
+}
+
+// The band is judged on the floats that get stored: a double just inside the
+// limit that rounds to the limit as a float is refused, as the firmware would.
+void TstBatteryCalib::bandIsJudgedOnStoredFloats() {
+  QVERIFY(0.04999999999 < 0.050);
+  QVERIFY(float(0.04999999999) == 0.05f);
+  QCOMPARE(batcal::bandErrors(0.04999999999, 0.0).size(), 1);
+  QVERIFY(batcal::pack(0.04999999999, 0.0).isEmpty());
+  QCOMPARE(batcal::bandErrors(0.0010000000001, 0.0).size(), 1);
+  QVERIFY(batcal::pack(0.0010000000001, 0.0).isEmpty());
+  QCOMPARE(batcal::bandErrors(0.0114, 199.99999999).size(), 1);
+  QCOMPARE(batcal::bandErrors(0.049, -199.9).size(), 0);
+  QCOMPARE(batcal::pack(0.049, -199.9).size(), 16);
 }
 
 void TstBatteryCalib::blobLayout() {

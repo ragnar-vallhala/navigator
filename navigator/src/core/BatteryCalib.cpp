@@ -26,12 +26,17 @@ namespace batcal {
 
 QStringList bandErrors(double vpc, double offset) {
   QStringList bad;
-  if (!(vpc > kVpcMin && vpc < kVpcMax))
+  // The file stores floats and the firmware compares the stored floats against
+  // float limits, so judge the value as it will be stored: 0.04999999999 rounds
+  // to 0.05f and is refused on the vehicle. NaN still fails every comparison.
+  const float fv = float(vpc);
+  const float fo = float(offset);
+  if (!(fv > float(kVpcMin) && fv < float(kVpcMax)))
     bad << QStringLiteral("volts per count %1 is outside [%2, %3]")
                .arg(vpc, 0, 'g', 6)
                .arg(kVpcMin)
                .arg(kVpcMax);
-  if (!(offset > -kOffsetAbsMax && offset < kOffsetAbsMax))
+  if (!(fo > -float(kOffsetAbsMax) && fo < float(kOffsetAbsMax)))
     bad << QStringLiteral("offset %1 counts is outside +/-%2")
                .arg(offset, 0, 'f', 1)
                .arg(kOffsetAbsMax);

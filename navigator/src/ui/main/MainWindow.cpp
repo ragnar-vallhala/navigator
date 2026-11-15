@@ -1593,7 +1593,12 @@ void MainWindow::onUiTimer() {
   } else {
     const battery::Reading b =
         m_battery.update(s.battery.voltage, s.battery.flags);
-    announceBattery(m_batteryAlert.update(b, nowMs));
+    // The tracker keeps judging so its level is right when replay ends, but a
+    // replayed log must not raise a live alarm (toast, chime) for a pack that
+    // was low when it was recorded.
+    const battery::AlertTracker::Result alert = m_batteryAlert.update(b, nowMs);
+    if (m_source.state() != SourceState::Replay)
+      announceBattery(alert);
     if (b.pack) {
       const QString volts = QString("%1 V").arg(b.volts, 0, 'f', 1);
       const QString cells =
