@@ -176,11 +176,17 @@ private slots:
     writeRaw(tmp.filePath("vehicles/array.vveh"), "[1,2]");
     writeRaw(tmp.filePath("vehicles/empty.vveh"), "");
     writeRaw(tmp.filePath("vehicles/notes.txt"), "{}");
+#ifndef Q_OS_WIN
+    // A ':' cannot be in a Windows file name (it names an NTFS stream, so no
+    // such file appears in the folder); only the POSIX run can place one.
     writeRaw(tmp.filePath("vehicles/bad:name.vveh"), "{}");
+#endif
     QTest::ignoreMessage(QtWarningMsg, QRegularExpression("skipping corrupt"));
     QTest::ignoreMessage(QtWarningMsg, QRegularExpression("skipping corrupt"));
     QTest::ignoreMessage(QtWarningMsg, QRegularExpression("skipping corrupt"));
+#ifndef Q_OS_WIN
     QTest::ignoreMessage(QtWarningMsg, QRegularExpression("skipping"));
+#endif
     QCOMPARE(st.list(Kind::Vehicle), QStringList({"good"}));
     QJsonObject o;
     QTest::ignoreMessage(QtWarningMsg, QRegularExpression("skipping corrupt"));
