@@ -32,12 +32,15 @@
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMatrix4x4>
+#include <QMessageBox>
+#include <QPushButton>
 #include <QVBoxLayout>
 
 #include <cmath>
@@ -55,6 +58,17 @@ QDoubleSpinBox *spin(double lo, double hi, int decimals, double step,
     s->setSuffix(suffix);
   s->setButtonSymbols(QAbstractSpinBox::UpDownArrows);
   return s;
+}
+
+const QString kUserPrefix = QStringLiteral("user:");
+
+vsim::UserPresetStore userPresetStore() {
+  vsim::UserPresetStore st;
+  QStringList reserved;
+  for (const auto &p : vsim::airframePresets())
+    reserved << p.id << p.name;
+  st.setReserved(vsim::UserPresetStore::Kind::Vehicle, reserved);
+  return st;
 }
 
 } // namespace
@@ -90,8 +104,20 @@ void GeometryEditorWidget::buildUi() {
     presetCombo_->addItem(tr("Custom"), QString());
     for (const auto &p : vsim::airframePresets())
       presetCombo_->addItem(p.name, p.id);
+    builtinPresetCount_ = presetCombo_->count();
     presetLay->addWidget(presetCombo_);
     row->addItem(presetLay);
+    // Separate flow items, so they wrap instead of widening the row.
+    savePresetBtn_ = new ui::GhostButton(tr("Save as preset…"), this);
+    savePresetBtn_->setToolTip(
+        tr("Save the current vehicle under a name; it is then listed in the "
+           "Preset combo after the built-ins."));
+    delPresetBtn_ = new ui::GhostButton(tr("Delete preset"), this);
+    delPresetBtn_->setToolTip(
+        tr("Delete the selected user preset (built-in presets cannot be "
+           "deleted)."));
+    row->addWidget(savePresetBtn_);
+    row->addWidget(delPresetBtn_);
     root->addLayout(row);
     connect(save, &QPushButton::clicked, this,
             &GeometryEditorWidget::onSaveFile);
@@ -99,6 +125,13 @@ void GeometryEditorWidget::buildUi() {
             &GeometryEditorWidget::onLoadFile);
     connect(presetCombo_, &QComboBox::activated, this,
             &GeometryEditorWidget::onPresetActivated);
+    connect(savePresetBtn_, &QPushButton::clicked, this,
+            &GeometryEditorWidget::onSavePreset);
+    connect(delPresetBtn_, &QPushButton::clicked, this,
+            &GeometryEditorWidget::onDeletePreset);
+    connect(presetCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this] { updatePresetButtons(); });
+    refreshUserPresets(QString());
   }
 
   // -- Mesh, Mass & Inertia --
@@ -329,7 +362,99 @@ void GeometryEditorWidget::onBoxEdited() {
 }
 
 QString GeometryEditorWidget::presetId() const {
-  return presetCombo_->currentData().toString();
+  const QString d = presetCombo_->currentData().toString();
+  return d.startsWith(kUserPrefix) ? QString() : d; // a user preset has no gains
+}
+
+QString GeometryEditorWidget::userPresetName() const {
+  const QString d = presetCombo_->currentData().toString();
+  return d.startsWith(kUserPrefix) ? d.mid(kUserPrefix.size()) : QString();
+}
+
+void GeometryEditorWidget::updatePresetButtons() {
+  if (delPresetBtn_)
+    delPresetBtn_->setEnabled(!userPresetName().isEmpty());
+}
+
+void GeometryEditorWidget::refreshUserPresets(const QString &select) {
+  QSignalBlocker b(presetCombo_);
+  while (presetCombo_->count() > builtinPresetCount_)
+    presetCombo_->removeItem(presetCombo_->count() - 1);
+  const QStringList names = userPresetStore().list(
+      vsim::UserPresetStore::Kind::Vehicle);
+  if (!names.isEmpty())
+    presetCombo_->insertSeparator(presetCombo_->count());
+  for (const QString &n : names)
+    presetCombo_->addItem(n, kUserPrefix + n);
+  const int i = select.isEmpty() ? -1 : presetCombo_->findData(kUserPrefix + select);
+  presetCombo_->setCurrentIndex(i < 0 ? 0 : i);
+  updatePresetButtons();
+}
+
+vsim::UserPresetStore::SaveResult
+GeometryEditorWidget::saveUserPreset(const QString &name, bool overwrite) {
+  syncUiToConfig();
+  vsim::UserPresetStore st = userPresetStore();
+  QString saved;
+  const auto r = st.save(vsim::UserPresetStore::Kind::Vehicle, name,
+                         vsim::geometryToJson(cfg_), overwrite, &saved);
+  if (r != vsim::UserPresetStore::SaveResult::Ok)
+    return r;
+  refreshUserPresets(saved);
+  loadedName_ = saved;
+  statusLbl_->setText(tr("Saved preset \"%1\".").arg(saved));
+  statusLbl_->setStyleSheet(QString("color:%1;").arg(Theme::hex(Theme::kOk)));
+  emit presetChosen(QString()); // user presets carry no firmware gain set
+  return r;
+}
+
+bool GeometryEditorWidget::deleteUserPreset(const QString &name) {
+  vsim::UserPresetStore st = userPresetStore();
+  if (!st.remove(vsim::UserPresetStore::Kind::Vehicle, name))
+    return false;
+  const bool wasShown = userPresetName().compare(name, Qt::CaseInsensitive) == 0;
+  refreshUserPresets(wasShown ? QString() : userPresetName());
+  statusLbl_->setText(tr("Deleted preset \"%1\".").arg(name));
+  statusLbl_->setStyleSheet(QString("color:%1;").arg(Theme::hex(Theme::kOk)));
+  return true;
+}
+
+void GeometryEditorWidget::onSavePreset() {
+  bool ok = false;
+  const QString name = QInputDialog::getText(
+      this, tr("Save as preset"),
+      tr("Preset name (max %1 characters):")
+          .arg(vsim::UserPresetStore::kMaxNameLength),
+      QLineEdit::Normal, userPresetName(), &ok);
+  if (!ok)
+    return;
+  auto r = saveUserPreset(name, false);
+  if (r == vsim::UserPresetStore::SaveResult::Exists &&
+      QMessageBox::question(this, tr("Replace preset"),
+                            tr("A preset named \"%1\" exists. Replace it?")
+                                .arg(name.trimmed())) == QMessageBox::Yes)
+    r = saveUserPreset(name, true);
+  if (r != vsim::UserPresetStore::SaveResult::Ok) {
+    statusLbl_->setText(tr("Preset not saved: %1")
+                            .arg(vsim::UserPresetStore::saveResultText(r)));
+    statusLbl_->setStyleSheet(
+        QString("color:%1;").arg(Theme::hex(Theme::kDanger)));
+  }
+}
+
+void GeometryEditorWidget::onDeletePreset() {
+  const QString name = userPresetName();
+  if (name.isEmpty())
+    return;
+  if (QMessageBox::question(this, tr("Delete preset"),
+                            tr("Delete the preset \"%1\"?").arg(name)) !=
+      QMessageBox::Yes)
+    return;
+  if (!deleteUserPreset(name)) {
+    statusLbl_->setText(tr("Could not delete preset \"%1\".").arg(name));
+    statusLbl_->setStyleSheet(
+        QString("color:%1;").arg(Theme::hex(Theme::kDanger)));
+  }
 }
 
 void GeometryEditorWidget::syncConfigToUi() {
@@ -513,10 +638,30 @@ void GeometryEditorWidget::setPresetId(const QString &id) {
   const int i = presetCombo_->findData(id);
   QSignalBlocker b(presetCombo_);
   presetCombo_->setCurrentIndex(i < 0 ? 0 : i);
+  updatePresetButtons();
 }
 
 void GeometryEditorWidget::onPresetActivated(int index) {
   const QString id = presetCombo_->itemData(index).toString();
+  if (id.startsWith(kUserPrefix)) {
+    const QString name = id.mid(kUserPrefix.size());
+    QJsonObject obj;
+    if (!userPresetStore().load(vsim::UserPresetStore::Kind::Vehicle, name,
+                                &obj)) {
+      statusLbl_->setText(tr("Could not load preset \"%1\".").arg(name));
+      statusLbl_->setStyleSheet(
+          QString("color:%1;").arg(Theme::hex(Theme::kDanger)));
+      refreshUserPresets(QString()); // it vanished or went corrupt
+      emit presetChosen(QString());
+      return;
+    }
+    setConfig(vsim::geometryFromJson(obj)); // same path as Load Vehicle
+    loadedName_ = name;
+    statusLbl_->setText(tr("Loaded preset \"%1\".").arg(name));
+    statusLbl_->setStyleSheet(QString("color:%1;").arg(Theme::hex(Theme::kOk)));
+    emit presetChosen(QString());
+    return;
+  }
   const vsim::AirframePreset *p = vsim::findAirframePreset(id);
   if (!p) { // "Custom": keep what is in the form
     emit presetChosen(QString());

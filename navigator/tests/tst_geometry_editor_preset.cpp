@@ -30,6 +30,7 @@
 #include <QPushButton>
 #include <QLineEdit>
 #include <QSignalSpy>
+#include <QTemporaryDir>
 #include <QtTest>
 
 class TstGeometryEditorPreset : public QObject {
@@ -52,7 +53,100 @@ class TstGeometryEditorPreset : public QObject {
     emit c->activated(i);
   }
 
+  QTemporaryDir dataDir_; // private user-preset store (XDG_DATA_HOME)
+
+  static QPushButton *button(GeometryEditorWidget &w, const QString &text) {
+    for (QPushButton *b : w.findChildren<QPushButton *>())
+      if (b->text() == text)
+        return b;
+    return nullptr;
+  }
+  static QStringList comboTexts(QComboBox *c) {
+    QStringList t;
+    for (int i = 0; i < c->count(); ++i)
+      t << (c->itemText(i).isEmpty() ? QStringLiteral("|") : c->itemText(i));
+    return t;
+  }
+  // Choose by item text (what the user clicks).
+  static void pickText(GeometryEditorWidget &w, const QString &text) {
+    QComboBox *c = combo(w);
+    const int i = c->findText(text);
+    QVERIFY2(i >= 0, qPrintable(text));
+    c->setCurrentIndex(i);
+    emit c->activated(i);
+  }
+
 private slots:
+  void initTestCase() {
+    QVERIFY(dataDir_.isValid());
+    qputenv("XDG_DATA_HOME", dataDir_.path().toLocal8Bit());
+  }
+
+  // ---- user presets ----
+  void userPresetSaveListSelectDelete() {
+    GeometryEditorWidget w;
+    QComboBox *c = combo(w);
+    const int builtins = c->count();
+    QPushButton *del = button(w, "Delete preset");
+    QVERIFY(button(w, "Save as preset\u2026"));
+    QVERIFY(del);
+    QVERIFY(!del->isEnabled()); // Custom
+
+    massSpin(w)->setValue(0.77);
+    QSignalSpy chosen(&w, &GeometryEditorWidget::presetChosen);
+    QCOMPARE(w.saveUserPreset("  Heavy One ", false),
+             vsim::UserPresetStore::SaveResult::Ok);
+    // After the built-ins: a separator, then the user preset, which is shown.
+    QCOMPARE(c->count(), builtins + 2);
+    QCOMPARE(comboTexts(c).mid(builtins), QStringList({"|", "Heavy One"}));
+    QCOMPARE(w.userPresetName(), QString("Heavy One"));
+    QCOMPARE(w.presetId(), QString()); // no firmware gain set
+    QVERIFY(del->isEnabled());
+    QVERIFY(!chosen.isEmpty());
+    QCOMPARE(chosen.last().at(0).toString(), QString());
+
+    // Picking a built-in disables Delete; the user entry stays listed.
+    pick(w, "whoop65");
+    QVERIFY(!del->isEnabled());
+    QCOMPARE(w.userPresetName(), QString());
+
+    // A fresh widget (a later launch) lists it and loads its geometry.
+    GeometryEditorWidget w2;
+    pickText(w2, "Heavy One");
+    QVERIFY(std::fabs(w2.config().mass - 0.77f) < 1e-4f);
+    QCOMPARE(w2.userPresetName(), QString("Heavy One"));
+    QVERIFY(button(w2, "Delete preset")->isEnabled());
+    // Editing the form turns it back into Custom and disables Delete.
+    QDoubleSpinBox *m2 = nullptr; // the mass field now shows the loaded 0.77
+    for (QDoubleSpinBox *sp : w2.findChildren<QDoubleSpinBox *>())
+      if (std::fabs(sp->value() - 0.77) < 1e-9)
+        m2 = sp;
+    QVERIFY(m2);
+    m2->setValue(0.5);
+    QCOMPARE(w2.userPresetName(), QString());
+    QVERIFY(!button(w2, "Delete preset")->isEnabled());
+
+    QVERIFY(w2.deleteUserPreset("Heavy One"));
+    QVERIFY(!w2.deleteUserPreset("Heavy One"));
+    QCOMPARE(combo(w2)->count(), builtins); // separator gone with the last one
+    GeometryEditorWidget w3;
+    QCOMPARE(combo(w3)->count(), builtins);
+  }
+
+  void userPresetRejectsBadAndBuiltInNames() {
+    GeometryEditorWidget w;
+    using R = vsim::UserPresetStore::SaveResult;
+    QCOMPARE(w.saveUserPreset("../x", false), R::InvalidName);
+    QCOMPARE(w.saveUserPreset("", false), R::InvalidName);
+    QCOMPARE(w.saveUserPreset("whoop65", false), R::Reserved); // a built-in id
+    QCOMPARE(w.saveUserPreset(vsim::airframePresets().first().name, false),
+             R::Reserved); // a built-in label
+    QCOMPARE(w.saveUserPreset("Dup", false), R::Ok);
+    QCOMPARE(w.saveUserPreset("dup", false), R::Exists);
+    QCOMPARE(w.saveUserPreset("dup", true), R::Ok);
+    QVERIFY(w.deleteUserPreset("dup"));
+  }
+
   void presetPickKeepsPresetAndLoadsGeometry() {
     GeometryEditorWidget w;
     QSignalSpy chosen(&w, &GeometryEditorWidget::presetChosen);

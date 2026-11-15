@@ -27,7 +27,9 @@
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QPushButton>
+#include <QSignalSpy>
 #include <QSpinBox>
+#include <QTemporaryDir>
 
 class TstWorldEditor : public QObject {
   Q_OBJECT
@@ -54,7 +56,75 @@ private:
     return n;
   }
 
+  QTemporaryDir dataDir_; // private user-preset store (XDG_DATA_HOME)
+
+  static QPushButton *button(WorldEditorWidget &we, const QString &text) {
+    for (QPushButton *b : we.findChildren<QPushButton *>())
+      if (b->text() == text)
+        return b;
+    return nullptr;
+  }
+
 private slots:
+  void initTestCase() {
+    QVERIFY(dataDir_.isValid());
+    qputenv("XDG_DATA_HOME", dataDir_.path().toLocal8Bit());
+  }
+
+  void userPresetSaveListSelectDelete() {
+    WorldEditorWidget we;
+    const int builtins = we.procPreset_->count();
+    QPushButton *del = button(we, "Delete preset");
+    QVERIFY(button(we, "Save as preset\u2026"));
+    QVERIFY(del);
+    QVERIFY(!del->isEnabled());
+
+    vsim::WorldConfig w;
+    QVERIFY(vsim::applyWorldPreset(w, "forest", 5));
+    we.setConfig(w);
+    const auto nObs = we.config().obstacles.size();
+    QVERIFY(nObs > 0);
+    QCOMPARE(we.saveUserPreset(" My Forest ", false),
+             vsim::UserPresetStore::SaveResult::Ok);
+    QCOMPARE(we.procPreset_->count(), builtins + 2); // separator + entry
+    QCOMPARE(we.userPresetName(), QString("My Forest"));
+    QVERIFY(del->isEnabled());
+
+    // Another world, then pick the user preset: the saved world comes back.
+    pick(we, "desert");
+    QVERIFY(!del->isEnabled());
+    QCOMPARE(we.config().proceduralBiome, QString("desert"));
+    QSignalSpy applied(&we, &WorldEditorWidget::worldApplied);
+    QSignalSpy obs(&we, &WorldEditorWidget::obstaclesChanged);
+    const int i = we.procPreset_->findData(QStringLiteral("user:My Forest"));
+    QVERIFY(i > 0);
+    we.procPreset_->setCurrentIndex(i);
+    QCOMPARE(we.config().proceduralBiome, QString("forest"));
+    QCOMPARE(we.config().obstacles.size(), nObs);
+    QCOMPARE(we.userPresetName(), QString("My Forest")); // combo stays on it
+    QVERIFY(del->isEnabled());
+    QVERIFY(!applied.isEmpty() && !obs.isEmpty()); // pushed like Load...
+
+    QVERIFY(we.deleteUserPreset("My Forest"));
+    QCOMPARE(we.procPreset_->count(), builtins);
+    QCOMPARE(we.procPreset_->currentData().toString(), QString());
+    QVERIFY(!del->isEnabled());
+    WorldEditorWidget we2; // a later launch sees it gone
+    QCOMPARE(we2.procPreset_->count(), builtins);
+  }
+
+  void userPresetRejectsBadAndBuiltInNames() {
+    WorldEditorWidget we;
+    using R = vsim::UserPresetStore::SaveResult;
+    QCOMPARE(we.saveUserPreset("../x", false), R::InvalidName);
+    QCOMPARE(we.saveUserPreset("", false), R::InvalidName);
+    QCOMPARE(we.saveUserPreset("forest", false), R::Reserved);
+    QCOMPARE(we.saveUserPreset("Custom", false), R::Reserved);
+    QCOMPARE(we.saveUserPreset("W1", false), R::Ok);
+    QCOMPARE(we.saveUserPreset("w1", false), R::Exists);
+    QVERIFY(we.deleteUserPreset("W1"));
+  }
+
   void presetSyncsWidgets() {
     WorldEditorWidget we;
     pick(we, "desert");

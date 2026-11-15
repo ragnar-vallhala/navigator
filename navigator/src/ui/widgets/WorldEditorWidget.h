@@ -16,6 +16,7 @@
  */
 #pragma once
 
+#include "../../vsim/UserPresets.h"
 #include "../../vsim/VsimTypes.h"
 
 #include <QWidget>
@@ -54,6 +55,12 @@ public:
   // no procedural biome is set; deserialize leaves `w` untouched on bad input.
   static QString serializeProcedural(const vsim::WorldConfig &w);
   static bool deserializeProcedural(vsim::WorldConfig &w, const QString &json);
+  // User presets: saved worlds listed after the built-in world presets.
+  vsim::UserPresetStore::SaveResult saveUserPreset(const QString &name,
+                                                   bool overwrite);
+  bool deleteUserPreset(const QString &name);
+  QString userPresetName() const; // "" if the combo is on Custom / a built-in
+
   // Live wind readout fed from the pose stream (instantaneous speed + heading).
   void setWindReadout(float speedMs, float dirDeg);
 
@@ -81,9 +88,15 @@ private slots:
   void onObstacleFieldChanged();
   void onSaveWorld(); // export env + obstacles to a portable .vworld (JSON)
   void onLoadWorld(); // import a .vworld
+  void onSavePreset();
+  void onDeletePreset();
 
 private:
   void buildUi();
+  void refreshUserPresets(const QString &select);
+  void updatePresetButtons();
+  // Load a world from its portable JSON and push it like Load... does.
+  void loadWorldObject(const QJsonObject &o);
   void buildWindSection(QVBoxLayout *root);
   void buildProceduralSection(QVBoxLayout *root);
   void buildProceduralTuningSection(QVBoxLayout *root);
@@ -143,6 +156,9 @@ private:
   QString lastPreset_; // preset id/seed at the last apply or load
   quint32 lastPresetSeed_ = 0;
   QComboBox *procPreset_ = nullptr; // world preset (biome + terrain + obstacles)
+  QPushButton *savePresetBtn_ = nullptr;
+  QPushButton *delPresetBtn_ = nullptr;
+  int builtinPresetCount_ = 0; // procPreset_ entries before the user presets
   QComboBox *windPreset_ = nullptr; // wind preset (calm / breezy / gusty)
   QSpinBox *procSeed_ = nullptr;
   bool procSyncing_ = false;
