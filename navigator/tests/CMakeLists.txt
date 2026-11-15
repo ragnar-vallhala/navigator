@@ -337,6 +337,10 @@ navigator_test(tst_box_inertia
     ${SRC}/vsim/AirframePresets.cpp)
 target_include_directories(tst_box_inertia PRIVATE ${SRC}/vsim)
 
+# ---- Stopping a stuck worker thread without terminate() (pure, no engine) ---
+navigator_test(tst_thread_retire tst_thread_retire.cpp)
+target_include_directories(tst_thread_retire PRIVATE ${SRC}/vsim)
+
 # ---- Airframe presets flown in the real firmware (SITL builds only) -------
 # Hover + yaw-sign per preset. Needs the engine module like tst_sitl_engine and
 # skips, saying why, without one. About a minute of wall-clock-paced sim.
