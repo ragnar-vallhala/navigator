@@ -32,7 +32,11 @@ CollapsibleSection::CollapsibleSection(const QString &title, QWidget *parent,
   root->setSpacing(0);
 
   header_ = new QToolButton(this);
-  header_->setText(title);
+  // A lone '&' in a button text is a mnemonic marker and is swallowed
+  // ("Wind & Turbulence" showed as "Wind  Turbulence"): escape it.
+  QString shown = title;
+  shown.replace(QLatin1Char('&'), QStringLiteral("&&"));
+  header_->setText(shown);
   header_->setCheckable(true);
   header_->setChecked(expanded);
   header_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);

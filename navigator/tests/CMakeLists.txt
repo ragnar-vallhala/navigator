@@ -489,3 +489,27 @@ if(TARGET Navigator AND NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_ab
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
       TIMEOUT 300)
 endif()
+
+# ---- Simulator page minimum width (SITL builds only) -----------------------
+# Builds the real SimulatorWidget (sources compiled a second time, as above) and
+# checks its minimum size fits a laptop screen. Offscreen; own process.
+if(TARGET Navigator AND NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
+  get_target_property(_nav_srcs Navigator SOURCES)
+  set(_wf_srcs "")
+  foreach(_s ${_nav_srcs})
+    if(NOT _s MATCHES "(^|/)app/main\\.cpp$")
+      list(APPEND _wf_srcs "${CMAKE_SOURCE_DIR}/${_s}")
+    endif()
+  endforeach()
+  navigator_test(tst_sim_page_size tst_sim_page_size.cpp ${_wf_srcs})
+  get_target_property(_nav_inc Navigator INCLUDE_DIRECTORIES)
+  get_target_property(_nav_def Navigator COMPILE_DEFINITIONS)
+  get_target_property(_nav_lib Navigator LINK_LIBRARIES)
+  target_include_directories(tst_sim_page_size PRIVATE ${_nav_inc}
+      ${CMAKE_SOURCE_DIR}/src/ui/widgets ${CMAKE_SOURCE_DIR}/src/vsim)
+  target_compile_definitions(tst_sim_page_size PRIVATE ${_nav_def})
+  target_link_libraries(tst_sim_page_size PRIVATE ${_nav_lib})
+  set_tests_properties(tst_sim_page_size PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
+      TIMEOUT 120)
+endif()
