@@ -109,7 +109,7 @@ private slots:
     QCOMPARE(we.procPreset_->count(), builtins);
     QCOMPARE(we.procPreset_->currentData().toString(), QString());
     QVERIFY(!del->isEnabled());
-    WorldEditorWidget we2; // a new session sees it gone
+    WorldEditorWidget we2; // a later launch sees it gone
     QCOMPARE(we2.procPreset_->count(), builtins);
   }
 

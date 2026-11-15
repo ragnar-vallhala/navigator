@@ -110,7 +110,7 @@ private slots:
     QVERIFY(!del->isEnabled());
     QCOMPARE(w.userPresetName(), QString());
 
-    // A fresh widget (new session) lists it and loads its geometry.
+    // A fresh widget (a later launch) lists it and loads its geometry.
     GeometryEditorWidget w2;
     pickText(w2, "Heavy One");
     QVERIFY(std::fabs(w2.config().mass - 0.77f) < 1e-4f);
