@@ -233,6 +233,7 @@ set(GCS_SITL_SOURCES
     src/ui/widgets/SimHudWidget.cpp
     src/vsim/SimWorker.cpp
     src/vsim/VehicleJson.cpp
+    src/vsim/UserPresets.cpp
     src/vsim/AirframePresets.cpp
     src/vsim/DroneModel.cpp
     src/vsim/SitlModule.cpp
@@ -280,6 +281,7 @@ set(GCS_SITL_HEADERS
     src/ui/widgets/SimHudWidget.h
     src/vsim/VsimTypes.h
     src/vsim/VehicleJson.h
+    src/vsim/UserPresets.h
     src/vsim/FlightEventLog.h
     src/vsim/AirframePresets.h
     src/vsim/SimWorker.h
