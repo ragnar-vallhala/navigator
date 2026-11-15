@@ -31,7 +31,10 @@
 
 #include "SimulatorWidget.h"
 
+#include <QCheckBox>
+#include <QGroupBox>
 #include <QLayout>
+#include <QPushButton>
 #include <QApplication>
 #include <QScrollArea>
 #include <QSplitter>
@@ -117,6 +120,34 @@ private slots:
     w_->resize(1000, 600);
     QVERIFY2(w_->width() <= 1000,
              qPrintable(QString("page forced to %1 px wide").arg(w_->width())));
+  }
+
+  // Fault injection is meant for use in flight. Starting the sim locks the
+  // Vehicle page (and tab) and forces the World page, so the Fault Injection
+  // panel must live on a page that stays reachable, not on the Vehicle page.
+  // Runs offscreen (no engine needed): checks where the panel lives and that
+  // its controls are enabled; the running-sim behaviour is a manual xcb check.
+  void faultPanelLivesOnTheFlightPage() {
+    QStackedWidget *st = a_->stack();
+    QVERIFY(st && st->count() >= 2);
+    auto *fault = w_->findChild<QGroupBox *>(QStringLiteral("FaultPanel"));
+    QVERIFY2(fault, "Fault Injection panel not found");
+    QVERIFY2(st->widget(1)->isAncestorOf(fault),
+             "fault panel is not on the World page (the page forced while "
+             "the sim runs)");
+    QVERIFY2(!st->widget(0)->isAncestorOf(fault),
+             "fault panel is on the Vehicle page, which is locked in flight");
+    QVERIFY(fault->isEnabled());
+    for (int i = 1; i <= 4; ++i) {
+      const QString t = QStringLiteral("M%1").arg(i);
+      QPushButton *kill = nullptr;
+      for (auto *b : fault->findChildren<QPushButton *>())
+        if (b->text() == t)
+          kill = b;
+      QVERIFY2(kill, qPrintable("no kill button " + t));
+      QVERIFY2(kill->isEnabled(), qPrintable(t + " disabled"));
+      QVERIFY(!kill->isHidden());
+    }
   }
 
   void sectionTitlesAreClean() {
