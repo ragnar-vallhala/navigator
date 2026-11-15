@@ -188,6 +188,25 @@ jobs:
         run: |
           cp vayu-sitl-sdk/lib/libvayu_sitl.so navigator/build-tidy/
           ctest --test-dir navigator/build-tidy --output-on-failure
+      - name: Skipped ctest cases (summary)
+        # ctest counts a QtTest SKIP as Passed, so "Passed" above can mean "ran
+        # nothing". Print which cases skipped (from the full per-test log ctest
+        # keeps) so that is visible in this log. Informational: it never fails
+        # the job -- the xcb steps below are what enforce 0 skipped for the
+        # cases that can run here. (The tests that self-skip on offscreen
+        # either run under xcb below, or skip because the engine is absent.)
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          log=navigator/build-tidy/Testing/Temporary/LastTest.log
+          if [ ! -f "$log" ]; then echo "no $log (ctest did not run)"; exit 0; fi
+          awk '
+            /^[0-9]+\/[0-9]+ Testing: / { t = $3 }
+            /^[A-Za-z_0-9]+ *: .*SKIP|^SKIP   : / { n[t]++; tot++ }
+            END {
+              for (k in n) printf "  %-32s %d skipped\n", k, n[k]
+              printf "ctest skip summary: %d skipped QtTest case(s) in %d test binary(ies) (ctest reported them all Passed)\n", tot, length(n)
+            }' "$log"
       - name: Backtrace for crashed ctest cases
         # ctest only says 'SegFault'. Re-run each failed case under gdb so a
         # crash shows where. Diagnostic only: the ctest step above already
@@ -314,6 +333,66 @@ jobs:
               esac
             fi
             echo "RESULT $fn: $res (${secs}s) ${totals:-}"
+          done
+          exit $failed
+      - name: Widget/GL tests that skip on offscreen (xcb on Xvfb, software GL)
+        # ctest pins QT_QPA_PLATFORM=offscreen on every case (navigator_test()),
+        # so each test below self-skips there and ctest still says Passed. Run
+        # them here on a real platform: xcb on a virtual X server, Mesa
+        # llvmpipe. One binary (or one named test function) per process, each
+        # under its own timeout, so a hang cannot eat the job (tst_workspace_gl
+        # hung once on a runner and is deliberately NOT in this list: it has its
+        # own per-function step in the workspace job). A QtTest skip exits 0, so
+        # every Totals line must show passes and "0 failed, 0 skipped".
+        # Entry format: test[:function[:nomodule]]. "nomodule" points the engine
+        # module at a missing file for that run (tst_sim_runlog has one case
+        # that only runs without the engine and one that only runs with it, so
+        # no single run can have 0 skipped).
+        timeout-minutes: 10
+        env:
+          QT_QPA_PLATFORM: xcb
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          set -euo pipefail
+          build=navigator/build-tidy/tests
+          module=$PWD/vayu-sitl-sdk/lib/libvayu_sitl.so
+          entries="tst_native_clip tst_workspace_manager tst_gpu_grass
+                   tst_sim_runlog:missingModuleLeavesNoLogs:nomodule
+                   tst_sim_runlog:rapidStartStopOneRunPerStart"
+          failed=0
+          i=0
+          for e in $entries; do
+            i=$((i + 1))
+            IFS=: read -r name fn mode <<<"$e"
+            bin=$build/$name
+            test -x "$bin" || { echo "$bin was not built"; failed=1; continue; }
+            mod=$module
+            [ "$mode" = nomodule ] && mod=$PWD/no-such-engine-module.so
+            echo "::group::$name ${fn:-}"
+            log=$(mktemp)
+            priv=$(mktemp -d)
+            rc=0
+            start=$SECONDS
+            VAYU_VFS_DIR="$priv/vfs" VSIM_FIFO_SUFFIX="xcb$$_$i" \
+              VAYU_SITL_MODULE="$mod" XDG_CONFIG_HOME="$priv/cfg" \
+              XDG_DATA_HOME="$priv/data" \
+              timeout -k 10 120 xvfb-run -a -s "-screen 0 1280x800x24 +extension GLX" \
+              "$bin" ${fn:+"$fn"} -v2 >"$log" 2>&1 || rc=$?
+            cat "$log"
+            secs=$((SECONDS - start))
+            echo "::endgroup::"
+            totals=$(grep -E '^Totals:' "$log" | tail -1 || true)
+            res=PASS
+            case $rc in
+              0) ;;
+              124|137) res=TIMEOUT ;;
+              *) res="FAIL(rc=$rc)" ;;
+            esac
+            if [ "$res" = PASS ] && ! echo "$totals" | grep -qE '^Totals: [1-9][0-9]* passed, 0 failed, 0 skipped'; then
+              res="SKIPPED-OR-NO-PASSES"
+            fi
+            [ "$res" = PASS ] || { failed=1; echo "::error::$name ${fn:-} $res"; }
+            echo "RESULT $name${fn:+::$fn}: $res (${secs}s) ${totals:-no totals line}"
           done
           exit $failed
       - name: clang-tidy (Navigator)
