@@ -69,6 +69,16 @@ std::vector<int16_t> synth(ChimeAudio::Kind k) {
       appendSilence(b, 70);
     }
     break;
+  case ChimeAudio::Kind::BatteryWarn: // two falling notes, once
+    appendTone(b, 740.0, 140, 0.55f);
+    appendTone(b, 554.0, 220, 0.55f);
+    break;
+  case ChimeAudio::Kind::BatteryCritical: // lower and longer than failsafe
+    for (int i = 0; i < 2; ++i) {
+      appendTone(b, 440.0, 180, 0.7f);
+      appendSilence(b, 90);
+    }
+    break;
   }
   return b;
 }

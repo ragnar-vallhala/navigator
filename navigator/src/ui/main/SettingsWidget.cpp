@@ -31,6 +31,7 @@
 #include <QMessageBox>
 #include <QPainter>
 #include <QPushButton>
+#include <algorithm>
 #include <QScrollArea>
 #include <QSerialPortInfo>
 #include <QStackedWidget>
@@ -660,12 +661,31 @@ SettingsWidget::SettingsWidget(QWidget *parent) : QWidget(parent) {
       track(m_batteryCellsSpin, rr.name);
     }
 
-    // Battery warn/crit stay coming-soon: the voltage is in telemetry now, but
-    // no alert is wired to it yet.
-    v->addWidget(soonRow("Battery warning", "amber alert below (V/cell)",
-                         dspin(2.5, 4.2, 3.50, 0.05)));
-    v->addWidget(soonRow("Battery critical", "red alert below (V/cell)",
-                         dspin(2.5, 4.2, 3.30, 0.05)));
+    m_batteryWarnSpin = dspin(2.5, 4.2, 3.50, 0.05);
+    m_batteryWarnSpin->setSuffix(tr(" V/cell"));
+    {
+      auto rr = makeRow("Battery warning", "amber alert below (V/cell)",
+                        m_batteryWarnSpin);
+      v->addWidget(rr.w);
+      track(m_batteryWarnSpin, rr.name);
+    }
+    m_batteryCritSpin = dspin(2.5, 4.2, 3.30, 0.05);
+    m_batteryCritSpin->setSuffix(tr(" V/cell"));
+    {
+      auto rr = makeRow("Battery critical",
+                        "red alert below (V/cell); never above the warning",
+                        m_batteryCritSpin);
+      v->addWidget(rr.w);
+      track(m_batteryCritSpin, rr.name);
+    }
+    {
+      auto *calBtn = new QPushButton(tr("Open…"));
+      v->addWidget(makeRow("Battery calibration",
+                           "two-point voltage fit against a multimeter", calBtn)
+                       .w);
+      connect(calBtn, &QPushButton::clicked, this,
+              &SettingsWidget::batteryCalibrationRequested);
+    }
 
     m_confirmArmChk = check(true);
     {
@@ -868,6 +888,10 @@ void SettingsWidget::setSettings(const GcsSettings &s) {
   m_exportOnDisconnectChk->setChecked(s.exportOnDisconnect);
   const QSignalBlocker bCells(m_batteryCellsSpin);
   m_batteryCellsSpin->setValue(s.batteryCells);
+  const QSignalBlocker bBw(m_batteryWarnSpin);
+  m_batteryWarnSpin->setValue(s.batteryWarnV);
+  const QSignalBlocker bBc(m_batteryCritSpin);
+  m_batteryCritSpin->setValue(s.batteryCritV);
   const QSignalBlocker bToast(m_toastChk);
   m_toastChk->setChecked(s.toastNotifications);
   const QSignalBlocker bAud(m_audioAlertsChk);
@@ -958,6 +982,9 @@ GcsSettings SettingsWidget::getSettings() const {
   s.packetBufferRows = m_packetBufferSpin ? m_packetBufferSpin->value() : 5000;
   s.crcCheck = !m_crcCheckChk || m_crcCheckChk->isChecked();
   s.batteryCells = m_batteryCellsSpin ? m_batteryCellsSpin->value() : 0;
+  s.batteryWarnV = m_batteryWarnSpin ? m_batteryWarnSpin->value() : 3.50;
+  s.batteryCritV = m_batteryCritSpin ? m_batteryCritSpin->value() : 3.30;
+  s.batteryCritV = std::min(s.batteryCritV, s.batteryWarnV);
   s.recentViewsCount = m_recentViewsSpin ? m_recentViewsSpin->value() : 5;
   s.theme = m_themeCombo ? m_themeCombo->currentIndex() : 0;
   s.unitSystem = m_unitSystemCombo ? m_unitSystemCombo->currentIndex() : 0;

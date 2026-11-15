@@ -97,6 +97,8 @@ set(GCS_SOURCES
     src/core/ShortcutsManager.cpp
     src/core/ViewHistory.cpp
     src/core/CalibrationWizard.cpp
+    src/core/BatteryCalib.cpp
+    src/ui/widgets/BatteryCalibDialog.cpp
     src/core/CsvExport.cpp
     src/core/Logger.cpp
     src/core/Notify.cpp
@@ -175,6 +177,9 @@ set(GCS_HEADERS
     src/core/ui/WheelGuard.h
     src/ui/widgets/PacketAnalyzerWidget.h
     src/ui/main/SettingsWidget.h
+    src/core/BatteryCalib.h
+    src/core/BatteryAlert.h
+    src/ui/widgets/BatteryCalibDialog.h
     src/protocol/PacketDissector.h
     src/protocol/TimeSyncEstimator.h
     src/ui/widgets/PacketDetailWidget.h

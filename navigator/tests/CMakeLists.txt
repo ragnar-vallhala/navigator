@@ -47,6 +47,18 @@ navigator_test(tst_battery_estimator tst_battery_estimator.cpp)
 target_include_directories(tst_battery_estimator PRIVATE ${SRC}/core)
 target_link_libraries(tst_battery_estimator PRIVATE navlink_codec)
 
+# ---- Battery warn/crit alert tracker (thresholds, hysteresis, debounce) ----
+navigator_test(tst_battery_alert tst_battery_alert.cpp)
+target_include_directories(tst_battery_alert PRIVATE ${SRC}/core)
+target_link_libraries(tst_battery_alert PRIVATE navlink_codec)
+
+# ---- Battery calibration: fit, band, 16-byte file, dialog ------------------
+navigator_test(tst_battery_calib
+    tst_battery_calib.cpp
+    ${SRC}/core/BatteryCalib.cpp
+    ${SRC}/ui/widgets/BatteryCalibDialog.cpp)
+target_include_directories(tst_battery_calib PRIVATE ${SRC}/core)
+
 # ---- RC bridge failsafe policy (NO_SIGNAL on link loss, arm gating) --------
 navigator_test(tst_rc_frame tst_rc_frame.cpp)
 target_include_directories(tst_rc_frame PRIVATE ${SRC}/vsim)

@@ -59,9 +59,7 @@ struct GcsSettings {
   int maxLogLines = 2000; // System Log ring-buffer cap
   bool exportOnDisconnect = false; // dump the session log on disconnect
 
-  // Alerts & Audio (mockup parity, wired 2026-06-14). Battery warn/crit are not
-  // here yet: BATTERY telemetry now carries the voltage, but no alert is wired
-  // to it, so they stay coming-soon.
+  // Alerts & Audio (mockup parity, wired 2026-06-14).
   bool toastNotifications = true; // in-app status-bar toasts (Notify)
   bool audioAlerts = true;        // arm/disarm/failsafe chimes (ChimeAudio)
   bool confirmBeforeArm = true;   // require a confirm dialog before ARM
@@ -75,6 +73,9 @@ struct GcsSettings {
   // Battery cell count for the % readout: 0 = infer from voltage (default),
   // 1..12 = this pack. See battery::Estimator.
   int batteryCells = 0;
+  // Battery alert thresholds, volts per cell (battery::AlertTracker).
+  double batteryWarnV = 3.50;
+  double batteryCritV = 3.30;
 
   // Versioned (de)serialisation — the leading version field lets us
   // append fields without breaking existing settings files. The trailing
@@ -91,7 +92,8 @@ struct GcsSettings {
         << s.traceWidth << s.antialias << s.logDirectory << s.timestampMode
         << s.maxLogLines << s.exportOnDisconnect << s.toastNotifications
         << s.audioAlerts << s.confirmBeforeArm << s.simPropAudio
-        << s.packetBufferRows << s.crcCheck << s.batteryCells;
+        << s.packetBufferRows << s.crcCheck << s.batteryCells
+        << s.batteryWarnV << s.batteryCritV;
     return out;
   }
 
@@ -159,6 +161,10 @@ struct GcsSettings {
       in >> s.crcCheck;
     if (!in.atEnd())
       in >> s.batteryCells;
+    if (!in.atEnd())
+      in >> s.batteryWarnV;
+    if (!in.atEnd())
+      in >> s.batteryCritV;
     return in;
   }
 };

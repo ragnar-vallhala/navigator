@@ -24,6 +24,7 @@
 #include "../protocol/CommandCodec.h"
 #include "../replay/ReplaySource.h"
 #include "../ui/widgets/AboutDialog.h"
+#include "../ui/widgets/BatteryCalibDialog.h"
 #include "../ui/widgets/AttitudePanel.h"
 #include "../ui/widgets/LogsPanel.h"
 #include "../ui/widgets/NumbersPanel.h"
@@ -129,6 +130,11 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   buildSourceHooks();
   connect(&m_source, &SourceController::stateChanged, this,
           [this](SourceState now, SourceState was) {
+            // A level reached under one source says nothing about the next:
+            // without this, a level from a replayed log would carry into a live
+            // link and hide the alert for a pack that is already low.
+            if ((now == SourceState::Replay) != (was == SourceState::Replay))
+              m_batteryAlert.reset();
             // The in-app sim's firmware rejects every command until its clock
             // is disciplined, and nothing else starts the handshake for it.
             if (now == SourceState::Sim) {
@@ -257,6 +263,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   // persists once. applyAllSettings(true) does both.
   connect(m_settingsWidget, &SettingsWidget::applyRequested, this,
           [this] { applyAllSettings(true); });
+  connect(m_settingsWidget, &SettingsWidget::batteryCalibrationRequested, this,
+          &MainWindow::openBatteryCalibration);
 
   // The recorder now lives inside the engine and tees live bytes on the worker
   // thread (Phase B), so no GUI-side byte tee is needed.
@@ -1287,6 +1295,7 @@ void MainWindow::applyAllSettings(bool persist) {
   m_chime.setEnabled(s.audioAlerts);
   m_confirmBeforeArm = s.confirmBeforeArm;
   m_battery.setCellsOverride(s.batteryCells);
+  m_batteryAlert.setThresholds(s.batteryWarnV, s.batteryCritV);
 #ifdef NAVIGATOR_HAS_SITL
   if (m_simulatorWidget)
     m_simulatorWidget->setPropAudioDefault(s.simPropAudio);
@@ -1573,13 +1582,28 @@ void MainWindow::onUiTimer() {
   // flags, not the voltage: an unplugged pack still reads a few volts.
   const bool battFresh =
       s.lastBatteryMs != 0 && (nowMs - s.lastBatteryMs) < kTelemetryStaleMs;
+  if (m_batteryCalibDialog) {
+    // Counts are evidence of the divider whether or not a pack is PRESENT.
+    const uint8_t f = s.battery.flags;
+    m_batteryCalibDialog->setLive(
+        s.battery.counts,
+        battFresh && (f & NAVLINK_BATTERY_FLAGS_CONVERTED) &&
+            !(f & NAVLINK_BATTERY_FLAGS_RAILED));
+  }
   if (!battFresh) {
     m_battery.reset();
+    m_batteryAlert.noPack(nowMs);
     m_imuPanel->setBatteryUnavailable(tr("no battery telemetry"));
     m_motorWidget->setBattery(QStringLiteral("-"));
   } else {
     const battery::Reading b =
         m_battery.update(s.battery.voltage, s.battery.flags);
+    // The tracker keeps judging so its level is right when replay ends, but a
+    // replayed log must not raise a live alarm (toast, chime) for a pack that
+    // was low when it was recorded.
+    const battery::AlertTracker::Result alert = m_batteryAlert.update(b, nowMs);
+    if (m_source.state() != SourceState::Replay)
+      announceBattery(alert);
     if (b.pack) {
       const QString volts = QString("%1 V").arg(b.volts, 0, 'f', 1);
       const QString cells =
@@ -2011,4 +2035,37 @@ void MainWindow::openLastRecentLog() {
     }
   }
   Notify::warn(this, tr("No recent log to open"));
+}
+
+// A step up in battery level is announced once: a log line, a toast, a chime.
+// Recovery and the held level in between are silent (AlertTracker debounces).
+void MainWindow::announceBattery(const battery::AlertTracker::Result &r) {
+  if (!r.escalated)
+    return;
+  const bool crit = r.level == battery::AlertLevel::Critical;
+  const QString msg =
+      tr("Battery %1: %2 V/cell (limit %3)")
+          .arg(crit ? tr("CRITICAL") : tr("low"))
+          .arg(r.perCellV, 0, 'f', 2)
+          .arg(crit ? m_batteryAlert.critV() : m_batteryAlert.warnV(), 0, 'f',
+               2);
+  m_logPanel->appendLog("[GCS] " + msg);
+  if (crit)
+    Notify::error(this, msg);
+  else
+    Notify::warn(this, msg);
+  m_chime.play(crit ? ChimeAudio::Kind::BatteryCritical
+                    : ChimeAudio::Kind::BatteryWarn);
+}
+
+void MainWindow::openBatteryCalibration() {
+  if (m_batteryCalibDialog) {
+    m_batteryCalibDialog->raise();
+    m_batteryCalibDialog->activateWindow();
+    return;
+  }
+  auto *d = new BatteryCalibDialog(this);
+  d->setAttribute(Qt::WA_DeleteOnClose);
+  m_batteryCalibDialog = d;
+  d->show();
 }
