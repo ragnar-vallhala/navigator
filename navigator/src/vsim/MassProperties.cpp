@@ -143,4 +143,17 @@ MassProperties computeMassProperties(const std::vector<QVector3D> &p,
   return out;
 }
 
+std::array<float, 9> boxInertia(float mass,
+                                const std::array<QVector3D, 4> &motorPos) {
+  float a = 0.0f, b = 0.0f; // mean(y^2), mean(x^2)
+  for (const QVector3D &p : motorPos) {
+    a += p.y() * p.y();
+    b += p.x() * p.x();
+  }
+  a *= 0.25f;
+  b *= 0.25f;
+  return {kBoxKx * mass * a, 0, 0, 0, kBoxKy * mass * b,
+          0,                 0, 0, kBoxKz * mass * (a + b)};
+}
+
 } // namespace vsim

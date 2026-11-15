@@ -195,6 +195,60 @@ private slots:
     QCOMPARE(w.presetId(), QString());
     QCOMPARE(chosen.size(), 1);
   }
+
+  // ---- box model: inertia follows mass + arm length ----
+  static QDoubleSpinBox *massSpin(GeometryEditorWidget &w) {
+    for (QDoubleSpinBox *sp : w.findChildren<QDoubleSpinBox *>())
+      if (std::fabs(sp->value() - 0.682) < 1e-9)
+        return sp;
+    return nullptr;
+  }
+  static QDoubleSpinBox *posXSpin(GeometryEditorWidget &w) {
+    for (QDoubleSpinBox *sp : w.findChildren<QDoubleSpinBox *>())
+      if (std::fabs(sp->value() - 0.0866) < 1e-9) // Motor 1 pos X
+        return sp;
+    return nullptr;
+  }
+
+  void massEditRecomputesInertia() {
+    GeometryEditorWidget w;
+    const vsim::GeometryConfig d;
+    apply(w);
+    QCOMPARE(w.config().inertia[0], d.inertia[0]); // untouched: unchanged
+    QDoubleSpinBox *m = massSpin(w);
+    QVERIFY(m);
+    m->setValue(1.364); // twice the mass
+    apply(w);
+    for (int i : {0, 4, 8})
+      QVERIFY(std::fabs(w.config().inertia[i] - 2.0f * d.inertia[i]) <
+              2e-3f * d.inertia[i]);
+    // What the engine gets (physicsConfig) carries the new value too.
+    QCOMPARE(w.physicsConfig().inertia, w.config().inertia);
+  }
+
+  void armEditRecomputesInertia() {
+    GeometryEditorWidget w;
+    QDoubleSpinBox *x = posXSpin(w);
+    QVERIFY(x);
+    const float iyy0 = w.config().inertia[4];
+    x->setValue(0.1732); // motor 1 only: mean(x^2) 0.0075 -> 0.013125 (x1.75)
+    apply(w);
+    QVERIFY(std::fabs(w.config().inertia[4] / iyy0 - 1.75f) < 0.01f);
+  }
+
+  // An old saved config with a hand-set inertia loads as it is and is only
+  // replaced once mass or arms are edited.
+  void handSetInertiaKeptUntilEdit() {
+    vsim::GeometryConfig c;
+    c.inertia = {9e-3f, 0, 0, 0, 9e-3f, 0, 0, 0, 9e-3f};
+    GeometryEditorWidget w;
+    w.setConfig(c);
+    apply(w);
+    QCOMPARE(w.config().inertia[0], 9e-3f);
+    massSpin(w)->setValue(0.8);
+    apply(w);
+    QVERIFY(w.config().inertia[0] < 3e-3f);
+  }
 };
 
 QTEST_MAIN(TstGeometryEditorPreset)

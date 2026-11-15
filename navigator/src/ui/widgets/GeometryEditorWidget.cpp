@@ -274,11 +274,14 @@ void GeometryEditorWidget::buildUi() {
     for (QDoubleSpinBox *sp : {scaleSpin_, massSpin_, propRadiusSpin_, transX_,
                                transY_, transZ_, rotX_, rotY_, rotZ_})
       connect(sp, dbl, this, edited);
+    connect(massSpin_, dbl, this, [this] { onBoxEdited(); });
     connect(meshEdit_, &QLineEdit::textEdited, this, edited);
     for (auto &r : rows_) {
       for (QDoubleSpinBox *sp : {r.px, r.py, r.pz, r.ax, r.ay, r.az, r.kt,
                                  r.km, r.wmax, r.tau})
         connect(sp, dbl, this, edited);
+      for (QDoubleSpinBox *sp : {r.px, r.py})
+        connect(sp, dbl, this, [this] { onBoxEdited(); });
       connect(r.spin, idx, this, edited);
     }
   }
@@ -293,6 +296,36 @@ void GeometryEditorWidget::onFormEdited() {
     return;
   setPresetId(QString());
   emit presetChosen(QString());
+}
+
+bool GeometryEditorWidget::boxModel() const {
+  return !(hasMesh() && !meshEdit_->text().isEmpty());
+}
+
+static std::array<QVector3D, 4> motorPositions(const vsim::GeometryConfig &c) {
+  return {c.motors[0].pos, c.motors[1].pos, c.motors[2].pos, c.motors[3].pos};
+}
+
+bool GeometryEditorWidget::boxInertiaMatches() const {
+  const auto want = vsim::boxInertia(cfg_.mass, motorPositions(cfg_));
+  for (size_t i = 0; i < want.size(); ++i)
+    if (std::fabs(cfg_.inertia[i] - want[i]) >
+        0.01f * std::fabs(want[i]) + 1e-9f)
+      return false;
+  return true;
+}
+
+// Mass or a motor position was edited by the user. In the box model the
+// inertia follows (it is shown read-only); with a mesh it stays the computed
+// one until Load & Compute is pressed again. Loading a config does not come
+// through here, so an old saved hand-set inertia is kept until an edit.
+void GeometryEditorWidget::onBoxEdited() {
+  if (syncing_)
+    return;
+  syncUiToConfig();
+  if (boxModel())
+    cfg_.inertia = vsim::boxInertia(cfg_.mass, motorPositions(cfg_));
+  showMassProps();
 }
 
 QString GeometryEditorWidget::presetId() const {
@@ -364,6 +397,10 @@ void GeometryEditorWidget::setMotorFromGizmo(int i, QVector3D posComFrame,
   const QVector3D placed = posComFrame + cfg_.com; // CoM frame -> placed frame
   m.pos = ok ? xi.map(placed) : placed;
   m.axis = ok ? xi.mapVector(axis).normalized() : axis;
+  if (boxModel()) {
+    cfg_.inertia = vsim::boxInertia(cfg_.mass, motorPositions(cfg_));
+    showMassProps();
+  }
   // Reflect in the row's spinboxes (block in case anything is wired).
   auto &r = rows_[i];
   for (auto *s : {r.px, r.py, r.pz, r.ax, r.ay, r.az})
@@ -385,7 +422,15 @@ void GeometryEditorWidget::showMassProps() {
                        .arg(cfg_.com.y() * 1000.0, 0, 'f', 1)
                        .arg(cfg_.com.z() * 1000.0, 0, 'f', 1));
   const auto &I = cfg_.inertia;
-  inertiaLbl_->setText(QString("I [kg·m²] =\n"
+  QString head;
+  if (!boxModel())
+    head = tr("I [kg·m²] (from mesh, read-only) =");
+  else if (boxInertiaMatches())
+    head = tr("I [kg·m²] (from mass + arm length, read-only) =");
+  else
+    head = tr("I [kg·m²] (loaded value, read-only; recomputed when mass or "
+              "motors change) =");
+  inertiaLbl_->setText(head + QString("\n"
                                " %1  %2  %3\n %4  %5  %6\n %7  %8  %9")
                            .arg(I[0], 9, 'g', 3)
                            .arg(I[1], 9, 'g', 3)

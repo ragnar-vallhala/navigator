@@ -17,6 +17,7 @@
 #pragma once
 
 #include <QVector3D>
+#include <array>
 #include <vector>
 
 // MassProperties — exact mass properties of a closed triangle mesh,
@@ -48,5 +49,25 @@ struct MassProperties {
 // input (zero volume).
 MassProperties computeMassProperties(const std::vector<QVector3D> &positions,
                                      float targetMass);
+
+// Inertia of the box/arms airframe (no mesh loaded), from the mass and the
+// motor layout. Row-major diagonal tensor about the CoM, body frame [kg*m^2].
+//
+// With a = mean(y_i^2) and b = mean(x_i^2) over the four motors (so a = b = p^2
+// for the usual +-p square layout, arm length p*sqrt(2)):
+//     Ixx = kBoxKx * m * a
+//     Iyy = kBoxKy * m * b
+//     Izz = kBoxKz * m * (a + b)
+// The coefficients are fitted to the "5in" preset (m = 0.682 kg, p = 0.0866 m,
+// I = 1.54e-3 / 1.80e-3 / 3.06e-3), which the GeometryConfig defaults pin, so
+// the defaults come out unchanged to within 0.1 %: Kx = Ixx/(m p^2) = 0.301,
+// Ky = 0.352, Kz = Izz/(m 2p^2) = 0.299. The engine has no inertia convention
+// of its own (it takes the 3x3 tensor as sent, vsim_proto.h), so this is the
+// GCS's. Inertia scales linearly with mass and quadratically with arm length.
+constexpr float kBoxKx = 0.301f;
+constexpr float kBoxKy = 0.352f;
+constexpr float kBoxKz = 0.299f;
+std::array<float, 9> boxInertia(float mass,
+                                const std::array<QVector3D, 4> &motorPos);
 
 } // namespace vsim

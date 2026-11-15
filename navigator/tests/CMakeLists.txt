@@ -330,6 +330,13 @@ target_include_directories(tst_airframe_presets PRIVATE ${SRC}/vsim ${SRC}/ui/wi
 target_compile_definitions(tst_airframe_presets PRIVATE
     AIRFRAME_VEHICLE_DIR="${CMAKE_SOURCE_DIR}/docs/vehicles")
 
+# ---- Box/arms inertia formula (pure, no engine, builds in the GCS-only build) --
+navigator_test(tst_box_inertia
+    tst_box_inertia.cpp
+    ${SRC}/vsim/MassProperties.cpp
+    ${SRC}/vsim/AirframePresets.cpp)
+target_include_directories(tst_box_inertia PRIVATE ${SRC}/vsim)
+
 # ---- Airframe presets flown in the real firmware (SITL builds only) -------
 # Hover + yaw-sign per preset. Needs the engine module like tst_sitl_engine and
 # skips, saying why, without one. About a minute of wall-clock-paced sim.
