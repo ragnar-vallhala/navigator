@@ -193,6 +193,9 @@ jobs:
         run: |
           set -euo pipefail
           test -f "$VSIM_PROTO_H" || { echo "::error::$VSIM_PROTO_H missing"; exit 1; }
+          # The headless package imports the NavLink Python codec from
+          # navlink/generated/python, which is generated, not checked in.
+          python3 navlink/generate.py --lang py --out navlink/generated
           cd navigator/headless-sdk
           log="$RUNNER_TEMP/headless-unit.log"
           PYTHONPATH=. python3 -m pytest tests/unit -q -rs -p no:cacheprovider \
