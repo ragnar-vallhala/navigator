@@ -17,6 +17,7 @@
 #include "MainWindow.h"
 #include "DockPanelIds.h"
 #include "DockShell.h"
+#include "WindowFit.h"
 #include "../core/FaultsModel.h"
 #include "../core/Notify.h"
 #include "../core/SettingsManager.h"
@@ -57,6 +58,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QScreen>
 #include <QStringList>
 #include <QSettings>
 #include <QStandardPaths>
@@ -1905,6 +1907,22 @@ void MainWindow::restoreUiState() {
       restoreGeometry(s.value(kGeomKey).toByteArray());
     if (s.contains(kWinStateKey))
       restoreState(s.value(kWinStateKey).toByteArray());
+  }
+
+  // Never open larger than the screen, or partly off it. Qt refuses a saved geometry that does
+  // not fit the current screen (a window saved on a bigger monitor), which
+  // leaves the default size, and that default is itself wider than a 1280 px
+  // screen. A maximized or full-screen window already fills it.
+  if (!isMaximized() && !isFullScreen()) {
+    if (const QScreen *scr = screen()) {
+      const QRect want(pos(), size());
+      const QRect fit = windowfit::fitRect(want, scr->availableGeometry(),
+                                           minimumSize());
+      if (fit != want) {
+        resize(fit.size());
+        move(fit.topLeft());
+      }
+    }
   }
 
   // Restore last-used port / baud through the toolbar's typed accessors (this is
