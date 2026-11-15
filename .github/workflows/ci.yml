@@ -111,7 +111,7 @@ jobs:
           # developer machine does, rather than a variant nobody runs.
           apt_retry install -y cmake clang-tidy-18 jq \
             qt6-base-dev qt6-base-private-dev qt6-base-dev-tools qt6-serialport-dev \
-            libgl1-mesa-dev libassimp-dev libpulse-dev python3-numpy \
+            libgl1-mesa-dev libassimp-dev libpulse-dev python3-numpy python3-pytest \
             xvfb libgl1-mesa-dri libxkbcommon-x11-0 libxcb-icccm4 \
             libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 \
             libxcb-xkb1
@@ -178,6 +178,29 @@ jobs:
           grep -q 'NAVIGATOR_HAS_SITL' navigator/build-tidy/compile_commands.json \
             || { echo "SITL is off -- the SDK was not picked up"; exit 1; }
 
+      - name: Headless SDK unit tests (wire drift vs vsim_proto.h)
+        # navigator/headless-sdk hand-mirrors the vsim wire layer in Python.
+        # tests/unit/test_wire_drift.py parses the static_assert sizes out of
+        # the SDK's vsim_proto.h and fails if the Python struct sizes differ,
+        # so a protocol change in the firmware turns CI red here instead of
+        # corrupting frames at runtime. The header comes from the SDK fetched
+        # above (the version this repo is pinned to), not from a checkout.
+        # The test skips itself when the header is missing, so the header must
+        # exist and the run must show no skips: a skip here would mean the
+        # drift guard silently checked nothing.
+        env:
+          VSIM_PROTO_H: ${{ github.workspace }}/vayu-sitl-sdk/include/vsim_proto.h
+        run: |
+          set -euo pipefail
+          test -f "$VSIM_PROTO_H" || { echo "::error::$VSIM_PROTO_H missing"; exit 1; }
+          cd navigator/headless-sdk
+          log="$RUNNER_TEMP/headless-unit.log"
+          PYTHONPATH=. python3 -m pytest tests/unit -q -rs -p no:cacheprovider \
+            2>&1 | tee "$log"
+          if grep -qE '[0-9]+ skipped' "$log"; then
+            echo "::error::headless unit tests skipped; the drift guard did not run"
+            exit 1
+          fi
       - name: ctest
         # 20 QtTest cases. Several construct widgets and so need a platform
         # plugin; offscreen is what the headless render test documents. The
