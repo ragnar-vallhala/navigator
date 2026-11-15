@@ -63,6 +63,8 @@ public:
   // behaviour
   quint8 openResult = xfer::kResAccepted; // COMMAND_ACK result for the open
   bool sendInfo = true;
+  bool sendAccept = true; // the COMMAND_ACK ACCEPTED for the open
+  bool loseDone = false;  // the one terminal DONE never arrives
   quint16 chunk = 247;
   QSet<int> dropData; // 1-based index of the XFER_DATA frames to lose
   bool silent = false; // hears nothing, says nothing
@@ -99,7 +101,9 @@ public:
     m_cursor = 0;
     m_eof = false;
     file.clear();
-    reply([=, this] { up->onCommandAck(xfer::kMsgidXferOpen, reqSeq, xfer::kResAccepted); });
+    m_doneSent = false;
+    if (sendAccept)
+      reply([=, this] { up->onCommandAck(xfer::kMsgidXferOpen, reqSeq, xfer::kResAccepted); });
     if (sendInfo) {
       const quint16 c = chunk;
       reply([=, this] { up->onXferInfo(s, xfer::kResAccepted, c, 0xFFFFFFFFu); });
@@ -151,9 +155,13 @@ private:
     if (paused || !m_active || silent)
       return;
     if (m_eof) {
-      const quint8 res = doneResult;
-      const quint32 c = m_cursor;
-      up->onXferAck(session, xfer::kFlagDone, res, c);
+      // Like the firmware: the terminal DONE goes out once, then the slot
+      // lingers silently.
+      if (!m_doneSent) {
+        m_doneSent = true;
+        if (!loseDone)
+          up->onXferAck(session, xfer::kFlagDone, doneResult, m_cursor);
+      }
       return;
     }
     up->onXferAck(session, xfer::kFlagNone, xfer::kResAccepted, m_cursor);
@@ -162,6 +170,7 @@ private:
   QTimer m_ackTimer;
   bool m_active = false;
   bool m_eof = false;
+  bool m_doneSent = false;
   quint32 m_cursor = 0;
 };
 
@@ -247,7 +256,13 @@ private slots:
   void negotiatedChunkIsHonoured();
   void droppedChunkIsRetried();
   void droppedEofChunkIsRetried();
-  void lostInfoIsCoveredByAck();
+  void lostInfoFallsBackToDefaultChunk();
+  void acceptAndInfoLostTimesOut();
+  void staleAckWhileOpeningIsIgnored();
+  void staleDoneWhileOpeningDoesNotGiveOk();
+  void sessionSlotAlternates();
+  void lostDoneIsUnconfirmed();
+  void doneIsSentOnceAndStillOk();
   void refusalDenied();
   void refusalUnsupportedAndFailed();
   void busyPeerTimesOut();
@@ -266,6 +281,7 @@ private slots:
   void dialogGatedByAvailability();
   void dialogCancelsWhenLinkLost();
   void dialogShowsFailure();
+  void dialogShowsUnconfirmed();
 };
 
 void TstXferUploader::successSmallBlob() {
@@ -304,7 +320,7 @@ void TstXferUploader::blobLargerThanOneChunk() {
   QCOMPARE(o.r, XferUploader::Result::Ok);
   QCOMPARE(peer.file, b);
   QCOMPARE(peer.frames.size(), 5);
-  QVERIFY(peer.maxPayload <= xfer::kChunkMax);
+  QVERIFY(peer.maxPayload <= 237); // capped below the firmware's 247
   quint32 off = 0;
   for (int i = 0; i < peer.frames.size(); ++i) {
     QCOMPARE(peer.frames[i].offset, off);
@@ -313,6 +329,7 @@ void TstXferUploader::blobLargerThanOneChunk() {
     QCOMPARE((peer.frames[i].flags & xfer::kFlagEof) != 0, i == 4);
   }
   QCOMPARE(off, 1000u);
+  QCOMPARE(peer.frames[0].len, 237);
 }
 
 void TstXferUploader::windowLimitsFlight() {
@@ -373,9 +390,9 @@ void TstXferUploader::droppedEofChunkIsRetried() {
   QCOMPARE(peer.datas, 3);
 }
 
-void TstXferUploader::lostInfoIsCoveredByAck() {
+void TstXferUploader::lostInfoFallsBackToDefaultChunk() {
   FakePeer peer(this);
-  peer.sendInfo = false; // INFO never arrives; the periodic ack proves the open
+  peer.sendInfo = false; // INFO lost; the COMMAND_ACK ACCEPTED still opened it
   XferUploader up(&peer, fastCfg());
   peer.up = &up;
   QSignalSpy done(&up, &XferUploader::finished);
@@ -383,7 +400,119 @@ void TstXferUploader::lostInfoIsCoveredByAck() {
   QVERIFY(up.start("0:i.bin", b));
   QCOMPARE(waitDone(done).r, XferUploader::Result::Ok);
   QCOMPARE(peer.file, b);
-  QVERIFY(peer.maxPayload <= xfer::kChunkMax);
+  QVERIFY(peer.maxPayload <= 237);
+  QCOMPARE(peer.opens, 1); // never re-sent once accepted
+}
+
+void TstXferUploader::acceptAndInfoLostTimesOut() {
+  // Both open replies lost while the slot is live and acking: the re-sent open
+  // is answered TEMPORARILY_REJECTED, and the periodic acks must NOT be taken
+  // as the open. The upload ends as a timeout, with nothing written.
+  FakePeer peer(this);
+  peer.sendInfo = false;
+  peer.sendAccept = false;
+  XferUploader up(&peer, fastCfg());
+  peer.up = &up;
+  QSignalSpy done(&up, &XferUploader::finished);
+  QVERIFY(up.start("0:i.bin", blobOf(500)));
+  const Outcome o = waitDone(done);
+  QCOMPARE(o.r, XferUploader::Result::Timeout);
+  QVERIFY(peer.file.isEmpty());
+  QCOMPARE(peer.datas, 1); // only the abort marker on the way out
+  QCOMPARE(peer.aborts, 1);
+}
+
+void TstXferUploader::staleAckWhileOpeningIsIgnored() {
+  FakePeer peer(this);
+  peer.silent = true; // the open is never answered
+  XferUploader up(&peer, fastCfg());
+  peer.up = &up;
+  QSignalSpy done(&up, &XferUploader::finished);
+  QVERIFY(up.start("0:x.bin", blobOf(16)));
+  // A late plain ack of some earlier upload on this slot.
+  up.onXferAck(peer.session, xfer::kFlagNone, xfer::kResAccepted, 0);
+  up.onXferAck(peer.session, xfer::kFlagNone, xfer::kResAccepted, 16);
+  QTest::qWait(100);
+  QCOMPARE(done.count(), 0);
+  QCOMPARE(peer.datas, 0); // it did not skip the open and send chunks
+  QVERIFY(up.busy());
+  up.cancel();
+}
+
+void TstXferUploader::staleDoneWhileOpeningDoesNotGiveOk() {
+  // 1) peer never opens: a stale DONE/ACCEPTED must not finish the upload.
+  {
+    FakePeer peer(this);
+    peer.silent = true;
+    XferUploader up(&peer, fastCfg());
+    peer.up = &up;
+    QSignalSpy done(&up, &XferUploader::finished);
+    QVERIFY(up.start("0:batcal.bin", blobOf(16)));
+    up.onXferAck(peer.session, xfer::kFlagDone, xfer::kResAccepted, 16);
+    QCOMPARE(done.count(), 0);
+    QVERIFY(up.busy());
+    const Outcome o = waitDone(done); // ends as a timeout, never Ok
+    QCOMPARE(o.r, XferUploader::Result::Timeout);
+  }
+  // 2) peer opens normally: the result is Ok only because the bytes arrived.
+  {
+    FakePeer peer(this);
+    XferUploader up(&peer, fastCfg());
+    peer.up = &up;
+    QSignalSpy done(&up, &XferUploader::finished);
+    const QByteArray b = blobOf(16);
+    QVERIFY(up.start("0:batcal.bin", b));
+    up.onXferAck(0, xfer::kFlagDone, xfer::kResAccepted, 16); // stale, right away
+    QCOMPARE(done.count(), 0);
+    QCOMPARE(waitDone(done).r, XferUploader::Result::Ok);
+    QCOMPARE(peer.file, b);
+  }
+}
+
+void TstXferUploader::sessionSlotAlternates() {
+  FakePeer peer(this);
+  XferUploader up(&peer, fastCfg());
+  peer.up = &up;
+  QSignalSpy done(&up, &XferUploader::finished);
+  QVERIFY(up.start("0:a.bin", blobOf(8)));
+  const quint8 first = peer.session;
+  QCOMPARE(waitDone(done).r, XferUploader::Result::Ok);
+  done.clear();
+  peer.silent = true;
+  QVERIFY(up.start("0:b.bin", blobOf(8)));
+  QVERIFY(peer.session != first);
+  QVERIFY(peer.session < 2); // the firmware has two slots
+  // A late DONE from the first upload (its slot) is for another session.
+  up.onXferAck(first, xfer::kFlagDone, xfer::kResAccepted, 8);
+  QCOMPARE(done.count(), 0);
+  up.cancel();
+}
+
+void TstXferUploader::lostDoneIsUnconfirmed() {
+  FakePeer peer(this);
+  peer.loseDone = true; // the single terminal DONE is lost
+  XferUploader up(&peer, fastCfg());
+  peer.up = &up;
+  QSignalSpy done(&up, &XferUploader::finished);
+  const QByteArray b = blobOf(16);
+  QVERIFY(up.start("0:batcal.bin", b));
+  const Outcome o = waitDone(done);
+  QCOMPARE(o.r, XferUploader::Result::Unconfirmed);
+  QVERIFY2(o.msg.contains("did not confirm"), qPrintable(o.msg));
+  QCOMPARE(peer.file, b); // it did arrive
+  QCOMPARE(peer.closes, 1);
+  QCOMPARE(peer.aborts, 0); // not treated as a failed transfer
+  QVERIFY(!up.busy());
+}
+
+void TstXferUploader::doneIsSentOnceAndStillOk() {
+  FakePeer peer(this);
+  XferUploader up(&peer, fastCfg());
+  peer.up = &up;
+  QSignalSpy done(&up, &XferUploader::finished);
+  QVERIFY(up.start("0:batcal.bin", blobOf(16)));
+  QCOMPARE(waitDone(done).r, XferUploader::Result::Ok);
+  QCOMPARE(done.count(), 1);
 }
 
 void TstXferUploader::refusalDenied() {
@@ -729,6 +858,26 @@ void TstXferUploader::dialogCancelsWhenLinkLost() {
   QVERIFY(!d.uploading());
   QVERIFY(d.uploadStatus().contains("cancelled"));
   QVERIFY(!d.uploadEnabled());
+}
+
+void TstXferUploader::dialogShowsUnconfirmed() {
+  FakePeer peer(this);
+  peer.loseDone = true;
+  XferUploader up(&peer, fastCfg());
+  peer.up = &up;
+  BatteryCalibDialog d;
+  d.setUploader(&up);
+  d.setUploadAvailable(true);
+  fitBench(d);
+  QSignalSpy done(&up, &XferUploader::finished);
+  QVERIFY(d.startUpload());
+  QVERIFY(waitDone(done).got);
+  QTRY_VERIFY_WITH_TIMEOUT(!d.uploading(), kWaitMs);
+  const QString t = d.uploadStatus();
+  QVERIFY2(t.contains("did not confirm"), qPrintable(t));
+  QVERIFY(t.contains("Reboot"));
+  QVERIFY(!t.contains("failed"));
+  QCOMPARE(peer.file, d.blob());
 }
 
 void TstXferUploader::dialogShowsFailure() {

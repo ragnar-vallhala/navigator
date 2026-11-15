@@ -34,9 +34,11 @@ class QTimer;
 //    same req_seq every openRetryMs until the vehicle answers. The firmware
 //    answers with a COMMAND_ACK (a refusal: DENIED / UNSUPPORTED / FAILED, or
 //    TEMPORARILY_REJECTED when busy or when its clock is not yet synced) and,
-//    on success, XFER_INFO{chunk_size}. A periodic XFER_ACK from the vehicle
-//    also proves the session is open (INFO is only re-sent while nothing else
-//    has been heard), so it ends the open phase too.
+//    on success, XFER_INFO{chunk_size}. The open phase ends only on XFER_INFO
+//    or on a COMMAND_ACK ACCEPTED for the current req_seq. XFER_ACK carries no
+//    req_seq, so one that arrives while opening may be a late ack of an earlier
+//    upload and is ignored. To make that rarer, the session slot alternates
+//    (the firmware has XFER_MAX_SESSIONS = 2) on every start().
 //  * XFER_DATA chunks are offset-addressed and contiguous-only on the vehicle:
 //    a duplicate or a gap is dropped and the next XFER_ACK{next_offset} says
 //    where to resume. The last chunk carries EOF.
@@ -91,12 +93,14 @@ public:
     Refused,   // vehicle refused the open (denied / unsupported / failed)
     Failed,    // vehicle aborted, or reported a failed write, or link refused
     Timeout,   // nothing heard in time
-    Cancelled  // cancel() while running
+    Cancelled, // cancel() while running
+    Unconfirmed // every byte (EOF included) was sent but the vehicle's final
+                // DONE never came: the file may be on the card, unconfirmed
   };
   Q_ENUM(Result)
 
   struct Config {
-    quint8 session = 0;
+    quint8 session = 0; // first slot; start() alternates it with the next one
     int openRetryMs = 500;      // XFER_OPEN re-send period
     int openTimeoutMs = 8000;   // give up if never opened
     int stallMs = 400;          // no progress this long: rewind to the acked byte
@@ -104,7 +108,10 @@ public:
                                 // (the firmware reaps an idle session at 5 s)
     int windowBytes = 4096;     // max unacked bytes in flight
     int maxRateBps = 38000;     // byte-rate cap (460800-baud link); 0 = none
-    int maxChunk = xfer::kChunkMax;
+    // 237, not the firmware's 247: the stock ESP8266 bridge truncates inbound
+    // frames over 256 bytes and a full XFER_DATA frame is 19 + data bytes
+    // (vayu tools/telemetry/fs_xfer_udp_test.py). Raise it for a direct link.
+    int maxChunk = 237;
     int tickMs = 5;
   };
 
@@ -142,6 +149,7 @@ private:
 
   void tick();
   void pump();
+  void beginSending();
   enum class Tell { No, Close, Abort };
   void finish(Result r, const QString &msg, Tell tell);
   qint64 nowMs() const { return m_clock.elapsed(); }
@@ -167,7 +175,12 @@ private:
   qint64 m_lastOpenMs = 0;
   qint64 m_lastProgressMs = 0;
   qint64 m_lastRefillMs = 0;
+  qint64 m_lastHeardMs = 0;
+  qint64 m_acceptedMs = 0;
+  quint8 m_session = 0;
+  bool m_everStarted = false;
   qint64 m_lastStallMs = 0;
+  bool m_eofSentOnce = false; // the final chunk has gone out at least once
   bool m_eofSent = false; // empty blob: the lone zero-length EOF chunk
   double m_tokens = 0.0;
   QString m_lastError;

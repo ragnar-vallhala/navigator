@@ -295,6 +295,12 @@ void BatteryCalibDialog::onUploadFinished(XferUploader::Result r,
         tr("Uploaded %1 to the vehicle. Reboot the vehicle for the "
            "calibration to take effect.")
             .arg(QString::fromLatin1(batcal::kCardPath)));
+  } else if (r == XferUploader::Result::Unconfirmed) {
+    m_uploadLbl->setText(
+        tr("Sent, but the vehicle did not confirm it wrote %1 (%2). The file "
+           "may be on the card. Reboot the vehicle and check that the "
+           "calibration applied, or upload again.")
+            .arg(QString::fromLatin1(batcal::kCardPath), msg));
   } else if (r == XferUploader::Result::Cancelled) {
     m_uploadLbl->setText(
         tr("Upload cancelled. The vehicle's %1 may be missing or partial; "

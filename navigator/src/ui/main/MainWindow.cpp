@@ -1658,6 +1658,7 @@ void MainWindow::onUiTimer() {
     }
     if (s.armed != m_armed) {
       m_armed = s.armed;
+      refreshXferAvailability();
 #ifdef NAVIGATOR_HAS_SITL
       if (m_simulatorWidget)
         m_simulatorWidget->noteArmed(m_armed);
@@ -2102,7 +2103,11 @@ void MainWindow::openBatteryCalibration() {
 bool MainWindow::xferUploadAvailability(QString *why) const {
   QString w;
   bool ok = false;
-  if (!m_source.txAllowed()) {
+  if (m_armed && m_source.state() == SourceState::Fc) {
+    // The firmware does not refuse XFER when armed, but an SD write competes
+    // with logging on the filesystem owner: keep it to the ground.
+    w = tr("Disarm the vehicle before uploading.");
+  } else if (!m_source.txAllowed()) {
     w = m_source.isReplay() ? tr("Read-only while replaying a log.")
                             : tr("Connect to the vehicle first.");
   } else if (m_source.state() == SourceState::Sim) {

@@ -73,6 +73,9 @@ bool XferUploader::start(const QString &path, const QByteArray &blob) {
     return false;
   }
   m_lastError.clear();
+  m_session = static_cast<quint8>(
+      m_state == State::Idle && m_everStarted ? (m_session + 1) % 2 : m_cfg.session);
+  m_everStarted = true;
   m_path = p;
   m_blob = blob;
   m_reqSeq = static_cast<quint8>(m_reqSeq + 1);
@@ -80,6 +83,7 @@ bool XferUploader::start(const QString &path, const QByteArray &blob) {
   m_acked = 0;
   m_cursor = 0;
   m_openAccepted = false;
+  m_acceptedMs = 0;
   m_openSends = 0;
   m_haveOpenResult = false;
   m_lastOpenResult = xfer::kResAccepted;
@@ -88,10 +92,11 @@ bool XferUploader::start(const QString &path, const QByteArray &blob) {
   m_openStartMs = m_lastOpenMs = m_lastProgressMs = m_lastRefillMs = 0;
   m_lastStallMs = 0;
   m_eofSent = false;
+  m_eofSentOnce = false;
   m_state = State::Opening;
   m_timer->start();
   emit progress(0, quint32(m_blob.size()));
-  if (!m_link->sendOpen(m_reqSeq, m_cfg.session, m_path)) {
+  if (!m_link->sendOpen(m_reqSeq, m_session, m_path)) {
     finish(Result::Failed, tr("link not available"), Tell::No);
     return true; // started, and already finished
   }
@@ -103,10 +108,17 @@ void XferUploader::onCommandAck(quint32 command, quint8 reqSeq, quint8 result) {
   if (m_state != State::Opening || command != xfer::kMsgidXferOpen ||
       reqSeq != m_reqSeq)
     return;
-  if (result == xfer::kResAccepted || result == xfer::kResInProgress) {
-    m_openAccepted = true;
+  if (result == xfer::kResAccepted) {
+    // The vehicle ran the open. XFER_INFO (the chunk size) follows at once;
+    // tick() starts sending with the default chunk if it never comes.
+    if (!m_openAccepted) {
+      m_openAccepted = true;
+      m_acceptedMs = nowMs();
+    }
     return;
   }
+  if (result == xfer::kResInProgress)
+    return;
   m_haveOpenResult = true;
   m_lastOpenResult = result;
   if (m_openAccepted)
@@ -121,8 +133,15 @@ void XferUploader::onCommandAck(quint32 command, quint8 reqSeq, quint8 result) {
 void XferUploader::onXferInfo(quint8 session, quint8 result, quint16 chunkSize,
                               quint32 totalSize) {
   Q_UNUSED(totalSize);
-  if (session != m_cfg.session || m_state != State::Opening)
+  if (session != m_session || m_state == State::Idle)
     return;
+  if (m_state == State::Sending) {
+    // INFO after the COMMAND_ACK: only the chunk size is news, and only if
+    // nothing has been sent yet.
+    if (result == xfer::kResAccepted && chunkSize > 0 && m_cursor == 0)
+      m_chunk = std::min<int>(m_cfg.maxChunk, chunkSize);
+    return;
+  }
   if (result != xfer::kResAccepted) {
     finish(Result::Refused,
            tr("vehicle refused the upload (%1)").arg(resultName(result)),
@@ -132,23 +151,23 @@ void XferUploader::onXferInfo(quint8 session, quint8 result, quint16 chunkSize,
   if (chunkSize > 0)
     m_chunk = std::min<int>(m_cfg.maxChunk, chunkSize);
   m_openAccepted = true;
+  beginSending();
+}
+
+void XferUploader::beginSending() {
   m_state = State::Sending;
-  m_lastProgressMs = nowMs();
-  m_lastRefillMs = m_lastProgressMs;
+  m_lastProgressMs = m_lastHeardMs = m_lastRefillMs = nowMs();
   pump();
 }
 
 void XferUploader::onXferAck(quint8 session, quint8 flags, quint8 result,
                              quint32 nextOffset) {
-  if (session != m_cfg.session || m_state == State::Idle)
+  if (session != m_session || m_state == State::Idle)
     return;
-  if (m_state == State::Opening) {
-    // A periodic ack means the session is open and INFO went missing.
-    m_openAccepted = true;
-    m_state = State::Sending;
-    m_lastRefillMs = nowMs();
-    m_lastProgressMs = m_lastRefillMs;
-  }
+  // No req_seq on XFER_ACK: while opening it may belong to an earlier upload.
+  if (m_state == State::Opening)
+    return;
+  m_lastHeardMs = nowMs();
   const quint32 total = quint32(m_blob.size());
   if (flags & kFlagAbort) {
     finish(Result::Failed,
@@ -203,16 +222,38 @@ void XferUploader::tick() {
       finish(Result::Timeout, why, Tell::Abort);
       return;
     }
+    if (m_openAccepted) {
+      // Opened, INFO pending: do not re-send the open (a live slot would
+      // answer TEMPORARILY_REJECTED); start with the default chunk if INFO
+      // does not arrive soon.
+      if (t - m_acceptedMs >= m_cfg.openRetryMs)
+        beginSending();
+      return;
+    }
     if (t - m_lastOpenMs >= m_cfg.openRetryMs) {
       m_lastOpenMs = t;
       ++m_openSends;
-      if (!m_link->sendOpen(m_reqSeq, m_cfg.session, m_path))
+      if (!m_link->sendOpen(m_reqSeq, m_session, m_path))
         finish(Result::Failed, tr("link not available"), Tell::No);
     }
     return;
   }
   // Sending.
-  if (t - m_lastProgressMs >= m_cfg.idleTimeoutMs) {
+  const quint32 total = quint32(m_blob.size());
+  if (m_eofSentOnce) {
+    // Every byte, EOF included, has been sent; only the vehicle's verdict is
+    // missing. The firmware sends its terminal DONE once, so if that frame was
+    // lost nothing more will ever come: the file may well be on the card, but
+    // it is not confirmed (and not a mid-transfer failure).
+    if (t - m_lastHeardMs >= m_cfg.idleTimeoutMs) {
+      finish(Result::Unconfirmed,
+             tr("all %1 bytes were sent, but the vehicle did not confirm the "
+                "file was written")
+                 .arg(total),
+             Tell::Close);
+      return;
+    }
+  } else if (t - m_lastProgressMs >= m_cfg.idleTimeoutMs) {
     finish(Result::Timeout,
            tr("vehicle stopped answering at byte %1 of %2")
                .arg(m_acked)
@@ -228,7 +269,7 @@ void XferUploader::tick() {
     m_lastStallMs = t;
     if (m_acked >= quint32(m_blob.size())) {
       // Everything is acked but DONE never came: the EOF marker may be lost.
-      if (!m_link->sendData(m_cfg.session, kFlagEof, quint32(m_blob.size()),
+      if (!m_link->sendData(m_session, kFlagEof, quint32(m_blob.size()),
                             QByteArray())) {
         finish(Result::Failed, tr("link not available"), Tell::No);
         return;
@@ -266,7 +307,9 @@ void XferUploader::pump() {
     m_tokens -= double(len);
     if (total == 0)
       m_eofSent = true;
-    if (!m_link->sendData(m_cfg.session, flags, off, payload)) {
+    if (flags & kFlagEof)
+      m_eofSentOnce = true;
+    if (!m_link->sendData(m_session, flags, off, payload)) {
       m_pumping = false;
       finish(Result::Failed, tr("link not available"), Tell::No);
       return;
@@ -283,10 +326,10 @@ void XferUploader::finish(Result r, const QString &msg, Tell tell) {
   const quint32 total = quint32(m_blob.size());
   const quint32 acked = m_acked;
   if (tell == Tell::Abort)
-    m_link->sendData(m_cfg.session, kFlagAbort, acked, QByteArray());
+    m_link->sendData(m_session, kFlagAbort, acked, QByteArray());
   if (tell != Tell::No) {
     m_reqSeq = static_cast<quint8>(m_reqSeq + 1);
-    m_link->sendClose(m_reqSeq, m_cfg.session,
+    m_link->sendClose(m_reqSeq, m_session,
                       r == Result::Ok ? xfer::kResAccepted : xfer::kResFailed);
   }
   m_blob.clear();
