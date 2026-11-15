@@ -32,7 +32,7 @@
 // the Settings toggle still work.
 class ChimeAudio {
 public:
-  enum class Kind { Arm, Disarm, Failsafe };
+  enum class Kind { Arm, Disarm, Failsafe, BatteryWarn, BatteryCritical };
 
   ChimeAudio();
   ~ChimeAudio();

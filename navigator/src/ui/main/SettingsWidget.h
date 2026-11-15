@@ -42,6 +42,8 @@ signals:
   // Emitted when the user clicks Apply — MainWindow reads getSettings(),
   // applies everything, and persists. Edits before Apply are staged only.
   void applyRequested();
+  // Alerts & Audio > Battery calibration "Open..." clicked.
+  void batteryCalibrationRequested();
 
 private:
   void markDirty(QLabel *label);   // yellow the row + enable Apply
@@ -75,6 +77,8 @@ private:
   // Advanced.
   QSpinBox *m_packetBufferSpin = nullptr;
   QSpinBox *m_batteryCellsSpin = nullptr;
+  QDoubleSpinBox *m_batteryWarnSpin = nullptr;
+  QDoubleSpinBox *m_batteryCritSpin = nullptr;
   QCheckBox *m_crcCheckChk = nullptr;
   QSpinBox *m_recentViewsSpin = nullptr;
   QComboBox *m_themeCombo = nullptr;

@@ -37,7 +37,9 @@
 #include "SimSource.h"
 #include <functional>
 #include "ViewHistory.h"
+#include "core/BatteryAlert.h"
 #include "core/BatteryEstimator.h"
+#include <QPointer>
 #include "Drone3DWidget.h"   // Added
 #include "TelemetryEngine.h" // owns DroneProtocol + the VehicleState store
 #include "TimeSyncEstimator.h" // NTP clock-sync filter for the time-sync handshake
@@ -189,6 +191,10 @@ private:
   bool m_haveBaroRef = false;
   // BATTERY → gauge/field: pack-or-not, latched cell count, percent.
   battery::Estimator m_battery;
+  battery::AlertTracker m_batteryAlert;
+  QPointer<class BatteryCalibDialog> m_batteryCalibDialog;
+  void announceBattery(const battery::AlertTracker::Result &r);
+  void openBatteryCalibration();
   AttitudeSink *m_attitude = nullptr;
   LogPanel *m_logPanel = nullptr;
   FaultsPanel *m_faultsPanel = nullptr;
