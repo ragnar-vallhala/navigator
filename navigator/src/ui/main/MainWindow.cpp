@@ -1909,16 +1909,19 @@ void MainWindow::restoreUiState() {
       restoreState(s.value(kWinStateKey).toByteArray());
   }
 
-  // Never open larger than the screen. Qt refuses a saved geometry that does
+  // Never open larger than the screen, or partly off it. Qt refuses a saved geometry that does
   // not fit the current screen (a window saved on a bigger monitor), which
   // leaves the default size, and that default is itself wider than a 1280 px
   // screen. A maximized or full-screen window already fills it.
   if (!isMaximized() && !isFullScreen()) {
     if (const QScreen *scr = screen()) {
-      const QSize fit = windowfit::fitToScreen(
-          size(), scr->availableGeometry().size(), minimumSize());
-      if (fit != size())
-        resize(fit);
+      const QRect want(pos(), size());
+      const QRect fit = windowfit::fitRect(want, scr->availableGeometry(),
+                                           minimumSize());
+      if (fit != want) {
+        resize(fit.size());
+        move(fit.topLeft());
+      }
     }
   }
 

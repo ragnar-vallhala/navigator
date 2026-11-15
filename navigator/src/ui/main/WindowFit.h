@@ -17,6 +17,7 @@
 // Fit a main-window size to the screen it opens on.
 #pragma once
 
+#include <QRect>
 #include <QSize>
 
 namespace windowfit {
@@ -36,6 +37,23 @@ inline QSize fitToScreen(const QSize &wanted, const QSize &available,
   if (wanted.width() <= room.width() && wanted.height() <= room.height())
     return wanted;
   return wanted.boundedTo(room).expandedTo(minimum);
+}
+
+// Where to open: fitToScreen's size, with the frame's top-left corner moved
+// inside the available area. A resize keeps the top-left corner, so a window at
+// x=200 on a 1280 px screen would still be cut off on the right after being
+// narrowed to 1280, and one above a top panel would stay under it. \p wanted is
+// the frame's top-left corner and the client size. When the window (plus the
+// frame allowance) is bigger than the area, which only the minimum size can
+// cause, it is pinned to the area's top-left.
+inline QRect fitRect(const QRect &wanted, const QRect &available,
+                     const QSize &minimum) {
+  const QSize size = fitToScreen(wanted.size(), available.size(), minimum);
+  const int maxX = available.right() - size.width() + 1;
+  const int maxY = available.bottom() - size.height() - kFrameAllowance + 1;
+  const int x = qMax(available.left(), qMin(wanted.x(), maxX));
+  const int y = qMax(available.top(), qMin(wanted.y(), maxY));
+  return QRect(QPoint(x, y), size);
 }
 
 } // namespace windowfit

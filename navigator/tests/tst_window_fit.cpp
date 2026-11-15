@@ -21,6 +21,7 @@
 
 #include <QtTest>
 
+using windowfit::fitRect;
 using windowfit::fitToScreen;
 
 class TstWindowFit : public QObject {
@@ -58,6 +59,45 @@ private slots:
     // A window as tall as the screen has no room for its title bar.
     const QSize s = fitToScreen({1280, 720}, {1280, 720}, {1100, 600});
     QVERIFY(s.height() < 720);
+  }
+  // ---- fitRect: position as well as size --------------------------------
+  void rectThatFitsStaysWhereItIs() {
+    const QRect want(QPoint(100, 60), QSize(1300, 820));
+    QCOMPARE(fitRect(want, QRect(0, 0, 1920, 1080), {1100, 700}), want);
+  }
+  void rightEdgePulledInsideTheScreen() {
+    // Saved at x=200, 1300 wide: cut off on a 1280 screen once narrowed.
+    const QRect r =
+        fitRect(QRect(QPoint(200, 0), QSize(1300, 700)), QRect(0, 0, 1280, 720), {1100, 600});
+    QCOMPARE(r.width(), 1280);
+    QCOMPARE(r.x(), 0);
+    QVERIFY(r.right() <= 1279);
+  }
+  void narrowedWindowKeepsAsMuchOfItsPlaceAsFits() {
+    // 1000 wide at x=500 on a 1280 screen: only the overhang is pulled back.
+    const QRect r =
+        fitRect(QRect(QPoint(500, 20), QSize(1000, 600)), QRect(0, 0, 1280, 720), {800, 500});
+    QCOMPARE(r.size(), QSize(1000, 600));
+    QCOMPARE(r.x(), 280);
+    QCOMPARE(r.y(), 20);
+  }
+  void topPanelKeepsTheFrameBelowIt() {
+    // A 30 px top panel: available area starts at y=30; a window at y=0 would
+    // have its title bar under the panel.
+    const QRect r = fitRect(QRect(QPoint(0, 0), QSize(1100, 600)),
+                            QRect(0, 30, 1280, 690), {1100, 500});
+    QCOMPARE(r.y(), 30);
+  }
+  void bottomEdgePulledUp() {
+    const QRect avail(0, 0, 1280, 720);
+    const QRect r = fitRect(QRect(QPoint(0, 400), QSize(1100, 600)), avail, {1100, 500});
+    QVERIFY(r.y() + r.height() + windowfit::kFrameAllowance <= avail.bottom() + 1);
+  }
+  void minimumBiggerThanTheAreaPinsTopLeft() {
+    const QRect r = fitRect(QRect(QPoint(300, 200), QSize(1300, 820)),
+                            QRect(10, 20, 1024, 700), {1100, 700});
+    QCOMPARE(r.size(), QSize(1100, 700));
+    QCOMPARE(r.topLeft(), QPoint(10, 20));
   }
 };
 
