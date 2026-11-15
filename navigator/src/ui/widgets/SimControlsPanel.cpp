@@ -16,6 +16,7 @@
  */
 #include "SimControlsPanel.h"
 
+#include "FlowLayout.h"
 #include "SimPanelsCommon.h"
 
 #include <QApplication>
@@ -58,8 +59,9 @@ void SimulatorWidget::buildSimControls(QWidget *host) {
           [this] { setMode(2); });
   sv->addWidget(m_customWarnLabel);
 
-  auto *runRow = new QGridLayout();
-  runRow->setContentsMargins(0, 0, 0, 0);
+  // Wraps onto further lines when the panel is narrow, so this row does not
+  // set the panel's minimum width.
+  auto *runRow = new ui::FlowLayout();
   QList<QWidget *> runWidgets;
   m_simStartBtn = new ui::SuccessButton(tr("Start"), simBody);
   m_simStartBtn->setToolTip(tr("Boot firmware (first time) + start the sim"));
@@ -181,6 +183,8 @@ void SimulatorWidget::buildSimControls(QWidget *host) {
     m_propAudio.setEnabled(on);
   });
   runWidgets << m_propAudioChk;
+  for (QWidget *w : runWidgets)
+    runRow->addWidget(w);
   sv->addLayout(runRow);
 
   // -- Noise seed: Start / Reset send it with the reset so the sensor-noise
@@ -269,8 +273,7 @@ void SimulatorWidget::buildSimControls(QWidget *host) {
   // first Start (firmware reads the RC path once at boot).
   {
     QSettings st;
-    auto *rcRow = new QGridLayout();
-    rcRow->setContentsMargins(0, 0, 0, 0);
+    auto *rcRow = new ui::FlowLayout();
     m_rcEnable = new QCheckBox(tr("RC transmitter"), simBody);
     m_rcEnable->setChecked(st.value(kRcEnableKey, true).toBool());
     m_rcEnable->setToolTip(tr("Feed a USB RC transmitter (joystick) into "
@@ -303,6 +306,7 @@ void SimulatorWidget::buildSimControls(QWidget *host) {
     m_rcPath->setInsertPolicy(QComboBox::NoInsert);
     m_rcPath->setSizeAdjustPolicy(
         QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_rcPath->setMinimumContentsLength(14);
     // Each enumerated item shows the friendly description ("ttyUSB0 — FT232
     // USB UART") but carries the bare /dev path in itemData. Picking one
     // writes that path into the editable field — what the bridge opens.
@@ -367,31 +371,11 @@ void SimulatorWidget::buildSimControls(QWidget *host) {
       if (m_rc)
         m_rc->setAcro(on); // toggles ch6 -> firmware switches mode
     });
-    // Optional wrapped layout so the panel can be narrower; layout only.
-    auto *compactChk = new QCheckBox(tr("Compact controls"), simBody);
-    compactChk->setToolTip(tr("Wrap the run and RC control rows over several "
-                              "lines so the side panel can be narrower."));
-    sv->addWidget(compactChk);
     sv->addLayout(rcRow);
-    const QList<QWidget *> rcWidgets{m_rcEnable, m_rcSource, m_rcPath,
-                                     m_rcBaud,   m_rcConnect, m_acroChk};
-    connect(compactChk, &QCheckBox::toggled, this,
-            [this, compactChk, rcRow, rcWidgets, runRow, runWidgets](bool on) {
-              QSettings().setValue(kRcCompactKey, on);
-              ui::layoutWrappedRow(rcRow, rcWidgets, on, m_rcPath);
-              ui::layoutWrappedRow(runRow, runWidgets, on, nullptr, 3, 3);
-              // Invalidate every enclosing layout so the panel minimum
-              // (MinWidthScrollArea) follows live.
-              for (QWidget *w = compactChk; w; w = w->parentWidget()) {
-                if (w->layout())
-                  w->layout()->invalidate();
-                w->updateGeometry();
-              }
-            });
-    const bool compactOn = st.value(kRcCompactKey, false).toBool();
-    ui::layoutWrappedRow(rcRow, rcWidgets, compactOn, m_rcPath);
-    ui::layoutWrappedRow(runRow, runWidgets, compactOn, nullptr, 3, 3);
-    compactChk->setChecked(compactOn);
+    const QList<QWidget *> rcWidgets{m_rcEnable,  m_rcSource,  m_rcPath,
+                                     m_rcBaud,    m_rcConnect, m_acroChk};
+    for (QWidget *w : rcWidgets)
+      rcRow->addWidget(w);
 
     m_flightModeLabel = new QLabel(tr("mode: —"), simBody);
     m_flightModeLabel->setStyleSheet(
