@@ -58,7 +58,10 @@ QWidget *field(const QString &k, const QString &v, const QString &color = {}) {
 
 RcChannelsWidget::RcChannelsWidget(QWidget *parent) : QWidget(parent) {
   setWindowTitle("RC Channels Monitor");
-  setMinimumSize(400, 600);
+  // No setMinimumSize: a fixed 400x600 hid what the layout really needs (the
+  // sticks / link / switches row alone is wider), so a docked or floated panel
+  // was squeezed to 400 px and its labels overlapped. The layout's own minimum
+  // is the panel's minimum (PanelFrame reports it to the dock).
 
   auto *mainLayout = new QVBoxLayout(this);
   mainLayout->setContentsMargins(16, 12, 16, 12);
