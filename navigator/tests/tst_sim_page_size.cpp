@@ -32,6 +32,7 @@
 #include "SimulatorWidget.h"
 
 #include <QCheckBox>
+#include <QComboBox>
 #include <QGroupBox>
 #include <QLayout>
 #include <QPushButton>
@@ -163,6 +164,22 @@ private slots:
     QVERIFY2(a_->imuDropout(), "toggle did not set the dropout flag");
     box->setChecked(false);
     QVERIFY(!a_->imuDropout());
+  }
+
+  // The IMU/Physics/Render rate combos have no effect on the engine, so they
+  // are hidden. Offscreen: no combo listing "NNN Hz" may be visible on the page.
+  void nonFunctionalRateCombosAreHidden() {
+    int hz = 0;
+    // Judge visibility relative to the World page: the stack hides the pages
+    // that are not current, which would make this pass vacuously.
+    QWidget *world = a_->stack()->widget(1);
+    for (auto *c : world->findChildren<QComboBox *>()) {
+      if (c->count() == 0 || !c->itemText(0).endsWith(QStringLiteral(" Hz")))
+        continue;
+      ++hz;
+      QVERIFY2(!c->isVisibleTo(world), "a rate combo is still shown");
+    }
+    QCOMPARE(hz, 3); // they still exist (settings stay), just hidden
   }
 
   void sectionTitlesAreClean() {
