@@ -35,11 +35,13 @@ QString worldTmpDir();
 // isolated (matches SimWorker's fifoSuffixed()).
 QString worldBlobPath(const QString &suffix);
 
-// Removes leftover world-export temp files in `dir`: only regular files named
-// exactly vsim_world<suffix>.bin.<N>.tmp (N = export generation, digits only)
-// whose last modification is at least `minAgeSecs` old. The number is a
-// generation counter, not a pid, so age is the only liveness signal. Returns
-// how many files were removed. Anything else in `dir` is left alone.
+// Removes leftover world files in `dir`: only regular files named exactly
+// vsim_world<suffix>.bin (the published blob) or
+// vsim_world<suffix>.bin.<N>.tmp (N = export generation, digits only) whose
+// last modification is at least `minAgeSecs` old. The number is a generation
+// counter, not a pid, so age is the only liveness signal for the tmp files; on
+// Linux a file that some process still has mapped (a live engine) is kept even
+// if old. Returns how many files were removed. Anything else is left alone.
 int sweepStaleWorldTmp(const QString &dir, qint64 minAgeSecs);
 
 } // namespace vsim
