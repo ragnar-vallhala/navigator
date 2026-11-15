@@ -63,9 +63,10 @@ int main(int argc, char *argv[]) {
   Logger::init();
 
 #ifdef NAVIGATOR_HAS_SITL
-  // World-export temp files (vsim_world*.bin.N.tmp) a crashed run left behind.
-  // Only files that old are touched: a running Navigator's export is seconds old.
-  vsim::sweepStaleWorldTmp(vsim::worldTmpDir(), 3600);
+  // World blobs and export temp files (vsim_world*.bin, vsim_world*.bin.N.tmp)
+  // a crashed or killed run left behind. Only files untouched for 10 minutes
+  // (an export is seconds old) and not mapped by a live engine are removed.
+  vsim::sweepStaleWorldTmp(vsim::worldTmpDir(), 600);
 #endif
 
   MainWindow w;

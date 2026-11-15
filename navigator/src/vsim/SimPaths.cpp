@@ -23,6 +23,9 @@
 #include <QRegularExpression>
 #include <QStandardPaths>
 
+#ifdef __linux__
+#endif
+
 namespace vsim {
 
 QString defaultLogDir() {
@@ -49,20 +52,56 @@ QString worldBlobPath(const QString &suffix) {
          QStringLiteral(".bin");
 }
 
+#ifdef __linux__
+namespace {
+// True if any process we can inspect has `path` mapped (the engine mmaps the
+// world blob for as long as it runs). /proc/<pid>/maps of other users is not
+// readable; those processes cannot be inspected and are treated as not mapping.
+bool mappedByAnyProcess(const QString &path) {
+  const QByteArray want = QFile::encodeName(QFileInfo(path).canonicalFilePath());
+  if (want.isEmpty())
+    return false;
+  const QFileInfoList procs = QDir(QStringLiteral("/proc"))
+                                  .entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
+  for (const QFileInfo &p : procs) {
+    bool isPid = false;
+    p.fileName().toInt(&isPid);
+    if (!isPid)
+      continue;
+    QFile maps(p.absoluteFilePath() + QStringLiteral("/maps"));
+    if (!maps.open(QIODevice::ReadOnly))
+      continue;
+    // readAll, not atEnd/readLine: /proc files report size 0.
+    if (maps.readAll().contains(want))
+      return true;
+  }
+  return false;
+}
+} // namespace
+#endif
+
 int sweepStaleWorldTmp(const QString &dir, qint64 minAgeSecs) {
   // The suffix is user-controlled text (VSIM_FIFO_SUFFIX), so match on the
-  // fixed prefix and the fixed tail only, and require digits for N.
+  // fixed prefix and the fixed tail only. Two shapes, nothing broader:
+  //   vsim_world<suffix>.bin            the published blob
+  //   vsim_world<suffix>.bin.<N>.tmp    an export temp file (N digits)
   static const QRegularExpression re(
-      QStringLiteral("^vsim_world.*\\.bin\\.[0-9]+\\.tmp$"));
+      QStringLiteral("^vsim_world.*\\.bin(\\.[0-9]+\\.tmp)?$"));
   int removed = 0;
   const QDateTime now = QDateTime::currentDateTime();
   const QFileInfoList list = QDir(dir).entryInfoList(
-      {QStringLiteral("vsim_world*.tmp")}, QDir::Files | QDir::NoSymLinks);
+      {QStringLiteral("vsim_world*.bin"), QStringLiteral("vsim_world*.tmp")},
+      QDir::Files | QDir::NoSymLinks);
   for (const QFileInfo &fi : list) {
     if (!re.match(fi.fileName()).hasMatch())
       continue;
     if (fi.lastModified().secsTo(now) < minAgeSecs)
       continue;
+#ifdef __linux__
+    // Old but still mapped by a running engine (another Navigator): keep.
+    if (mappedByAnyProcess(fi.absoluteFilePath()))
+      continue;
+#endif
     if (QFile::remove(fi.absoluteFilePath()))
       ++removed;
   }
