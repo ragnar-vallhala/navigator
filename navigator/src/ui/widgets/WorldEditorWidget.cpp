@@ -32,11 +32,15 @@
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QInputDialog>
+#include <QLineEdit>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
 #include <QListWidget>
+#include <QMessageBox>
+#include <QPushButton>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QVBoxLayout>
@@ -53,6 +57,17 @@ QDoubleSpinBox *spin(double lo, double hi, int decimals, double step,
     s->setSuffix(suffix);
   s->setButtonSymbols(QAbstractSpinBox::UpDownArrows);
   return s;
+}
+
+const QString kUserPrefix = QStringLiteral("user:");
+
+vsim::UserPresetStore userPresetStore() {
+  vsim::UserPresetStore st;
+  QStringList reserved;
+  for (const auto &p : vsim::worldPresetList())
+    reserved << p.first << p.second;
+  st.setReserved(vsim::UserPresetStore::Kind::World, reserved);
+  return st;
 }
 
 QJsonObject vec3ToJson(const QVector3D &v) {
@@ -346,6 +361,7 @@ void WorldEditorWidget::buildProceduralSection(QVBoxLayout *root) {
   procPreset_->addItem(tr("Custom"), QString());
   for (const auto &p : vsim::worldPresetList())
     procPreset_->addItem(p.second, p.first);
+  builtinPresetCount_ = procPreset_->count();
   procPreset_->setToolTip(
       tr("One-click procedural worlds, all generated from the Seed below "
          "(same seed -> same world). Replaces the terrain settings and the "
@@ -358,6 +374,29 @@ void WorldEditorWidget::buildProceduralSection(QVBoxLayout *root) {
   procSeed_->setToolTip(tr("Random seed — change it for a different world."));
 
   form->addRow(tr("World preset:"), procPreset_);
+  {
+    // Under the combo, in a wrapping-free row of two short buttons.
+    auto *prow = new QHBoxLayout();
+    savePresetBtn_ = new ui::GhostButton(tr("Save as preset…"), body);
+    savePresetBtn_->setToolTip(
+        tr("Save the current world under a name; it is then listed in the "
+           "World preset combo after the built-ins."));
+    delPresetBtn_ = new ui::GhostButton(tr("Delete preset"), body);
+    delPresetBtn_->setToolTip(
+        tr("Delete the selected user preset (built-in presets cannot be "
+           "deleted)."));
+    prow->addWidget(savePresetBtn_);
+    prow->addWidget(delPresetBtn_);
+    prow->addStretch();
+    form->addRow(QString(), prow);
+    connect(savePresetBtn_, &QPushButton::clicked, this,
+            &WorldEditorWidget::onSavePreset);
+    connect(delPresetBtn_, &QPushButton::clicked, this,
+            &WorldEditorWidget::onDeletePreset);
+    connect(procPreset_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this] { updatePresetButtons(); });
+    refreshUserPresets(QString());
+  }
   form->addRow(tr("Biome:"), procBiome_);
   form->addRow(tr("Seed:"), procSeed_);
   col->addLayout(form);
@@ -391,6 +430,29 @@ void WorldEditorWidget::buildProceduralSection(QVBoxLayout *root) {
             if (procSyncing_)
               return;
             const QString id = procPreset_->currentData().toString();
+            if (id.startsWith(kUserPrefix)) {
+              const QString name = id.mid(kUserPrefix.size());
+              QJsonObject obj;
+              if (!userPresetStore().load(vsim::UserPresetStore::Kind::World,
+                                          name, &obj)) {
+                if (fileStatus_)
+                  fileStatus_->setText(
+                      tr("Could not load preset \"%1\".").arg(name));
+                refreshUserPresets(QString()); // vanished or corrupt
+                return;
+              }
+              loadWorldObject(obj); // same path as Load...
+              procSyncing_ = true;  // setConfig showed Custom; show the preset
+              const int i = procPreset_->findData(id);
+              procPreset_->setCurrentIndex(i < 0 ? 0 : i);
+              procSyncing_ = false;
+              updatePresetButtons();
+              if (fileStatus_)
+                fileStatus_->setText(tr("Loaded preset \"%1\" (%2 obstacles)")
+                                         .arg(name)
+                                         .arg(cfg_.obstacles.size()));
+              return;
+            }
             if (id.isEmpty()) {
               cfg_.worldPreset.clear();
               return;
@@ -846,17 +908,107 @@ void WorldEditorWidget::onLoadWorld() {
       fileStatus_->setText(tr("Load failed: invalid world JSON"));
     return;
   }
-  setConfig(worldFromJson(doc.object()));
+  loadWorldObject(doc.object());
   if (fileStatus_)
     fileStatus_->setText(tr("Loaded %1 (%2 obstacles)")
                              .arg(QFileInfo(path).fileName())
                              .arg(cfg_.obstacles.size()));
+}
+
+void WorldEditorWidget::loadWorldObject(const QJsonObject &o) {
+  setConfig(worldFromJson(o));
   // Push to the daemon (env) + renderer/persistence (obstacles) + reload the
   // imported world mesh (a .vworld can carry world_mesh_path/scale/up-axis, so
   // without this the mesh fields update but the geometry never (re)loads).
   emit worldApplied();
   emit obstaclesChanged();
   emit worldMeshChanged();
+}
+
+QString WorldEditorWidget::userPresetName() const {
+  const QString d = procPreset_ ? procPreset_->currentData().toString() : QString();
+  return d.startsWith(kUserPrefix) ? d.mid(kUserPrefix.size()) : QString();
+}
+
+void WorldEditorWidget::updatePresetButtons() {
+  if (delPresetBtn_)
+    delPresetBtn_->setEnabled(!userPresetName().isEmpty());
+}
+
+void WorldEditorWidget::refreshUserPresets(const QString &select) {
+  QSignalBlocker b(procPreset_);
+  while (procPreset_->count() > builtinPresetCount_)
+    procPreset_->removeItem(procPreset_->count() - 1);
+  const QStringList names =
+      userPresetStore().list(vsim::UserPresetStore::Kind::World);
+  if (!names.isEmpty())
+    procPreset_->insertSeparator(procPreset_->count());
+  for (const QString &n : names)
+    procPreset_->addItem(n, kUserPrefix + n);
+  const int i =
+      select.isEmpty() ? -1 : procPreset_->findData(kUserPrefix + select);
+  procPreset_->setCurrentIndex(i < 0 ? 0 : i);
+  updatePresetButtons();
+}
+
+vsim::UserPresetStore::SaveResult
+WorldEditorWidget::saveUserPreset(const QString &name, bool overwrite) {
+  syncUiToConfig();
+  vsim::UserPresetStore st = userPresetStore();
+  QString saved;
+  const auto r = st.save(vsim::UserPresetStore::Kind::World, name,
+                         worldToJson(cfg_), overwrite, &saved);
+  if (r != vsim::UserPresetStore::SaveResult::Ok)
+    return r;
+  refreshUserPresets(saved);
+  if (fileStatus_)
+    fileStatus_->setText(tr("Saved preset \"%1\" (%2 obstacles)")
+                             .arg(saved)
+                             .arg(cfg_.obstacles.size()));
+  return r;
+}
+
+bool WorldEditorWidget::deleteUserPreset(const QString &name) {
+  vsim::UserPresetStore st = userPresetStore();
+  if (!st.remove(vsim::UserPresetStore::Kind::World, name))
+    return false;
+  const bool wasShown = userPresetName().compare(name, Qt::CaseInsensitive) == 0;
+  refreshUserPresets(wasShown ? QString() : userPresetName());
+  if (fileStatus_)
+    fileStatus_->setText(tr("Deleted preset \"%1\".").arg(name));
+  return true;
+}
+
+void WorldEditorWidget::onSavePreset() {
+  bool ok = false;
+  const QString name = QInputDialog::getText(
+      this, tr("Save as preset"),
+      tr("Preset name (max %1 characters):")
+          .arg(vsim::UserPresetStore::kMaxNameLength),
+      QLineEdit::Normal, userPresetName(), &ok);
+  if (!ok)
+    return;
+  auto r = saveUserPreset(name, false);
+  if (r == vsim::UserPresetStore::SaveResult::Exists &&
+      QMessageBox::question(this, tr("Replace preset"),
+                            tr("A preset named \"%1\" exists. Replace it?")
+                                .arg(name.trimmed())) == QMessageBox::Yes)
+    r = saveUserPreset(name, true);
+  if (r != vsim::UserPresetStore::SaveResult::Ok && fileStatus_)
+    fileStatus_->setText(tr("Preset not saved: %1")
+                             .arg(vsim::UserPresetStore::saveResultText(r)));
+}
+
+void WorldEditorWidget::onDeletePreset() {
+  const QString name = userPresetName();
+  if (name.isEmpty())
+    return;
+  if (QMessageBox::question(this, tr("Delete preset"),
+                            tr("Delete the preset \"%1\"?").arg(name)) !=
+      QMessageBox::Yes)
+    return;
+  if (!deleteUserPreset(name) && fileStatus_)
+    fileStatus_->setText(tr("Could not delete preset \"%1\".").arg(name));
 }
 
 void WorldEditorWidget::buildObstacleSection(QVBoxLayout *root) {

@@ -112,6 +112,10 @@ target_include_directories(tst_vfs_dir PRIVATE ${SRC}/vsim ${CMAKE_CURRENT_SOURC
 
 # ---- Simulator default paths (log dir, stale world tmp sweep) --------------
 navigator_test(tst_sim_paths tst_sim_paths.cpp ${SRC}/vsim/SimPaths.cpp)
+
+# ---- User presets store (pure core, also in the GCS-only build) ------------
+navigator_test(tst_user_presets tst_user_presets.cpp ${SRC}/vsim/UserPresets.cpp)
+target_include_directories(tst_user_presets PRIVATE ${SRC}/vsim)
 target_include_directories(tst_sim_paths PRIVATE ${SRC}/vsim)
 
 # ---- Per-run flight event log (ev-*.jsonl) + run retention ----------------
@@ -298,6 +302,7 @@ if(NAVIGATOR_SITL)
       ${SRC}/vsim/procgen/TerrainGen.cpp
       ${SRC}/vsim/procgen/TerrainField.cpp
       ${SRC}/vsim/procgen/GroundCover.cpp
+      ${SRC}/vsim/UserPresets.cpp
       ${SRC}/vsim/procgen/WorldPresets.cpp)
   target_include_directories(tst_worldeditor PRIVATE ${SRC}/vsim ${SRC}/ui/widgets)
 endif()
@@ -386,7 +391,8 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
       ${SRC}/ui/widgets/CollapsibleSection.cpp ${SRC}/ui/widgets/CollapsibleSection.h
       ${SRC}/core/Theme.cpp ${SRC}/core/ui/Buttons.h
       ${SRC}/vsim/MeshLoader.cpp ${SRC}/vsim/MassProperties.cpp
-      ${SRC}/vsim/AirframePresets.cpp ${SRC}/vsim/VehicleJson.cpp)
+      ${SRC}/vsim/AirframePresets.cpp ${SRC}/vsim/VehicleJson.cpp
+      ${SRC}/vsim/UserPresets.cpp)
   target_include_directories(tst_geometry_editor_preset PRIVATE
       ${SRC}/vsim ${SRC}/ui/widgets)
   target_link_libraries(tst_geometry_editor_preset PRIVATE assimp::assimp)
