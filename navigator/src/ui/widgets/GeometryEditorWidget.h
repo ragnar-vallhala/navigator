@@ -115,6 +115,7 @@ private slots:
   void onLoadFile(); // import a vehicle .json
   void onPresetActivated(int index);
   void onFormEdited(); // a manual edit: the vehicle is now custom
+  void onBoxEdited();  // mass / motor layout edited: refresh the box inertia
 
 private:
   void buildUi();
@@ -122,6 +123,10 @@ private:
   void syncUiToConfig();             // widgets → cfg_ (mass, scale, motors)
   void showMassProps();              // refresh inertia / CoM labels from cfg_
   bool loadAndCompute(QString *err); // load mesh + recompute inertia into cfg_
+  // Box/arms model (no mesh): the inertia follows mass + motor layout
+  // (vsim::boxInertia). With a mesh it comes from Load & Compute instead.
+  bool boxModel() const;
+  bool boxInertiaMatches() const; // cfg_.inertia equals the box formula
 
   vsim::GeometryConfig cfg_;
   QString loadedName_; // last loaded/saved .vveh file name (for display)
