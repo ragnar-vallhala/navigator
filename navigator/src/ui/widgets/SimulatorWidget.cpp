@@ -216,6 +216,14 @@ SimulatorWidget::SimulatorWidget(QWidget *parent) : QWidget(parent) {
           });
 }
 
+namespace {
+// Where the engine mmaps the collision blob (see vsim::worldBlobPath).
+QString worldBlobPath() {
+  return vsim::worldBlobPath(
+      QString::fromLocal8Bit(qgetenv("VSIM_FIFO_SUFFIX")));
+}
+} // namespace
+
 SimulatorWidget::~SimulatorWidget() {
   // Detach the UART2 callback FIRST. The firmware threads outlive this
   // widget (vayu_sitl is one-shot — they run until the process exits), and
@@ -234,6 +242,7 @@ SimulatorWidget::~SimulatorWidget() {
     QFile::remove(m_shipRunningTmp);
     m_shipWatcher = nullptr;
   }
+  QFile::remove(worldBlobPath()); // also when no sim was running (stop is a no-op)
 
   // Tear down the autotune machinery synchronously. Normally a tune is stopped
   // via stopAutotune() -> cancel() -> queued done -> onTuneDone(), but at app
@@ -1585,14 +1594,6 @@ void SimulatorWidget::liftDroneToSurface() {
                 .arg(h, 0, 'f', 1));
 }
 
-namespace {
-// Where the engine mmaps the collision blob (see vsim::worldBlobPath).
-QString worldBlobPath() {
-  return vsim::worldBlobPath(
-      QString::fromLocal8Bit(qgetenv("VSIM_FIFO_SUFFIX")));
-}
-} // namespace
-
 void SimulatorWidget::cancelWorldShip() {
   // Any build in flight is now stale: its result is dropped (and its temp file
   // removed) when it lands, and nothing queued behind it is started.
@@ -2315,6 +2316,9 @@ void SimulatorWidget::stopInAppSim() {
   }
   m_sim->deleteLater();
   m_sim = nullptr;
+  // The worker (engine host) is down: the published world blob is dead weight.
+  // Start re-ships it. Not removed at ship end: the engine reads it after that.
+  QFile::remove(worldBlobPath());
   m_retrier.cancelAll(); // nothing left to ACK
   if (m_retryTimer)
     m_retryTimer->stop();
