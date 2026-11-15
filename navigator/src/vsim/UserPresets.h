@@ -57,7 +57,8 @@ public:
   static QString sanitize(const QString &name, QString *err = nullptr);
 
   // Saves (or, with overwrite, replaces the same-named preset in any case).
-  // *savedName gets the name as stored.
+  // *savedName gets the name as stored (when replacing a preset whose name
+  // differs only in case and the case-only rename fails, the old spelling).
   SaveResult save(Kind kind, const QString &name, const QJsonObject &data,
                   bool overwrite = false, QString *savedName = nullptr);
   // Names, sorted case-insensitively. Unreadable / corrupt / badly named files

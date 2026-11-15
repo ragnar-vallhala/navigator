@@ -39,7 +39,8 @@ bool isWindowsDeviceName(const QString &n) {
                                   "com8", "com9", "lpt1", "lpt2", "lpt3",
                                   "lpt4", "lpt5", "lpt6", "lpt7", "lpt8",
                                   "lpt9"};
-  return dev.contains(n.toLower());
+  // Windows reserves the device name with any extension too ("con.x" is CON).
+  return dev.contains(n.section(QLatin1Char('.'), 0, 0).toLower());
 }
 } // namespace
 
@@ -189,17 +190,27 @@ UserPresetStore::SaveResult UserPresetStore::save(Kind kind, const QString &name
     return SaveResult::WriteFailed;
   const QString path =
       QDir(dirFor(kind)).filePath(n + QLatin1Char('.') + QLatin1String(extFor(kind)));
-  QSaveFile f(path);
+  // Replacing a preset: write to the file that is already there. On a
+  // case-insensitive filesystem (Windows, macOS) "foo.vveh" and "Foo.vveh" are
+  // the same file, so writing to the new spelling and then removing the old one
+  // would delete what was just written. Never remove a path that may have just
+  // been written.
+  const QString target = old.isEmpty() ? path : old;
+  QSaveFile f(target);
   if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
     return SaveResult::WriteFailed;
   f.write(QJsonDocument(data).toJson(QJsonDocument::Indented));
   if (!f.commit())
     return SaveResult::WriteFailed;
-  // A same-name file in another case is replaced, not left beside the new one.
-  if (!old.isEmpty() && QFileInfo(old).fileName() != QFileInfo(path).fileName())
-    QFile::remove(old);
+  QString stored = target;
+  // Only the casing differs: rename to the new spelling. QFile::rename does a
+  // case-only rename on a case-insensitive filesystem. If it fails the data is
+  // already saved under the old spelling, which is then the stored name.
+  if (!old.isEmpty() && QFileInfo(old).fileName() != QFileInfo(path).fileName() &&
+      QFile::rename(old, path))
+    stored = path;
   if (savedName)
-    *savedName = n;
+    *savedName = QFileInfo(stored).completeBaseName();
   return SaveResult::Ok;
 }
 

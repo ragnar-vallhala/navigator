@@ -95,7 +95,8 @@ private slots:
     for (const QString &bad :
          {QString("../x"), QString(".."), QString("a/b"), QString("a\\b"),
           QString(""), QString("   "), tooLong, QString("a..b"), QString(".hid"),
-          QString("end."), QString("a:b"), QString("q?"), QString("NUL"),
+          QString("end."), QString("a:b"), QString("q?"), QString("NUL"), QString("con.x"),
+          QString("COM1.txt"),
           QString("tab\there")}) {
       QString why;
       QVERIFY2(UserPresetStore::sanitize(bad, &why).isEmpty(), qPrintable(bad));
@@ -106,6 +107,9 @@ private slots:
     QVERIFY(!QFile::exists(tmp.filePath("x.vveh")));
     QVERIFY(!QFile::exists(tmp.filePath("../x.vveh")));
     QVERIFY(st.list(Kind::Vehicle).isEmpty());
+    // Only the part before the first dot is the device name.
+    QVERIFY(!UserPresetStore::sanitize("console").isEmpty());
+    QVERIFY(!UserPresetStore::sanitize("a.con").isEmpty());
     // The cap itself is allowed; unicode is fine.
     QCOMPARE(UserPresetStore::sanitize(QString(UserPresetStore::kMaxNameLength, 'x')).size(),
              UserPresetStore::kMaxNameLength);
@@ -129,6 +133,21 @@ private slots:
     QCOMPARE(st.list(Kind::Vehicle), QStringList({"racer"}));
     QVERIFY(st.load(Kind::Vehicle, "RACER", &o));
     QCOMPARE(o, payload(3));
+    // Exactly one file is left, holding the new data (the replace must never
+    // remove a path it may just have written: on a case-insensitive filesystem
+    // "Racer.vveh" and "racer.vveh" are the same file).
+    const QStringList files =
+        QDir(tmp.filePath("vehicles")).entryList({"*"}, QDir::Files);
+    QCOMPARE(files.size(), 1);
+    QCOMPARE(files.first(), QString("racer.vveh"));
+    // Replacing with the same spelling and then another casing keeps one file.
+    QCOMPARE(st.save(Kind::Vehicle, "racer", payload(4), true), Res::Ok);
+    QCOMPARE(st.save(Kind::Vehicle, "Racer", payload(5), true, &saved), Res::Ok);
+    QCOMPARE(saved, QString("Racer"));
+    QCOMPARE(QDir(tmp.filePath("vehicles")).entryList({"*"}, QDir::Files),
+             QStringList({"Racer.vveh"}));
+    QVERIFY(st.load(Kind::Vehicle, "racer", &o));
+    QCOMPARE(o, payload(5));
   }
 
   void builtInIdsAndNamesAreNeverShadowed() {
