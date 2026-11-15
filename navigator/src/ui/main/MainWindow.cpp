@@ -130,6 +130,11 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   buildSourceHooks();
   connect(&m_source, &SourceController::stateChanged, this,
           [this](SourceState now, SourceState was) {
+            // A level reached under one source says nothing about the next:
+            // without this, a level from a replayed log would carry into a live
+            // link and hide the alert for a pack that is already low.
+            if ((now == SourceState::Replay) != (was == SourceState::Replay))
+              m_batteryAlert.reset();
             // The in-app sim's firmware rejects every command until its clock
             // is disciplined, and nothing else starts the handshake for it.
             if (now == SourceState::Sim) {
