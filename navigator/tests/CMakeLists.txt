@@ -341,6 +341,10 @@ target_include_directories(tst_box_inertia PRIVATE ${SRC}/vsim)
 navigator_test(tst_thread_retire tst_thread_retire.cpp)
 target_include_directories(tst_thread_retire PRIVATE ${SRC}/vsim)
 
+# ---- Main-window size fitted to the screen (pure, no widget) ---------------
+navigator_test(tst_window_fit tst_window_fit.cpp)
+target_include_directories(tst_window_fit PRIVATE ${SRC}/ui/main)
+
 # ---- Airframe presets flown in the real firmware (SITL builds only) -------
 # Hover + yaw-sign per preset. Needs the engine module like tst_sitl_engine and
 # skips, saying why, without one. About a minute of wall-clock-paced sim.
