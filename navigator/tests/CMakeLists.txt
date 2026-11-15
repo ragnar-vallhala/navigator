@@ -558,3 +558,27 @@ if(TARGET Navigator AND NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_ab
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
       TIMEOUT 120)
 endif()
+
+# ---- Real panels: content minimum, no overlapping rows, main window fit -----
+# Builds the real MainWindow (Navigator's sources compiled a second time, as
+# above; GL-free: nothing is shown) and checks the dock host with the real
+# panels. Offscreen, own process, private XDG_*. Valid in the GCS-only build.
+if(TARGET Navigator AND TARGET navigator_workspace)
+  get_target_property(_pr_srcs Navigator SOURCES)
+  set(_pr_wf "")
+  foreach(_s ${_pr_srcs})
+    if(NOT _s MATCHES "(^|/)app/main\\.cpp$")
+      list(APPEND _pr_wf "${CMAKE_SOURCE_DIR}/${_s}")
+    endif()
+  endforeach()
+  navigator_test(tst_panel_real_min tst_panel_real_min.cpp ${_pr_wf})
+  get_target_property(_pr_inc Navigator INCLUDE_DIRECTORIES)
+  get_target_property(_pr_def Navigator COMPILE_DEFINITIONS)
+  get_target_property(_pr_lib Navigator LINK_LIBRARIES)
+  target_include_directories(tst_panel_real_min PRIVATE ${_pr_inc}
+      ${CMAKE_SOURCE_DIR}/src/ui/widgets ${CMAKE_SOURCE_DIR}/src/ui/main
+      ${CMAKE_SOURCE_DIR}/src/ui/workspace ${CMAKE_SOURCE_DIR}/src/vsim)
+  target_compile_definitions(tst_panel_real_min PRIVATE ${_pr_def})
+  target_link_libraries(tst_panel_real_min PRIVATE ${_pr_lib})
+  set_tests_properties(tst_panel_real_min PROPERTIES TIMEOUT 120)
+endif()
