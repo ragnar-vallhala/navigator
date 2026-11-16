@@ -88,6 +88,29 @@ int areaCount(QWidget *dm) {
   return n;
 }
 
+// Tabs of the dock area that holds `id`'s widget that are not hidden. A closed
+// panel must never keep a drawn tab (a parked panel is closed, not removed).
+int shownTabsBeside(QWidget *panelWidget) {
+  QWidget *area = panelWidget;
+  while (area && QByteArray(area->metaObject()->className()) != "ads::CDockAreaWidget")
+    area = area->parentWidget();
+  if (!area)
+    return -1;
+  int n = 0;
+  for (QWidget *w : area->findChildren<QWidget *>())
+    if (QByteArray(w->metaObject()->className()) == "ads::CDockWidgetTab" &&
+        !w->isHidden())
+      ++n;
+  return n;
+}
+
+QWidget *labelFor(QMainWindow &win, const char *id) {
+  for (QLabel *l : win.findChildren<QLabel *>())
+    if (l->text() == QLatin1String(id))
+      return l;
+  return nullptr;
+}
+
 // A window with a started shell whose panels are labels (as many as asked).
 struct Fixture {
   QMainWindow win;
@@ -614,6 +637,45 @@ private slots:
     QVERIFY(f.shell->workspaces()->load("Fly"));
     b->floatPanel("view3d");
     QVERIFY(!b->panelState("view3d").floating);
+  }
+
+  // A workspace switch parks every panel (closed) in one area; opening a panel
+  // from the Panels menu afterwards must show only that panel's tab, not stale
+  // tabs of the parked ones (Settings, or the panel of a one-panel workspace).
+  void noGhostTabsAfterSwitchAndShow() {
+    Fixture f;
+    auto *wm = f.shell->workspaces();
+    auto *b = wm->backend();
+    for (const char *w : {"Sim", "RC channels", "Motors", "Packets"}) {
+      QVERIFY(wm->load(w));
+      QTest::qWait(50);
+      QVERIFY(f.shell->showPanel("view3d"));
+      QTest::qWait(50);
+      QVERIFY(b->panelState("view3d").visible);
+      QWidget *att = labelFor(f.win, "view3d");
+      QCOMPARE(shownTabsBeside(att), 1);
+      QCOMPARE(b->panelState("view3d").tabGroup.size(), 1);
+      QVERIFY(f.shell->showPanel("settings"));
+      QTest::qWait(50);
+      QWidget *set = labelFor(f.win, "settings");
+      QVERIFY(b->panelState("settings").visible);
+      QCOMPARE(shownTabsBeside(set), int(b->panelState("settings").tabGroup.size()));
+    }
+  }
+
+  // One click: a panel shown then hidden through the backend is closed, and a
+  // closed panel is not "visible" (so its Panels entry and X act at once).
+  void showThenHideLeavesItClosed() {
+    Fixture f;
+    auto *wm = f.shell->workspaces();
+    auto *b = wm->backend();
+    QVERIFY(wm->load("Sim"));
+    b->showPanel("settings");
+    QVERIFY(b->panelState("settings").visible);
+    b->hidePanel("settings");
+    QVERIFY(!b->panelState("settings").visible);
+    QVERIFY(b->viewAction("settings") && !b->viewAction("settings")->isChecked());
+    QCOMPARE(shownTabsBeside(labelFor(f.win, "settings")), 0);
   }
 };
 
