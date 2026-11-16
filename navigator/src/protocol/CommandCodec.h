@@ -58,7 +58,9 @@ QByteArray encodeDisarm(quint8 devId = 42, quint32 tsMs = 0);
 // CMD_CALIBRATE_IMU: `which` selects the routine; 0xFF cancels.
 QByteArray encodeCalibrate(quint8 which, quint8 devId = 42);
 
-// TIME_SYNC REQUEST: role=REQUEST, t1_gcs_tx stamped by the caller.
+// TIME_SYNC REQUEST: role=REQUEST, t1_gcs_tx stamped by the caller. `seq` is the
+// sync round id carried in the payload (the response echoes it); the frame seq
+// comes from the shared GCS counter (TxSeq.h) like every other frame.
 // commandedOffsetMs = INT32_MIN means "no correction this round".
 QByteArray encodeTimeSyncRequest(quint8 seq, quint64 t1,
                                  qint32 commandedOffsetMs, quint8 devId = 42);

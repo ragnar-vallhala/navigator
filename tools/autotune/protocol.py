@@ -180,9 +180,10 @@ class NavlinkDecoder:
         import navlink_msgs as nl
         self._nl = nl
         self._out = []
-        h = nl.Handlers()
-        h.on_unknown = None
-        h.on_crc_error = None
+        # navlink 3: keyword-only Handlers. This parser is receive-only (no
+        # `send`, so it never emits an ACK), but next_seq is wired to the same
+        # counter _frame() stamps its commands with, as the ABI asks.
+        h = nl.Handlers(next_seq=_next_seq, on_unknown=None, on_crc_error=None)
 
         def on_default(frame, msg):
             mid = frame.msgid

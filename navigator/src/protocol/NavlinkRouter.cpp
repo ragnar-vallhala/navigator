@@ -15,12 +15,14 @@
  * limitations under the License.
  */
 #include "NavlinkRouter.h"
+#include "TxSeq.h"
 
 #include "core/MathUtils.h" // float16_to_float32 (IMU delta reconstruction)
 #include <QDateTime>        // t4 capture for TIME_SYNC
 #include <QtGlobal>
 #include <chrono>
 #include <map>
+#include <utility>
 #include <vector>
 
 extern "C" {
@@ -393,6 +395,17 @@ void thunkXferAck(void *ctx, const navlink_frame_hdr_t *,
     r->onXferAck(m->session, m->flags, m->result, m->next_offset);
 }
 
+// Frame seq of each COMMAND_ACK the parser emits: the GCS's own tx counter, the
+// same one every other frame it sends takes (TxSeq.h). Runs on the thread that
+// calls feed(); the counter is atomic.
+uint8_t thunkNextSeq(void *) { return TxSeq::next(); }
+
+void thunkSend(void *ctx, const uint8_t *frame, uint16_t len) {
+  auto *r = static_cast<NavlinkRouter *>(ctx);
+  if (r->sendFrame)
+    r->sendFrame(QByteArray(reinterpret_cast<const char *>(frame), len));
+}
+
 void thunkDefault(void *ctx, const navlink_frame_hdr_t *, uint32_t msgid,
                   const uint8_t *, size_t len) {
   auto *r = static_cast<NavlinkRouter *>(ctx);
@@ -580,6 +593,12 @@ NavlinkRouter::NavlinkRouter() : d_(new Impl) {
   navlink_parser_init(&d_->parser);
   d_->handlers = {};       // zero every slot
   d_->handlers.ctx = this; // shared ctx: the router itself
+  // The GCS's identity on the wire (matches CommandCodec) and its tx counter.
+  // `send` stays unset until setSendFrame(): without it the parser emits no
+  // COMMAND_ACK, so no tx seq is consumed.
+  d_->handlers.sysid = 0xFF;
+  d_->handlers.compid = 1;
+  d_->handlers.next_seq = thunkNextSeq;
   d_->handlers.on_default = thunkDefault;
   d_->handlers.on_attitude_euler = thunkAttitude;
   d_->handlers.on_imu_raw = thunkImuRaw;
@@ -615,6 +634,11 @@ NavlinkRouter::NavlinkRouter() : d_(new Impl) {
 }
 
 NavlinkRouter::~NavlinkRouter() { delete d_; }
+
+void NavlinkRouter::setSendFrame(std::function<void(const QByteArray &)> f) {
+  sendFrame = std::move(f);
+  d_->handlers.send = sendFrame ? thunkSend : nullptr;
+}
 
 void NavlinkRouter::feed(const QByteArray &f) {
   flushStale(clockMs ? clockMs() : monotonicMs());
