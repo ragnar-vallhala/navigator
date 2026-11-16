@@ -17,7 +17,7 @@
 // The dock host of the main window (DockShell), without the real pages: the
 // panel ids and built-in workspaces are complete and consistent, the switch
 // reads env + setting, showPanel is a no-op for an unknown id, shows without
-// floating, and the panel that holds QOpenGLWidgets cannot be floated.
+// floating, and the Attitude panel (GL window container) floats like any other.
 #include "DockShell.h"
 #include "AdsBackend.h"
 #include "Theme.h"
@@ -600,20 +600,19 @@ private slots:
     check(&full);
   }
 
-  void attitudePanelCannotFloat() {
+  void attitudePanelCanFloat() {
     Fixture f;
     auto *b = f.shell->workspaces()->backend();
-    QVERIFY(b->panelState("view3d").fixed);
-    QVERIFY(!b->panelState("logs").fixed);
+    QVERIFY(DockShell::kFixedPanels.empty());
+    QVERIFY(!b->panelState("view3d").fixed);
     b->floatPanel("view3d");
     QVERIFY(b->panelState("view3d").visible);
-    QVERIFY(!b->panelState("view3d").floating);
-    b->floatPanel("logs"); // others still float
-    QVERIFY(b->panelState("logs").floating);
-    // a rebuild (workspace switch) keeps it pinned
+    QVERIFY(b->panelState("view3d").floating);
+    // a workspace switch rebuilds the layout; the panel stays usable
     QVERIFY(f.shell->workspaces()->load("Fly"));
+    QVERIFY(b->panelState("view3d").visible);
     b->floatPanel("view3d");
-    QVERIFY(!b->panelState("view3d").floating);
+    QVERIFY(b->panelState("view3d").floating);
   }
 };
 
