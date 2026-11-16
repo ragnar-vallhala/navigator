@@ -292,6 +292,10 @@ void AdsBackend::rebuild() {
                      });
     QObject::connect(dm, &M::floatingWidgetCreated, dm,
                      [this](ads::CFloatingDockContainer *fc) {
+                       // A floated panel is a tool window of the main window
+                       // (transient for it, utility type), not a second app
+                       // window the window manager lists and cycles through.
+                       fc->setWindowFlag(Qt::Tool, true);
                        // Move/Resize events also trail a layout build (the window
                        // system settling the windows just placed): not edits.
                        fc->installEventFilter(new GeometryWatcher(fc, [this] {
