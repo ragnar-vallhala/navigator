@@ -11,7 +11,7 @@ The repository `README.md` splits the project into four parts:
 - `tools/autotune/` is a set of PID autotuning scripts that run against the simulator.
 - `navlink/` is the wire protocol, included as a git submodule.
 
-The flight controller firmware is a separate, private repository. What is public here is the ground station and the protocol it speaks. NavLink is Apache-2.0 licensed, so a third party can build against it. Navigator builds against the version of NavLink pinned by the `navlink/` submodule (commit `ee2a9f6`, which the NavLink repository tags v2.4.0).
+The flight controller firmware is a separate, private repository. What is public here is the ground station and the protocol it speaks. NavLink is Apache-2.0 licensed, so a third party can build against it. Navigator builds against the version of NavLink pinned by the `navlink/` submodule (commit `c60aedc`, which the NavLink repository tags v3.0.0).
 
 Navigator's build generates its NavLink C codec from `navlink/dialect.json` at CMake configure time, so the codec is never checked in.
 
@@ -68,4 +68,4 @@ Gap: supported platforms are not stated authoritatively. The README says CI buil
 - assimp is required only on the simulator path -> `navigator/CMakeLists.txt` (`find_package(assimp REQUIRED)` inside the `NAVIGATOR_SITL` gate)
 - Arm and disarm frames are built and sent through the guarded function -> `navigator/src/ui/main/MainWindow.cpp` (`sendToFc(... encodeArm ...)`)
 - The application name is "Vayu GCS" -> `navigator/src/app/main.cpp`
-- The navlink submodule is pinned at commit `ee2a9f6`, tagged v2.4.0 in the NavLink repository -> `git ls-tree HEAD navlink`, `git describe --tags` in navlink/
+- The navlink submodule is pinned at commit `c60aedc`, tagged v3.0.0 in the NavLink repository -> `git ls-tree HEAD navlink`, `git describe --tags` in navlink/
