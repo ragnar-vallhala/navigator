@@ -451,6 +451,16 @@ if(TARGET navigator_workspace)
     target_link_libraries(tst_dock_shell PRIVATE navigator_workspace)
 endif()
 
+# The dock host's child windows (drop overlays, floating windows) can paint.
+if(TARGET navigator_workspace)
+    navigator_test(tst_dock_overlay tst_dock_overlay.cpp
+        ${SRC}/ui/main/DockShell.cpp ${SRC}/ui/main/DockShell.h
+        ${SRC}/core/Theme.cpp)
+    target_include_directories(tst_dock_overlay PRIVATE ${SRC}/ui/main
+        ${SRC}/core)
+    target_link_libraries(tst_dock_overlay PRIVATE navigator_workspace)
+endif()
+
 # Panels hosted by AdsBackend keep a content minimum size (PanelFrame).
 if(TARGET navigator_workspace)
     navigator_test(tst_panel_min_size tst_panel_min_size.cpp)
