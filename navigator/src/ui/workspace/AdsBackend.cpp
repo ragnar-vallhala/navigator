@@ -71,6 +71,14 @@ public:
       m_dm->show();
     if (m_host) {
       m_host->setUpdatesEnabled(true);
+      // Qt's recursive re-enable skips child *windows*. The dock manager's
+      // drop overlays (and its floating windows) are exactly that, and were
+      // created while the host was frozen: left frozen they never paint, so
+      // no drop highlight or cross appears while dragging a panel.
+      const auto kids = m_host->findChildren<QWidget *>();
+      for (QWidget *w : kids)
+        if (w->isWindow() && !w->updatesEnabled())
+          w->setUpdatesEnabled(true);
       m_host->update();
     }
   }
