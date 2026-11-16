@@ -16,6 +16,8 @@
  */
 #include "CommandCodec.h"
 
+#include "TxSeq.h"
+
 #include <algorithm>
 #include <cstring>
 
@@ -30,10 +32,9 @@ extern "C" {
 // payload + CRC-16). tsMs is vestigial (v2 frames carry no header timestamp).
 namespace CommandCodec {
 namespace {
-uint8_t nextSeq() {
-  static uint8_t s = 0;
-  return s++;
-}
+// Command req_seq and every frame seq come from the one GCS counter (TxSeq),
+// shared with the COMMAND_ACK frames the parser emits (NavlinkRouter).
+uint8_t nextSeq() { return TxSeq::next(); }
 QByteArray frame(const uint8_t *buf, size_t n) {
   return QByteArray(reinterpret_cast<const char *>(buf), static_cast<int>(n));
 }
@@ -169,7 +170,7 @@ QByteArray encodeTimeSyncRequest(quint8 seq, quint64 t1,
   m.t3_fc_tx = 0;
   m.commanded_offset_ms = commandedOffsetMs;
   uint8_t buf[NAVLINK_MAX_FRAME];
-  size_t n = navlink_time_sync_encode(buf, &m, seq, 0xFF, 1);
+  size_t n = navlink_time_sync_encode(buf, &m, nextSeq(), 0xFF, 1);
   return frame(buf, n);
 }
 
@@ -188,7 +189,7 @@ QByteArray encodeTimeSyncRequestWide(quint8 seq, quint64 t1,
   m.commanded_offset_hi_ms =
       static_cast<qint32>(static_cast<quint64>(commandedOffsetMs) >> 32);
   uint8_t buf[NAVLINK_MAX_FRAME];
-  size_t n = navlink_time_sync_encode(buf, &m, seq, 0xFF, 1);
+  size_t n = navlink_time_sync_encode(buf, &m, nextSeq(), 0xFF, 1);
   return frame(buf, n);
 }
 

@@ -1,6 +1,6 @@
 # Chapter 4 — NavLink on the GCS side
 
-This chapter covers how Navigator turns NavLink bytes into values a screen can show, and how a command goes back out. It does not describe NavLink itself (the frame layout, the CRC, the message catalog). The NavLink book covers that. Navigator builds against the NavLink submodule pin (on the branch this book was written from, commit `ee2a9f6`, which the NavLink repository tags `v2.4.0`), and its CMake generates the C codec from `navlink/dialect.json` when you configure the build.
+This chapter covers how Navigator turns NavLink bytes into values a screen can show, and how a command goes back out. It does not describe NavLink itself (the frame layout, the CRC, the message catalog). The NavLink book covers that. Navigator builds against the NavLink submodule pin (on the branch this book was written from, commit `c60aedc`, which the NavLink repository tags `v3.0.0`), and its CMake generates the C codec from `navlink/dialect.json` when you configure the build.
 
 ## One file sees the decoder
 
@@ -48,7 +48,7 @@ Two behaviours are worth knowing. A message with no thunk reaches `on_default`, 
 
 ## The send path
 
-`CommandCodec` is a namespace of `encode*` functions, one per command: `encodeSetPid`, `encodeSetGyroLpf`, `encodeSetGyroNotch`, `encodeSetFlightMode`, `encodeSetMotorGeometry`, `encodeArm`, `encodeDisarm`, `encodeCalibrate`, `encodeTimeSyncRequest`, `encodeTimeSyncRequestWide` and `encodeTaskNameRequest`. Each fills a generated command struct (target system from the `devId` argument, component 1, a rolling `req_seq` from a static counter), calls the generated `navlink_*_encode`, and returns a `QByteArray` holding the whole frame. The frame is sent with system id `0xFF`, component 1. The `tsMs` argument is unused; the header says it is kept for call-site compatibility.
+`CommandCodec` is a namespace of `encode*` functions, one per command: `encodeSetPid`, `encodeSetGyroLpf`, `encodeSetGyroNotch`, `encodeSetFlightMode`, `encodeSetMotorGeometry`, `encodeArm`, `encodeDisarm`, `encodeCalibrate`, `encodeTimeSyncRequest`, `encodeTimeSyncRequestWide` and `encodeTaskNameRequest`. Each fills a generated command struct (target system from the `devId` argument, component 1, a rolling `req_seq` from the shared atomic GCS tx counter, `TxSeq.h`), calls the generated `navlink_*_encode`, and returns a `QByteArray` holding the whole frame. The frame is sent with system id `0xFF`, component 1. The `tsMs` argument is unused; the header says it is kept for call-site compatibility.
 
 The frame then goes through `MainWindow::sendToFc`. It refuses when the source state does not allow transmit (for example during replay). In the in-app simulator it hands the frame to `SitlModule::send`, so the simulated firmware parses it as it would on a wire. For a real link it posts `TelemetryEngine::send` to the worker thread, which writes to UDP if a UDP socket is open and otherwise to the serial port.
 
@@ -77,6 +77,6 @@ Gap: the repository does not say how many handler slots the pinned codec offers 
 - A new router message needs a hook, a thunk and a constructor line; reaching a screen also needs a `DroneProtocol` signal and lambda -> `NavlinkRouter.h/.cpp`, `DroneProtocol.cpp`
 - A thunk with an unset hook drops the message; no thunk falls to `onDefault` -> thunk bodies in `NavlinkRouter.cpp`, and `navlink/generate.py` (`if (h->on_default)` branch)
 - `on_crc_error` is never assigned -> `NavlinkRouter` constructor (`handlers = {}` then only `on_*` message slots)
-- Commands use a static rolling `req_seq`, sysid `0xFF`, component 1 -> `CommandCodec.cpp`
+- Commands use a rolling `req_seq` from the shared atomic tx counter (also the frame seq of the COMMAND_ACKs the parser emits), sysid `0xFF`, component 1 -> `CommandCodec.cpp`
 - Transmit routing (refuse / SITL send / engine send) -> `MainWindow::sendToFc`; UDP-else-serial -> `TelemetryEngine::send`
 - `ABI.md` sections 3 and 6 match the pinned submodule commit (same text as the older tag; only sections 4, 5 and 8 differ) -> `git diff` of `ABI.md` between the two NavLink revisions

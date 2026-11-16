@@ -497,6 +497,13 @@ navigator_test(tst_statustext
     ${SRC}/protocol/NavlinkRouter.cpp)
 target_link_libraries(tst_statustext PRIVATE navlink_codec)
 
+# ---- NavLink 3: COMMAND_ACK frame seq shares the GCS tx counter -----------
+navigator_test(tst_ack_seq
+    tst_ack_seq.cpp
+    ${SRC}/protocol/NavlinkRouter.cpp
+    ${SRC}/protocol/CommandCodec.cpp)
+target_link_libraries(tst_ack_seq PRIVATE navlink_codec)
+
 # ---- World change leaves the vehicle on the ground (SITL builds only) -------
 # Drives the real SimulatorWidget (the Navigator sources minus main.cpp, built
 # a second time here: the widget is not in a library) through World-tab changes,

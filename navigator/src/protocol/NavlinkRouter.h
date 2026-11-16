@@ -39,6 +39,14 @@ public:
   // Push one whole v2 frame (sync..CRC) through the parser; hooks fire inline.
   void feed(const QByteArray &v2Frame);
 
+  // Where the parser sends the frames it emits itself (COMMAND_ACK for a
+  // command addressed to the GCS). Unset by default: nothing is emitted and no
+  // frame seq is consumed. The ACK's frame seq is taken from the GCS tx counter
+  // (TxSeq.h), shared with every frame CommandCodec builds. Called on the
+  // thread that calls feed().
+  void setSendFrame(std::function<void(const QByteArray &)> f);
+  std::function<void(const QByteArray &)> sendFrame; // public for the thunk
+
   // Per-leaf hooks — set by the owning GCS module (default: unset -> onDefault).
   std::function<void(const AttitudeData &)> onAttitude;
   std::function<void(const ImuData &)> onImu;
