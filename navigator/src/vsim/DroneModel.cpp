@@ -218,9 +218,9 @@ float legHeightFor(DroneClass c) {
 
 Style styleOf(DroneClass c) {
   switch (c) {
-  case DroneClass::Light3:
-    return {0.0381f, 0.013f, 0.009f, 0.0030f, 0.075f, 0.034f, 0.0016f, 0.016f,
-            0.060f,  0.022f, 0.020f,  0.0095f, 0.011f, 3,      0.0095f, false,
+  case DroneClass::Light3: // toothpick: slim arms, a small stack
+    return {0.0381f, 0.0085f, 0.0058f, 0.0022f, 0.062f, 0.028f, 0.0014f, 0.014f,
+            0.052f,  0.020f,  0.018f,  0.0095f, 0.011f, 3,      0.0095f, false,
             false};
   case DroneClass::LongRange7:
     return {0.0889f, 0.024f, 0.015f, 0.0060f, 0.150f, 0.058f, 0.0030f, 0.030f,
@@ -455,6 +455,19 @@ DroneModel buildDroneModel(const DroneModelInput &in) {
           camHalfY * 0.62f, camH * 0.36f, kBoardEsc, kBoardEsc);
     b.box(camX + 0.0142f * k, cy, plateLo + camH / 2, 0.0006f * k,
           camHalfY * 0.36f, camH * 0.2f, kLens, kLens);
+    // 7in stretch frame: two long side plates between the plates and a cage of
+    // bars round the camera
+    if (in.cls == DroneClass::LongRange7) {
+      const float railL = L * 1.18f, railH = (topLo - plateHi) + 2 * pT;
+      for (int sy = -1; sy <= 1; sy += 2) {
+        b.box(cx - 0.04f * L, cy + sy * (W * 0.5f + 0.0012f * k),
+              plateLo + railH / 2, railL / 2, 0.0012f * k, railH / 2, kCarbon,
+              kCarbonTop);
+        b.box(camX, cy + sy * (camHalfY + 0.0035f * k), plateLo + camH / 2,
+              0.0075f * k, 0.0012f * k, camH / 2 + 0.002f * k, kCarbon,
+              kCarbonTop);
+      }
+    }
     // GPS puck on a mast at the rear (long range / heavy)
     if (S.gps) {
       const float gx = cx - L / 2 + 0.012f * k;
