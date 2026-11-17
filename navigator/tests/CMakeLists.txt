@@ -467,6 +467,12 @@ if(TARGET navigator_workspace)
     target_link_libraries(tst_panel_min_size PRIVATE navigator_workspace)
 endif()
 
+# A floated panel is a Qt::Tool window of the main window.
+if(TARGET navigator_workspace)
+    navigator_test(tst_floating_tool tst_floating_tool.cpp)
+    target_link_libraries(tst_floating_tool PRIVATE navigator_workspace)
+endif()
+
 # QOpenGLWidget inside the dock layer: skips on "offscreen" (see the file).
 if(TARGET navigator_workspace)
     navigator_test(tst_workspace_gl tst_workspace_gl.cpp
