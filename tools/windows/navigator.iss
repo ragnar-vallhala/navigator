@@ -28,6 +28,8 @@ AppName=Navigator
 AppVersion={#AppVersion}
 AppVerName=Navigator {#AppVersion}
 AppPublisher=NAVRobotec Pvt Ltd
+; Shown as the support link in Add/Remove Programs.
+AppSupportURL=mailto:support@navrobotec.com
 DefaultDirName={autopf}\Navigator
 DefaultGroupName=Navigator
 DisableProgramGroupPage=yes

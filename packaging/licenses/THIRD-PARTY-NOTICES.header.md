@@ -75,7 +75,7 @@ the version listed in the generated section. It is available at the locations
 given above. In addition, NAVRobotec Pvt Ltd will, for three years from the
 date of the release you received, send you the corresponding source code of
 any of these components on request, for no more than the cost of physically
-performing the distribution: write to `support@navrobotec.com`, naming the
-release file and the component.
+performing the distribution: write to `support@navrobotec.com` or
+`navrobotec@gmail.com`, naming the release file and the component.
 
 This file is a notice, not legal advice.
