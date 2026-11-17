@@ -257,6 +257,7 @@ set(GCS_SITL_SOURCES
     src/vsim/procgen/TerrainGen.cpp
     src/vsim/procgen/TerrainField.cpp
     src/vsim/procgen/GroundCover.cpp
+    src/vsim/procgen/Vegetation.cpp
     src/vsim/procgen/WorldPresets.cpp
     src/vsim/procgen/Helipads.cpp
     src/vsim/MassProperties.cpp
@@ -306,6 +307,7 @@ set(GCS_SITL_HEADERS
     src/vsim/procgen/TerrainField.h
     src/vsim/procgen/GroundCover.h
     src/vsim/procgen/Flora.h
+    src/vsim/procgen/Vegetation.h
     src/vsim/procgen/WorldPresets.h
     src/vsim/MassProperties.h
     src/vsim/DroneModel.h
