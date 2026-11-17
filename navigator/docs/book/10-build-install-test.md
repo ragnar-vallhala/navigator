@@ -79,7 +79,7 @@ Workflows are in `.github/workflows/`. `ci.yml` runs on pushes and pull requests
 
 ## Commit messages and branches
 
-`lint_commits.sh` requires `<type>[(<scope>)][!]: <subject>` with a type from feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert; a subject of at most 72 characters; a blank second line; and no `Co-Authored-By` or "generated with" trailer naming an AI. Merge commits and commits already on `main` or `stable` are skipped. Enable the same check locally with `git config core.hooksPath .githooks`.
+`lint_commits.sh` requires `<type>[(<scope>)][!]: <subject>` with a type from feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert; a subject of at most 72 characters; a blank second line; and no `Co-Authored-By` or "generated with" trailer naming an AI. It also rejects a task-tracker or chat-room number (a word such as todo or room, then a hash and digits) in a message or in the lines a PR adds: write the reason instead. Merge commits and commits already on `main` or `stable` are skipped. Enable the same check locally with `git config core.hooksPath .githooks`.
 
 Changes reach `main` by pull request. A release is a pull request from `main` to `stable` that raises the version, merged with a merge commit.
 

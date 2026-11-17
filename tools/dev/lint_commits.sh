@@ -18,6 +18,8 @@
 #   <type>[(<scope>)][!]: <subject>    subject line <= 72 chars
 #   types: feat fix docs style refactor perf test build ci chore revert
 #   line 2 blank; no AI attribution trailer (Co-Authored-By: Claude, ...)
+#   no task-tracker or chat-room number in the message or in the lines a PR
+#   adds (see TRANSIENT_REF below)
 #
 # Usage:  tools/dev/lint_commits.sh [<base>..<head>]   (default origin/main..HEAD)
 #         tools/dev/lint_commits.sh --msg-file <file>   one message, as the
@@ -40,6 +42,10 @@ PATTERN="^(${TYPES})(\([a-z0-9][a-z0-9_.,-]*\))?!?: .+$"
 # Anchored on trailer syntax, so prose that mentions Claude and a genuine
 # human Co-Authored-By both pass.
 AI_TRAILER='co-authored-by:.*(claude|anthropic)|generated with .*claude'
+# A tracker or chat-room number (a word, then a hash and digits) means nothing
+# outside the room it came from, so it must not be written into the repo: state
+# the reason instead. Links to this repo's own GitHub issues and PRs are fine.
+TRANSIENT_REF='(todo|room|stack|ashu) ?#[0-9]+'
 
 # check_msg <label> <message>: print one line per problem, return 1 if any.
 # fixup!/squash! messages pass: they are folded into a checked commit.
@@ -53,6 +59,8 @@ check_msg() {
   [ "${#subject}" -le 72 ] || bad "subject is ${#subject} chars, max 72"
   [ -z "$(printf '%s\n' "$msg" | sed -n 2p)" ] || bad "line 2 must be blank"
   ! printf '%s\n' "$msg" | grep -Eqi "$AI_TRAILER" || bad "carries an AI attribution trailer"
+  ! printf '%s\n' "$msg" | grep -Eqi "$TRANSIENT_REF" \
+    || bad "names a todo/room number; write the reason instead"
   return "$rc"
 }
 
@@ -84,6 +92,18 @@ for c in $(git rev-list --no-merges --reverse "$RANGE"); do
   checked=$((checked + 1))
   check_msg "$(git log -1 --format=%h "$c") " "$(git log -1 --format=%B "$c")" || fail=1
 done
+
+# The lines the range adds must not carry such a reference either. This script
+# is excluded: it has to spell the pattern out. The awk skips each file's header
+# (its +++ line) but keeps every added line, even one that starts with ++.
+hits=$(git diff --unified=0 --no-color "$RANGE" -- . ':!tools/dev/lint_commits.sh' \
+  | awk '/^diff --git /{hdr=1; next} /^@@/{hdr=0; next} hdr{next} /^\+/{print}' \
+  | grep -Ei "$TRANSIENT_REF" || true)
+if [ -n "$hits" ]; then
+  echo "::error::added lines name a todo/room number; write the reason instead:"
+  printf '%s\n' "$hits" | sed 's/^/  /'
+  fail=1
+fi
 
 [ "$fail" = 0 ] && echo "commit lint: $checked new commit(s) in $RANGE ok"
 exit "$fail"
