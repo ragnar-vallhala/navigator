@@ -22,6 +22,8 @@
 #include "AdsBackend.h"
 #include "Theme.h"
 
+#include <DockManager.h>
+
 #include <QFile>
 #include <QImage>
 #include <QLabel>
@@ -230,6 +232,18 @@ private slots:
 
   void init() {
     QSettings().clear();
+  }
+
+  // On X11 a tab drag must use an opaque preview window: ADS's default there
+  // is a translucent ARGB top-level that leaves ghost trails under a
+  // compositor. Other platforms (Wayland, offscreen) keep ADS's own preview.
+  void dragPreviewIsAnOpaqueFramedWindowOnXcb() {
+    Fixture f;
+    const bool xcb = QGuiApplication::platformName() == QLatin1String("xcb");
+    QCOMPARE(ws::AdsBackend::dragPreviewNeedsFrame(), xcb);
+    QCOMPARE(ads::CDockManager::testConfigFlag(
+                 ads::CDockManager::DragPreviewHasWindowFrame),
+             xcb);
   }
 
   void panelIdsAreTheAgreedOnes() {

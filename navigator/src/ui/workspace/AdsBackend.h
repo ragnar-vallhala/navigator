@@ -41,6 +41,9 @@ namespace ws {
 // so the panel widgets and their native GL windows are never re-parented.
 class AdsBackend : public DockBackend {
 public:
+  // True when ADS's translucent drag preview must be replaced by an opaque
+  // framed window (X11 only; Wayland keeps ADS's own preview).
+  static bool dragPreviewNeedsFrame();
   explicit AdsBackend(QMainWindow *host);
   ~AdsBackend() override;
 
