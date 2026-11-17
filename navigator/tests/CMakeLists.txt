@@ -251,6 +251,15 @@ navigator_test(tst_procgen
     ${SRC}/vsim/ChunkStreamer.cpp)
 target_include_directories(tst_procgen PRIVATE ${SRC}/vsim)
 
+# ---- Procedural vegetation placement (Qt-free core, headless) ---------------
+navigator_test(tst_vegetation
+    tst_vegetation.cpp
+    ${SRC}/vsim/procgen/Noise.cpp
+    ${SRC}/vsim/procgen/TerrainField.cpp
+    ${SRC}/vsim/procgen/GroundCover.cpp
+    ${SRC}/vsim/procgen/Vegetation.cpp)
+target_include_directories(tst_vegetation PRIVATE ${SRC}/vsim)
+
 # ---- Procedural world presets (Qt-free core, headless) ----------------------
 navigator_test(tst_worldpresets
     tst_worldpresets.cpp
