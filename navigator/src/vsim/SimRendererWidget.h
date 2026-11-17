@@ -675,6 +675,9 @@ private:
 
   // Camera state (orbit around drone).
   float cam_radius_ = 4.0f;
+  float camMinRadius_ = 0.5f;  // zoom limits, set from the airframe's size
+  float camMaxRadius_ = 50.0f;
+  bool userZoomed_ = false;    // the wheel was used: keep the distance on a rebuild
   float cam_yaw_ = 0.7f;   // orbit azimuth RELATIVE to the drone heading
   float cam_pitch_ = 0.5f; // tilt; >0 = eye above ground looking down (NED)
   bool fpv_ = false;       // onboard FPV camera vs orbit

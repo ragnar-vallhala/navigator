@@ -74,6 +74,21 @@ struct DroneModel {
 // positions, NaNs) falls back to a default square layout of the same scale.
 DroneModel buildDroneModel(const DroneModelInput &in);
 
+// Third-person orbit distances that suit a model: its half-span (farthest hub
+// plus prop radius) sets the default distance and how close the camera may go,
+// so a 65 mm whoop and a 10-inch both fill the view instead of a fixed 4 m.
+struct OrbitRange {
+  float def = 4.0f; // default distance [m]
+  float min = 0.5f; // closest zoom [m]
+  float max = 50.0f; // farthest zoom [m]
+};
+OrbitRange orbitRangeFor(const DroneModel &m);
+
+// Near clip plane for the chase camera at orbit distance `radius`: a quarter of
+// the distance, never beyond `maxNear`, so a camera zoomed right up to a small
+// model does not cut it off (a fixed near plane would clip a whoop whole).
+float chaseNearPlane(float radius, float maxNear);
+
 // Colours shared with the renderer (blur disc tint).
 std::array<float, 3> propTipColor(int spinSign);
 

@@ -91,6 +91,50 @@ private slots:
     QCOMPARE(int(droneClassFor("", -1.0f)), int(DroneClass::Freestyle5));
   }
 
+  // The orbit camera fits each airframe: bigger drones start farther out, the
+  // whoop may zoom in far closer than the old fixed 0.5 m floor, and the range
+  // is always ordered and finite (a degenerate model gets the old defaults).
+  void orbitRangeScalesWithAirframe() {
+    auto range = [](const char *id) {
+      for (const Row &r : kRows)
+        if (std::string(r.id) == id)
+          return orbitRangeFor(buildDroneModel(inputFor(r)));
+      return OrbitRange{};
+    };
+    for (const Row &r : kRows) {
+      const OrbitRange o = range(r.id);
+      QVERIFY2(std::isfinite(o.def) && std::isfinite(o.min) && std::isfinite(o.max), r.id);
+      QVERIFY2(o.min < o.def && o.def < o.max, r.id);
+    }
+    const OrbitRange whoop = range("whoop65"), in3 = range("3in"), in5 = range("5in"),
+                     in7 = range("7in"), in10 = range("10in");
+    QVERIFY(whoop.def < in3.def && in3.def < in5.def && in5.def < in7.def &&
+            in7.def < in10.def);
+    QVERIFY(whoop.min < 0.1f); // the old fixed 0.5 m floor was 7x its width
+    QVERIFY(whoop.def < 0.5f);
+    // a degenerate model keeps the old fixed distances
+    const OrbitRange d = orbitRangeFor(DroneModel{});
+    QCOMPARE(d.def, 4.0f);
+    QCOMPARE(d.min, 0.5f);
+  }
+
+  // Zoomed right in, the near plane must stay inside the gap between the eye
+  // and the nearest part of the model, or the drone is clipped away.
+  void chaseNearPlaneClearsTheModelAtMinZoom() {
+    for (const Row &r : kRows) {
+      const DroneModel m = buildDroneModel(inputFor(r));
+      const OrbitRange o = orbitRangeFor(m);
+      float half = m.visualPropRadius;
+      for (const auto &h : m.hub)
+        half = std::max(half, std::hypot(h[0], h[1]) + m.visualPropRadius);
+      const float nearM = chaseNearPlane(o.min, 0.25f);
+      QVERIFY2(nearM < o.min - half * 0.5f, r.id); // nearest geometry is ~half the span away
+      QVERIFY2(nearM > 0.0f, r.id);
+    }
+    QCOMPARE(chaseNearPlane(4.0f, 0.25f), 0.25f); // far out: unchanged
+    QCOMPARE(chaseNearPlane(std::nanf(""), 0.25f), 0.25f);
+  }
+
   void trianglesAndNormals() {
     for (const Row &r : kRows) {
       const DroneModel m = buildDroneModel(inputFor(r));
