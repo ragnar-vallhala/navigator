@@ -17,7 +17,7 @@
 // The dock host of the main window (DockShell), without the real pages: the
 // panel ids and built-in workspaces are complete and consistent, the switch
 // reads env + setting, showPanel is a no-op for an unknown id, shows without
-// floating, and the panel that holds QOpenGLWidgets cannot be floated.
+// floating, and the Attitude panel (GL window container) floats like any other.
 #include "DockShell.h"
 #include "AdsBackend.h"
 #include "Theme.h"
@@ -88,6 +88,29 @@ int areaCount(QWidget *dm) {
   return n;
 }
 
+// Tabs of the dock area that holds `id`'s widget that are not hidden. A closed
+// panel must never keep a drawn tab (a parked panel is closed, not removed).
+int shownTabsBeside(QWidget *panelWidget) {
+  QWidget *area = panelWidget;
+  while (area && QByteArray(area->metaObject()->className()) != "ads::CDockAreaWidget")
+    area = area->parentWidget();
+  if (!area)
+    return -1;
+  int n = 0;
+  for (QWidget *w : area->findChildren<QWidget *>())
+    if (QByteArray(w->metaObject()->className()) == "ads::CDockWidgetTab" &&
+        !w->isHidden())
+      ++n;
+  return n;
+}
+
+QWidget *labelFor(QMainWindow &win, const char *id) {
+  for (QLabel *l : win.findChildren<QLabel *>())
+    if (l->text() == QLatin1String(id))
+      return l;
+  return nullptr;
+}
+
 // A window with a started shell whose panels are labels (as many as asked).
 struct Fixture {
   QMainWindow win;
@@ -101,6 +124,17 @@ struct Fixture {
     win.show();
   }
 };
+} // namespace
+
+namespace {
+int visibleFloats() {
+  int n = 0;
+  for (QWidget *tw : QApplication::topLevelWidgets())
+    if (tw->isVisible() &&
+        QByteArray(tw->metaObject()->className()).contains("Floating"))
+      ++n;
+  return n;
+}
 } // namespace
 
 class TstDockShell : public QObject {
@@ -600,20 +634,100 @@ private slots:
     check(&full);
   }
 
-  void attitudePanelCannotFloat() {
+  void attitudePanelCanFloat() {
     Fixture f;
     auto *b = f.shell->workspaces()->backend();
-    QVERIFY(b->panelState("view3d").fixed);
-    QVERIFY(!b->panelState("logs").fixed);
+    QVERIFY(DockShell::kFixedPanels.empty());
+    QVERIFY(!b->panelState("view3d").fixed);
     b->floatPanel("view3d");
     QVERIFY(b->panelState("view3d").visible);
-    QVERIFY(!b->panelState("view3d").floating);
-    b->floatPanel("logs"); // others still float
-    QVERIFY(b->panelState("logs").floating);
-    // a rebuild (workspace switch) keeps it pinned
+    QVERIFY(b->panelState("view3d").floating);
+    // a workspace switch rebuilds the layout; the panel stays usable
     QVERIFY(f.shell->workspaces()->load("Fly"));
+    QVERIFY(b->panelState("view3d").visible);
     b->floatPanel("view3d");
-    QVERIFY(!b->panelState("view3d").floating);
+    QVERIFY(b->panelState("view3d").floating);
+  }
+
+  // A workspace switch parks every panel (closed) in one area; opening a panel
+  // from the Panels menu afterwards must show only that panel's tab, not stale
+  // tabs of the parked ones (Settings, or the panel of a one-panel workspace).
+  void noGhostTabsAfterSwitchAndShow() {
+    Fixture f;
+    auto *wm = f.shell->workspaces();
+    auto *b = wm->backend();
+    for (const char *w : {"Sim", "RC channels", "Motors", "Packets"}) {
+      QVERIFY(wm->load(w));
+      QTest::qWait(50);
+      QVERIFY(f.shell->showPanel("view3d"));
+      QTest::qWait(50);
+      QVERIFY(b->panelState("view3d").visible);
+      QWidget *att = labelFor(f.win, "view3d");
+      QCOMPARE(shownTabsBeside(att), 1);
+      QCOMPARE(b->panelState("view3d").tabGroup.size(), 1);
+      QVERIFY(f.shell->showPanel("settings"));
+      QTest::qWait(50);
+      QWidget *set = labelFor(f.win, "settings");
+      QVERIFY(b->panelState("settings").visible);
+      QCOMPARE(shownTabsBeside(set), int(b->panelState("settings").tabGroup.size()));
+    }
+  }
+
+  // One click: a panel shown then hidden through the backend is closed, and a
+  // closed panel is not "visible" (so its Panels entry and X act at once).
+  void showThenHideLeavesItClosed() {
+    Fixture f;
+    auto *wm = f.shell->workspaces();
+    auto *b = wm->backend();
+    QVERIFY(wm->load("Sim"));
+    b->showPanel("settings");
+    QVERIFY(b->panelState("settings").visible);
+    b->hidePanel("settings");
+    QVERIFY(!b->panelState("settings").visible);
+    QVERIFY(b->viewAction("settings") && !b->viewAction("settings")->isChecked());
+    QCOMPARE(shownTabsBeside(labelFor(f.win, "settings")), 0);
+  }
+  // Closing the main window must take the floating panel windows with it: a
+  // visible floating window ignores the app's quit request, so the quit is
+  // cancelled and the window (and the process) outlives the main window. The
+  // layout is saved first, so the next start restores the floats.
+  void closeFloatingSavesFirstThenClosesFloats() {
+    {
+      Fixture f;
+      QVERIFY(QTest::qWaitForWindowExposed(&f.win));
+      QTest::qWait(300); // the queued splitter sizing of the first layout
+      auto *b = f.shell->workspaces()->backend();
+      b->floatPanel("imu");
+      QTest::qWait(400);
+      b->floatPanel("logs");
+      QTest::qWait(400);
+      // On the offscreen platform the dock manager's flag reset on window
+      // activation can leave a float hidden; show them as a desktop does.
+      for (QWidget *tw : QApplication::topLevelWidgets())
+        if (QByteArray(tw->metaObject()->className()).contains("Floating"))
+          tw->show();
+      QCOMPARE(visibleFloats(), 2);
+      f.shell->persistLast(); // what MainWindow::closeEvent does, in this order
+      f.shell->closeFloating();
+      QTest::qWait(100);
+      QCOMPARE(visibleFloats(), 0);
+      QVERIFY(!b->panelState("logs").visible);
+      QVERIFY(!b->panelState("imu").visible);
+      // closing them was not a layout edit: nothing is saved over the layout
+      QTest::qWait(900);
+      QVERIFY(visibleFloats() == 0);
+    }
+    // next start: the floated layout comes back
+    QMainWindow win;
+    DockShell shell(&win);
+    for (const QString &id : allIds())
+      shell.addPanel(id, new QLabel(id));
+    shell.start(false);
+    win.show();
+    shell.restoreLast();
+    QTest::qWait(300);
+    QVERIFY(shell.workspaces()->backend()->panelState("logs").floating);
+    QVERIFY(shell.workspaces()->backend()->panelState("imu").floating);
   }
 };
 
