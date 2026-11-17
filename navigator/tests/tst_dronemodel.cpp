@@ -178,6 +178,41 @@ private slots:
     QVERIFY(body("7in").body.vertexCount() > body("5in").body.vertexCount());
   }
 
+  // The 7in is a stretch frame: two long side plates stand just outside the
+  // centre plate (at 7in scale, |y| = 29..33 mm, beyond 7 cm fore and aft),
+  // which no other class has. All of it stays inside the span of the props, and
+  // the 3in toothpick has the same parts as the 5in, only slimmer.
+  void sevenInchDeckAndToothpick() {
+    auto body = [](const char *id) {
+      for (const Row &r : kRows)
+        if (std::string(r.id) == id)
+          return buildDroneModel(inputFor(r));
+      return DroneModel{};
+    };
+    auto railVerts = [](const DroneModel &m) {
+      int n = 0;
+      for (size_t v = 0; v < m.body.vertexCount(); ++v) {
+        const float x = m.body.data[v * 9], y = m.body.data[v * 9 + 1],
+                    z = m.body.data[v * 9 + 2];
+        if (std::fabs(y) > 0.0292f && std::fabs(y) < 0.0326f &&
+            std::fabs(x) > 0.07f && z < -0.02f && z > -0.06f)
+          ++n;
+      }
+      return n;
+    };
+    const DroneModel m3 = body("3in"), m5 = body("5in"), m7 = body("7in");
+    QVERIFY(railVerts(m7) >= 8);
+    QCOMPARE(railVerts(m5), 0);
+    QCOMPARE(railVerts(body("10in")), 0);
+    QCOMPARE(m3.body.vertexCount(), m5.body.vertexCount()); // same parts
+    // nothing of the 7in body reaches past the outer edge of its props
+    float reach = 0.0f;
+    for (int i = 0; i < 4; ++i)
+      reach = std::max(reach, std::hypot(m7.hub[i][0], m7.hub[i][1]) + m7.visualPropRadius);
+    for (size_t v = 0; v < m7.body.vertexCount(); ++v)
+      QVERIFY(std::hypot(m7.body.data[v * 9], m7.body.data[v * 9 + 1]) <= reach);
+  }
+
   void trianglesAndNormals() {
     for (const Row &r : kRows) {
       const DroneModel m = buildDroneModel(inputFor(r));
