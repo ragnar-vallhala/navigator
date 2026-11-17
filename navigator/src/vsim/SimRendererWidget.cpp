@@ -181,17 +181,56 @@ float gridLine(vec2 p, float cell, float w) {
   vec2 l = 1.0 - smoothstep(half_ - fw, half_ + fw, d);
   return max(l.x, l.y) * (1.0 - smoothstep(0.12, 0.35, max(fw.x, fw.y)));
 }
-// PROTOTYPE helpers. A texture is sampled at two scales and two orientations so
-// the tiling never lines up, the far one taking over with distance.
+// PROTOTYPE helpers. Anti-tiling: every texture is sampled stochastically. The
+// plane is cut into cells; each cell gets its own random rotation and offset
+// into the texture, and the four cells around a pixel are blended with smooth
+// weights (variance-preserving, so the blend does not wash out contrast).
+// Gradients come from the unrotated coordinates so mips and anisotropic
+// filtering stay correct across the cell borders.
+vec2 h22(vec2 p) {
+  p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+  return fract(sin(p) * 43758.5453);
+}
+vec4 stoch(sampler2D t, vec2 p, bool isNormal) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 dx = dFdx(p), dy = dFdy(p);
+  vec3 acc = vec3(0.0); float ws = 0.0, w2 = 0.0;
+  for (int b = 0; b < 2; ++b)
+    for (int a = 0; a < 2; ++a) {
+      vec2 cell = i + vec2(a, b);
+      vec2 h = h22(cell);
+      float ang = h.x * 6.2831853, cs = cos(ang), sn = sin(ang);
+      mat2 R = mat2(cs, sn, -sn, cs);
+      vec2 q = R * p + h * 7.0;
+      vec2 d = abs(f - vec2(a, b));
+      vec2 wv = 1.0 - d;
+      float w = wv.x * wv.y; w = w * w * (3.0 - 2.0 * w);
+      vec3 s = textureGrad(t, q, R * dx, R * dy).rgb;
+      if (isNormal) { // rotate the tangent-plane tilt back with the cell
+        vec2 xy = (s.xy - 0.5) * 2.0;
+        xy = vec2(cs * xy.x + sn * xy.y, -sn * xy.x + cs * xy.y);
+        s = vec3(xy * 0.5 + 0.5, s.z);
+      }
+      acc += w * s; ws += w; w2 += w * w;
+    }
+  vec3 m = acc / ws;
+  vec3 r = (m - 0.5) / max(sqrt(w2) / ws, 0.5) + 0.5; // keep the contrast
+  return vec4(clamp(r, 0.0, 1.0), 1.0);
+}
+// Only the scales that contribute at this distance are sampled (the near one
+// fades out by 140 m, the far one fades in from 25 m).
 vec3 tex2(sampler2D t, vec2 p, float dist) {
-  vec2 q = vec2(p.x * 0.8 - p.y * 0.6, p.x * 0.6 + p.y * 0.8);
-  vec3 a = texture(t, p / 2.6).rgb * texture(t, q / 11.0).rgb * 2.0;
-  vec3 b = texture(t, p / 23.0).rgb;
-  return mix(a, b, smoothstep(30.0, 160.0, dist));
+  float k = smoothstep(25.0, 140.0, dist);
+  vec3 a = k < 0.999 ? stoch(t, p / 3.2, false).rgb : vec3(0.0);
+  vec3 b = k > 0.001 ? stoch(t, p / 21.0, false).rgb : vec3(0.0);
+  return mix(a, b, k);
 }
 vec2 nrm2(sampler2D t, vec2 p, float dist) {
-  vec2 q = vec2(p.x * 0.8 - p.y * 0.6, p.x * 0.6 + p.y * 0.8);
-  return (texture(t, p / 2.6).xy + texture(t, q / 7.0).xy - 1.0) * (1.0 - smoothstep(20.0, 90.0, dist));
+  float k = smoothstep(25.0, 140.0, dist), fade = 1.0 - smoothstep(30.0, 150.0, dist);
+  if (fade <= 0.001) return vec2(0.0);
+  vec2 a = k < 0.999 ? stoch(t, p / 3.2, true).xy - 0.5 : vec2(0.0);
+  vec2 b = k > 0.001 ? stoch(t, p / 21.0, true).xy - 0.5 : vec2(0.0);
+  return mix(a, b * 0.6, k) * 2.0 * fade;
 }
 vec3 filmic(vec3 x) { // ACES fit (Narkowicz)
   return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
@@ -219,7 +258,9 @@ void main() {
     // colour turns brown (tracks, bare patches), grass elsewhere.
     float rockW = smoothstep(0.18, 0.42, slope + 0.5 * (gn(p / 31.0) - 0.5));
     float dirtW = smoothstep(-0.02, 0.10, v_color.r - v_color.g * 0.92) * (1.0 - rockW);
-    vec3 a0 = tex2(u_t0, p, dist), a1 = tex2(u_t1, p, dist), a2 = tex2(u_t2, p, dist);
+    vec3 a0 = (rockW < 0.999 && dirtW < 0.999) ? tex2(u_t0, p, dist) : vec3(0.0);
+    vec3 a1 = rockW > 0.001 ? tex2(u_t1, p, dist) : vec3(0.0);
+    vec3 a2 = dirtW > 0.001 ? tex2(u_t2, p, dist) : vec3(0.0);
     vec3 alb = mix(mix(a0, a2, dirtW), a1, rockW);
     // Keep the cover's hue (green fields, brown tracks); take the brightness
     // detail from the photo, and its own colour only on rock and dirt.
@@ -229,7 +270,14 @@ void main() {
     cover = mix(vec3(dot(cover, vec3(0.30, 0.59, 0.11))), cover, 0.7); // calmer saturation
     float own = max(rockW * 0.8, dirtW * 0.45);
     base = mix(cover * (al / 0.18), alin * 1.1, own);
-    vec2 nm = mix(mix(nrm2(u_n0, p, dist), nrm2(u_n2, p, dist), dirtW), nrm2(u_n1, p, dist), rockW);
+    // Macro variation, 50 to 200 m: brightness and a warm/cool hue drift, so
+    // large fields never read as one repeated swatch.
+    float mA = gn(p / 190.0 + 17.3) - 0.5, mB = gn(p / 67.0 + 41.7) - 0.5;
+    base *= (1.0 + 0.55 * mA + 0.35 * mB) * vec3(1.0 + 0.20 * mA, 1.0 + 0.05 * mB, 1.0 - 0.22 * mA);
+    vec2 n0 = (rockW < 0.999 && dirtW < 0.999) ? nrm2(u_n0, p, dist) : vec2(0.0);
+    vec2 n1 = rockW > 0.001 ? nrm2(u_n1, p, dist) : vec2(0.0);
+    vec2 n2 = dirtW > 0.001 ? nrm2(u_n2, p, dist) : vec2(0.0);
+    vec2 nm = mix(mix(n0, n2, dirtW), n1, rockW);
     n = normalize(n + vec3(nm.x, nm.y, 0.0) * 1.1);
     wrap = clamp(dot(n, sun) * 0.45 + 0.55, 0.0, 1.0); wrap *= wrap;
   } else if (u_terrain > 0.5) {

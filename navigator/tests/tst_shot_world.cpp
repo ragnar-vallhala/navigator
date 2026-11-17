@@ -46,6 +46,14 @@ private slots:
         QImage im = r->grabFrame();
         const QString fn = QString("%1/world_%2_%3.png").arg(out, id, proto ? "after" : "before");
         QVERIFY(!im.isNull()); QVERIFY(im.save(fn)); qInfo("saved %s", qPrintable(fn));
+        QElapsedTimer tm; tm.start();
+        for (int i = 0; i < 20; ++i) { r->setSnapshot(s); (void)r->grabFrame(); }
+        qInfo("FRAMETIME %s proto=%d %.1f ms/frame", qPrintable(id), proto, tm.elapsed() / 20.0);
+        // high view: 100 m up, looking across the field
+        s.pos_w = {0, 0, -(gz + 100.0f)}; r->cam_radius_ = 6.0f; r->cam_pitch_ = 0.55f;
+        for (int i = 0; i < 6; ++i) { r->setSnapshot(s); QTest::qWait(60); }
+        QImage hi = r->grabFrame();
+        QVERIFY(hi.save(QString("%1/world_%2_%3_high.png").arg(out, id, proto ? "after" : "before")));
       }
     }
   }
