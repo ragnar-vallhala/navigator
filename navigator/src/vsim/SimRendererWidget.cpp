@@ -344,7 +344,7 @@ float shadowMapFactor(vec3 wpos, vec3 nrm, vec3 lightDir) {
   if (dot(ng, n) < 0.0) ng = -ng;
   float ndg = clamp(dot(ng, normalize(lightDir)), 0.0, 1.0);
   float sinG = sqrt(max(1.0 - ndg * ndg, 0.0));
-  vec3 wp = wpos + ng * (0.03 + 0.127 * 1.0 * sinG);
+  vec3 wp = wpos + ng * (0.03 + 0.127 * sinG);
   vec4 lp = u_lightvp * vec4(wp, 1.0);
   vec3 p = lp.xyz / lp.w * 0.5 + 0.5;
   // Receiver-plane depth: how the fragment's own light-space depth changes per
