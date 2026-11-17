@@ -135,6 +135,45 @@ private slots:
     QCOMPARE(chaseNearPlane(std::nanf(""), 0.25f), 0.25f);
   }
 
+  // The engine rests the vehicle with its rotor-hub plane (body z = 0) on the
+  // ground and knows nothing of legs or arms below it, so the lowest point of
+  // the drawn body must be at z = 0: lower sinks into the ground, higher floats.
+  void lowestPointRestsOnTheGround() {
+    for (const Row &r : kRows) {
+      const DroneModel m = buildDroneModel(inputFor(r));
+      float lowest = -1e30f;
+      for (size_t v = 0; v < m.body.vertexCount(); ++v)
+        lowest = std::max(lowest, m.body.data[v * 9 + 2]); // z is down
+      QVERIFY2(std::fabs(lowest) < 1e-3f, r.id);
+      // props stay above the body's feet
+      for (int i = 0; i < 4; ++i)
+        QVERIFY2(m.hub[i][2] < 0.0f, r.id);
+    }
+  }
+
+  // The big airframes stand on four legs; the small ones do not, and the
+  // whoop has a canopy shell, so no two classes build the same body.
+  void legsAndCanopyChangeTheBody() {
+    auto body = [](const char *id) {
+      for (const Row &r : kRows)
+        if (std::string(r.id) == id)
+          return buildDroneModel(inputFor(r));
+      return DroneModel{};
+    };
+    // four rubber feet stand on the ground plane and the rest is lifted clear
+    for (const char *id : {"7in", "10in"}) {
+      const DroneModel m = body(id);
+      int feet = 0;
+      for (size_t v = 0; v < m.body.vertexCount(); ++v)
+        if (std::fabs(m.body.data[v * 9 + 2]) < 1e-4f)
+          ++feet;
+      QVERIFY2(feet >= 4 * 8, id); // four rubber feet on the ground plane
+      QVERIFY2(m.bmin[2] < -0.1f, id); // lifted by the leg height: props well up
+    }
+    QVERIFY(body("whoop65").body.vertexCount() > 100);
+    QVERIFY(body("7in").body.vertexCount() > body("5in").body.vertexCount());
+  }
+
   void trianglesAndNormals() {
     for (const Row &r : kRows) {
       const DroneModel m = buildDroneModel(inputFor(r));
