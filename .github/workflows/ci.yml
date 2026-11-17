@@ -21,15 +21,16 @@
 # misread: if a bumped pin brings an incompatible VAYU_SITL_ABI_VERSION, the
 # module refuses to load and the SITL cases fail loudly.
 #
-# Slowest job here at ~14 min, nearly all of it Qt6 + assimp apt install and a
-# cold compile. Caching those is the real win and is not attempted yet.
+# The Qt6 build is shared by three parallel jobs (build + ctest, the Xvfb GL
+# tests, clang-tidy), each building navigator/build-tidy under ccache; see the
+# comment on the `navigator` job for why that, and not an artifact hand-off.
 
 name: ci
 
 # Required checks report on every PR, docs-only ones included: a required
 # check that never reports blocks the merge forever, which is what
 # `paths-ignore` would do here. Docs-only changes are instead detected by the
-# `changes` job, and the build jobs skip -- which `CI required` counts as ok.
+# `changes` job, and the build jobs skip -- which `CI required` accepts only when `changes` said so.
 on:
   push:
     branches: [main, stable]
@@ -74,8 +75,17 @@ jobs:
           fetch-depth: 0
       - run: tools/dev/lint_commits.sh "origin/${{ github.base_ref }}..HEAD"
 
+  # The Qt6 build and the ctest cases. clang-tidy and the xcb/Xvfb GL tests
+  # are their own jobs below and run in parallel with this one. Each of the
+  # three builds navigator/build-tidy on its own runner through the qt-build
+  # local action, with ccache: the alternative, one build job handing its tree
+  # to the others as an artifact, would make the 5 min GL job wait for the
+  # build and move a multi-hundred-MB tree through artifact storage twice, to
+  # save compile time ccache already saves. The cost of this layout is three
+  # apt installs (~1 min each) and a cold-cache first run that compiles three
+  # times in parallel.
   navigator:
-    name: ci (Qt6 build + tests + clang-tidy)
+    name: Qt6 build + ctest
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
@@ -83,101 +93,10 @@ jobs:
       - uses: actions/checkout@v5
         with:
           submodules: recursive
-      - name: Install Qt6 + assimp
-        # The runner's apt mirror has hung this step for 30+ minutes more than
-        # once (cancel + rerun fixed it): bound every attempt and retry.
-        timeout-minutes: 20
-        run: |
-          apt_retry() { # bounded attempts: a hung mirror must not eat the job
-            for a in 1 2 3; do
-              sudo timeout -k 10 300 apt-get -o Acquire::Retries=3 \
-                -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
-                -o DPkg::Lock::Timeout=120 "$@" && return 0
-              echo "apt-get $1 failed or timed out (attempt $a), retrying"
-              # a killed install leaves dpkg interrupted
-              sudo dpkg --configure -a || true
-              # the runner could not resolve the default Ubuntu mirror
-              # hostnames (DNS): retry through a different mirror
-              sudo sed -i -E 's#(mirror\+file:/etc/apt/apt-mirrors\.txt|https?://(azure\.archive|security|archive)\.ubuntu\.com/ubuntu/?)#http://mirrors.edge.kernel.org/ubuntu/#g' \
-                /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list \
-                /etc/apt/sources.list 2>/dev/null || true
-              sleep 10
-            done
-            return 1
-          }
-          apt_retry update
-          # libpulse-dev is optional to the build (find_library, degrades
-          # gracefully) but is installed so CI compiles the same audio path a
-          # developer machine does, rather than a variant nobody runs.
-          apt_retry install -y cmake clang-tidy-18 jq \
-            qt6-base-dev qt6-base-private-dev qt6-base-dev-tools qt6-serialport-dev \
-            libgl1-mesa-dev libassimp-dev libpulse-dev python3-numpy python3-pytest \
-            xvfb libgl1-mesa-dri libxkbcommon-x11-0 libxcb-icccm4 \
-            libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 \
-            libxcb-xkb1
-      - name: Fetch the firmware SITL SDK
-        env:
-          # The firmware version this GCS is built and tested against. Bumping
-          # it is a deliberate, reviewable commit -- which is the point of
-          # pinning: a green build here stays green, and a firmware change
-          # cannot turn this repo red without someone choosing it.
-          #
-          # The cost is the mirror of that: drift is not detected until the
-          # bump. If the firmware raises VAYU_SITL_ABI_VERSION, nothing here
-          # notices until this line moves, and then the module refuses to load
-          # and the SITL cases fail loudly -- which is the right place to find
-          # out, but not the earliest one.
-          VAYU_FW_VERSION: v0.2.1
-          # vayu is private: see the header. Read-only, vayu Contents only.
-          GH_TOKEN: ${{ secrets.VAYU_RELEASE_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${GH_TOKEN}" ]; then
-            echo "::error::VAYU_RELEASE_TOKEN is not set, or this run cannot see" \
-                 "secrets (a pull request from a fork). vayu is private, so the" \
-                 "SITL SDK cannot be fetched without it."
-            exit 1
-          fi
-          ASSET="vayu-sitl-sdk-${VAYU_FW_VERSION}-linux-x86_64.tar.gz"
-          gh release download "${VAYU_FW_VERSION}" \
-            --repo ragnar-vallhala/vayu --pattern "${ASSET}"
-          tar xzf "$ASSET"
-          echo "engine build id: $(cat vayu-sitl-sdk/BUILD_ID)"
-          # The stamp must be the pinned tag. If it is a bare commit hash the
-          # asset came from the rolling release, meaning the pin silently did
-          # not take.
-          grep -q "^${VAYU_FW_VERSION} " vayu-sitl-sdk/BUILD_ID \
-            || { echo "SDK is not ${VAYU_FW_VERSION}"; exit 1; }
-          # Named explicitly rather than trusted to a default: if the layout
-          # ever changes, fail here with a clear message instead of silently
-          # configuring SITL off and losing the coverage this job exists for.
-          test -f vayu-sitl-sdk/include/vayu_sitl_abi.h
-          test -f vayu-sitl-sdk/lib/libvayu_sitl.so
-          test -x vayu-sitl-sdk/bin/vayu_sitl_rtos
-
-      - name: Configure + build
-        # Grass/flora is off by default, which leaves GpuGrass.cpp in no
-        # database at all; on here so the analysis below sees it.
-        run: |
-          cmake -S navigator -B navigator/build-tidy \
-                -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DNAVIGATOR_SIM_GRASS=ON
-          cmake --build navigator/build-tidy -j"$(nproc)"
-          # The headless mesh tool is the one source neither job's main
-          # database reaches; it needs the same Qt6 + assimp already installed
-          # here, and a configure is enough.
-          cmake -S navigator/headless-sdk/cpp/worldmesh \
-                -B navigator/headless-sdk/cpp/worldmesh/build \
-                -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-      - name: Fail if SITL silently turned itself off
-        # The CMake gate degrades to a warning when the SDK is missing, which
-        # is right for a developer and wrong for this job: a fetch that half
-        # worked would leave the simulator sources uncompiled and everything
-        # still green. NAVIGATOR_HAS_SITL is the compile definition the app
-        # sets only when SITL is really on.
-        run: |
-          grep -q 'NAVIGATOR_HAS_SITL' navigator/build-tidy/compile_commands.json \
-            || { echo "SITL is off -- the SDK was not picked up"; exit 1; }
-
+      - uses: ./.github/actions/qt-build
+        with:
+          vayu-token: ${{ secrets.VAYU_RELEASE_TOKEN }}
+          extra-packages: python3-numpy python3-pytest
       - name: Headless SDK unit tests (wire drift vs vsim_proto.h)
         # navigator/headless-sdk hand-mirrors the vsim wire layer in Python.
         # tests/unit/test_wire_drift.py parses the static_assert sizes out of
@@ -218,8 +137,8 @@ jobs:
         # ctest counts a QtTest SKIP as Passed, so "Passed" above can mean "ran
         # nothing". Print which cases skipped (from the full per-test log ctest
         # keeps) so that is visible in this log. Informational: it never fails
-        # the job -- the xcb steps below are what enforce 0 skipped for the
-        # cases that can run here. (The tests that self-skip on offscreen
+        # the job -- the xcb steps in the `gl` job are what enforce 0 skipped
+        # for the cases that can run here. (The tests that self-skip on offscreen
         # either run under xcb below, or skip because the engine is absent.)
         if: ${{ !cancelled() }}
         run: |
@@ -251,6 +170,28 @@ jobs:
             timeout 300 gdb -batch -ex run -ex bt -ex 'thread apply all bt 12' "$exe" 2>&1 | tail -80 || true
             echo "::endgroup::"
           done
+
+  # The xcb-on-Xvfb tests: the cases ctest can only report as Passed having
+  # skipped (it forces the offscreen platform). Own job so the 5-6 min
+  # tst_world_change_floor runs beside the build/ctest and clang-tidy jobs
+  # instead of after them.
+  gl:
+    name: Xvfb GL tests (xcb, software GL)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: ./.github/actions/qt-build
+        with:
+          vayu-token: ${{ secrets.VAYU_RELEASE_TOKEN }}
+      - name: Engine module beside the test binaries
+        # What the ctest step in the navigator job does before it runs; the
+        # tests below also get the module path through VAYU_SITL_MODULE, this
+        # keeps the first-search-path lookup identical to there.
+        run: cp vayu-sitl-sdk/lib/libvayu_sitl.so navigator/build-tidy/
       - name: GL context test (xcb on Xvfb, software GL)
         # tst_sim_gl_context needs a real GL platform and skips itself on
         # offscreen, which is what the ctest step above forces on every case --
@@ -421,13 +362,63 @@ jobs:
             echo "RESULT $name${fn:+::$fn}: $res (${secs}s) ${totals:-no totals line}"
           done
           exit $failed
+
+  # clang-tidy over the same database. On a pull request only the files the PR
+  # touches (plus the sources that include a touched header), see
+  # tools/dev/tidy_changed_files.sh; on a push to main or stable the full pass
+  # runs, which is what catches whatever the partial one cannot see.
+  tidy:
+    name: clang-tidy
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: ./.github/actions/qt-build
+        with:
+          vayu-token: ${{ secrets.VAYU_RELEASE_TOKEN }}
+          extra-packages: clang-tidy-18 jq
+      - name: Configure the headless mesh tool database
+        # The headless mesh tool is the one source the main database does not
+        # reach; it needs the same Qt6 + assimp already installed here, and a
+        # configure is enough.
+        run: |
+          cmake -S navigator/headless-sdk/cpp/worldmesh \
+                -B navigator/headless-sdk/cpp/worldmesh/build \
+                -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+      - name: Choose the files to analyse
+        id: scope
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" != pull_request ]; then
+            echo "mode=full" >> "$GITHUB_OUTPUT"
+            echo "full pass: not a pull request"; exit 0
+          fi
+          list="$(tools/dev/tidy_changed_files.sh "$BASE" HEAD)"
+          if [ "$list" = FULL ]; then
+            echo "mode=full" >> "$GITHUB_OUTPUT"
+            echo "full pass: the change touches build or analysis configuration"; exit 0
+          fi
+          printf '%s\n' "$list" | grep . > "$RUNNER_TEMP/tidy-files.txt" || : > "$RUNNER_TEMP/tidy-files.txt"
+          echo "mode=partial" >> "$GITHUB_OUTPUT"
+          echo "partial pass over $(wc -l < "$RUNNER_TEMP/tidy-files.txt") file(s):"
+          cat "$RUNNER_TEMP/tidy-files.txt"
       - name: clang-tidy (Navigator)
         # AUTOMOC generates the tst_*.moc the tests include, so this needs a
-        # real build, not just a configure. With SITL on, the database covers
-        # the simulator sources too -- SimWorker, SitlModule, SimulatorWidget.
+        # real build, not just a configure (done by qt-build above). With SITL
+        # on, the database covers the simulator sources too -- SimWorker,
+        # SitlModule, SimulatorWidget.
         env:
           CLANG_TIDY: clang-tidy-18
         run: |
+          if [ "${{ steps.scope.outputs.mode }}" = partial ]; then
+            export TIDY_FILES="$RUNNER_TEMP/tidy-files.txt"
+          fi
           tools/dev/run_clang_tidy.sh \
             navigator/build-tidy navigator/headless-sdk/cpp/worldmesh/build
 
@@ -620,19 +611,55 @@ jobs:
             cat "$t.out.txt" "$t.stdout.txt" 2>&1 | tail -80
           done
 
-  # The one check branch protection requires: a job that skipped (docs-only
-  # change, or commit lint on a push) is ok, anything else that did not
-  # succeed fails it.
+  # The one check branch protection requires. Every job in `needs` must have
+  # ended acceptably; a cancelled, failed or timed-out job fails it, and so
+  # does a skip nobody intended. "Skipped" is accepted in exactly two places:
+  #   - commit-lint, which only runs on pull requests (skipped on a push);
+  #   - the five build jobs, only when `changes` succeeded AND reported
+  #     code=false (a docs-only change). With code=true they must all be
+  #     `success`: a build job that is skipped then, because something it
+  #     needed failed or the run was cancelled, blocks.
+  # `changes` itself must be `success` always. Its output is empty if it did
+  # not run, which matches neither 'true' nor 'false' and so also blocks.
   ci-required:
     name: CI required
     runs-on: ubuntu-latest
     if: always()
-    needs: [changes, commit-lint, navigator, workspace, windows]
+    needs: [changes, commit-lint, navigator, gl, tidy, workspace, windows]
     steps:
       - env:
-          RESULTS: ${{ join(needs.*.result, ' ') }}
+          EVENT: ${{ github.event_name }}
+          CODE: ${{ needs.changes.outputs.code }}
+          R_CHANGES: ${{ needs.changes.result }}
+          R_LINT: ${{ needs.commit-lint.result }}
+          R_NAVIGATOR: ${{ needs.navigator.result }}
+          R_GL: ${{ needs.gl.result }}
+          R_TIDY: ${{ needs.tidy.result }}
+          R_WORKSPACE: ${{ needs.workspace.result }}
+          R_WINDOWS: ${{ needs.windows.result }}
         run: |
-          echo "job results: $RESULTS"
-          for r in $RESULTS; do
-            case "$r" in success|skipped) ;; *) exit 1 ;; esac
-          done
+          fail=0
+          check() { # name result skip-is-ok(yes|no)
+            if [ "$2" = success ] || { [ "$2" = skipped ] && [ "$3" = yes ]; }; then
+              echo "ok      $1: $2"
+            else
+              echo "BLOCKED $1: $2"; fail=1
+            fi
+          }
+          echo "event=$EVENT code=$CODE"
+          check changes "$R_CHANGES" no
+          # skipped is intended off pull requests only
+          if [ "$EVENT" = pull_request ]; then lint_skip=no; else lint_skip=yes; fi
+          check commit-lint "$R_LINT" "$lint_skip"
+          # skipped is intended only for a docs-only change
+          if [ "$R_CHANGES" = success ] && [ "$CODE" = false ]; then
+            build_skip=yes
+          else
+            build_skip=no
+          fi
+          check navigator "$R_NAVIGATOR" "$build_skip"
+          check gl "$R_GL" "$build_skip"
+          check tidy "$R_TIDY" "$build_skip"
+          check workspace "$R_WORKSPACE" "$build_skip"
+          check windows "$R_WINDOWS" "$build_skip"
+          exit $fail
