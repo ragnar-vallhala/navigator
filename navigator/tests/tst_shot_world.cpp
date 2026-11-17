@@ -31,7 +31,7 @@ private slots:
         qputenv("NAV_GFX_PROTO", proto ? "1" : "0");
         QWidget host; auto *r = new SimRendererWidget();
         auto *box = QWidget::createWindowContainer(r, &host);
-        box->setFixedSize(960, 540); host.resize(960, 540); host.show();
+        const int W = qEnvironmentVariableIntValue("SHOT_W") ? qEnvironmentVariableIntValue("SHOT_W") : 960, H = W * 9 / 16; box->setFixedSize(W, H); host.resize(W, H); host.show();
         QVERIFY(QTest::qWaitForWindowExposed(r));
         for (int cy = -2; cy <= 1; ++cy)
           for (int cx = -2; cx <= 1; ++cx) {
@@ -47,8 +47,8 @@ private slots:
         const QString fn = QString("%1/world_%2_%3.png").arg(out, id, proto ? "after" : "before");
         QVERIFY(!im.isNull()); QVERIFY(im.save(fn)); qInfo("saved %s", qPrintable(fn));
         QElapsedTimer tm; tm.start();
-        for (int i = 0; i < 20; ++i) { r->setSnapshot(s); (void)r->grabFrame(); }
-        qInfo("FRAMETIME %s proto=%d %.1f ms/frame", qPrintable(id), proto, tm.elapsed() / 20.0);
+        for (int i = 0; i < 60; ++i) { r->setSnapshot(s); (void)r->grabFrame(); }
+        qInfo("FRAMETIME %s proto=%d %.1f ms/frame", qPrintable(id), proto, tm.elapsed() / 60.0);
         // high view: 100 m up, looking across the field
         s.pos_w = {0, 0, -(gz + 100.0f)}; r->cam_radius_ = 6.0f; r->cam_pitch_ = 0.55f;
         for (int i = 0; i < 6; ++i) { r->setSnapshot(s); QTest::qWait(60); }

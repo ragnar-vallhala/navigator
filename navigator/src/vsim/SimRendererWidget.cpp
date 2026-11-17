@@ -214,7 +214,12 @@ vec4 stoch(sampler2D t, vec2 p, bool isNormal) {
       acc += w * s; ws += w; w2 += w * w;
     }
   vec3 m = acc / ws;
-  vec3 r = (m - 0.5) / max(sqrt(w2) / ws, 0.5) + 0.5; // keep the contrast
+  // Restore the contrast the blend loses, around the texture's TRUE mean (the
+  // 1x1 mip), not 0.5: on a dark texture a 0.5 pivot darkens every cell border
+  // and draws the cell grid as a checkerboard.
+  vec3 mean = textureLod(t, vec2(0.5), 10.0).rgb;
+  if (isNormal) mean = vec3(0.5, 0.5, mean.z);
+  vec3 r = (m - mean) / max(sqrt(w2) / ws, 0.5) + mean;
   return vec4(clamp(r, 0.0, 1.0), 1.0);
 }
 // Only the scales that contribute at this distance are sampled (the near one
@@ -1749,7 +1754,18 @@ void SimRendererWidget::drawLit(const Mesh &m, const QMatrix4x4 &view,
   progLit_->setUniformValue(ul_bands_, bands);
   glActiveTexture(GL_TEXTURE1);
   glBindTexture(GL_TEXTURE_2D, shadowTex_);
-  progLit_->setUniformValue(ul_proto_, protoTex_[0] ? float(qEnvironmentVariableIntValue("NAV_GFX_PROTO")) : 0.0f);
+  {
+    // Quality: High (full look) except on a CPU rasteriser, where it costs 4 to
+    // 5x; NAV_GFX_PROTO=0/1 forces it.
+    static int soft = -1; // cached: 1 = CPU rasteriser
+    if (soft < 0) {
+      const QByteArray r(reinterpret_cast<const char *>(glGetString(GL_RENDERER)));
+      soft = (r.contains("llvmpipe") || r.contains("softpipe") || r.contains("swrast")) ? 1 : 0;
+    }
+    const bool forced = qEnvironmentVariableIsSet("NAV_GFX_PROTO");
+    const bool high = forced ? qEnvironmentVariableIntValue("NAV_GFX_PROTO") != 0 : soft == 0;
+    progLit_->setUniformValue(ul_proto_, protoTex_[0] && high ? 1.0f : 0.0f);
+  }
   for (int i = 0; i < 6; ++i) {
     progLit_->setUniformValue(ul_ptex_[i], 2 + i);
     glActiveTexture(GL_TEXTURE2 + i);
