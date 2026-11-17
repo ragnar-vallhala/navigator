@@ -69,7 +69,7 @@ struct FieldParams {
   // elevation the raw field has there; 0 disables. Blends out over 1.5x radius.
   float flatRadiusM = 0.0f;
   // Peak height [m] of small-scale ground relief (hummocks and hollows with a
-  // 8..40 m wavelength) added on top of the field; 0 = none (default). Kept at
+  // 15..30 m wavelength) added on top of the field; 0 = none (default). Kept at
   // centimetre to a few decimetres so the slope stays gentle; ignored on the
   // spawn pad and for dune worlds.
   float reliefM = 0.0f;
