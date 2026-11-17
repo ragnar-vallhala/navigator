@@ -765,8 +765,10 @@ void TstProcgen::fineReliefIsBoundedGentleAndOptIn() {
   rel.reliefM = 0.3f;
   const TerrainField fb(base), fr(rel), fr2(rel);
   float maxDiff = 0.0f, maxSlope = 0.0f, minDiff = 1.0f;
-  for (float x = -300.0f; x <= 300.0f; x += 3.7f)
-    for (float y = -300.0f; y <= 300.0f; y += 3.7f) {
+  for (int ix = 0; ix <= 162; ++ix)
+    for (int iy = 0; iy <= 162; ++iy) {
+      const float x = -300.0f + 3.7f * static_cast<float>(ix);
+      const float y = -300.0f + 3.7f * static_cast<float>(iy);
       const float d = fr.height(x, y) - fb.height(x, y);
       maxDiff = std::max(maxDiff, d);
       minDiff = std::min(minDiff, d);
@@ -787,8 +789,10 @@ void TstProcgen::fineReliefIsBoundedGentleAndOptIn() {
   FieldParams duneOff = dune;
   duneOff.reliefM = 0.0f;
   const TerrainField fd(dune), fdo(duneOff);
-  for (float x = -80.0f; x <= 80.0f; x += 9.1f)
+  for (int i = 0; i <= 17; ++i) {
+    const float x = -80.0f + 9.1f * static_cast<float>(i);
     QCOMPARE(fd.height(x, 5.0f), fdo.height(x, 5.0f));
+  }
   // the presets: only the hilly ones ask for relief
   for (const char *id : {"flat", "racing", "yard", "desert"}) {
     PresetData d;
