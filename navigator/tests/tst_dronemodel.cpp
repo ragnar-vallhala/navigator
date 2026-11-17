@@ -118,6 +118,23 @@ private slots:
     QCOMPARE(d.min, 0.5f);
   }
 
+  // Zoomed right in, the near plane must stay inside the gap between the eye
+  // and the nearest part of the model, or the drone is clipped away.
+  void chaseNearPlaneClearsTheModelAtMinZoom() {
+    for (const Row &r : kRows) {
+      const DroneModel m = buildDroneModel(inputFor(r));
+      const OrbitRange o = orbitRangeFor(m);
+      float half = m.visualPropRadius;
+      for (const auto &h : m.hub)
+        half = std::max(half, std::hypot(h[0], h[1]) + m.visualPropRadius);
+      const float nearM = chaseNearPlane(o.min, 0.25f);
+      QVERIFY2(nearM < o.min - half * 0.5f, r.id); // nearest geometry is ~half the span away
+      QVERIFY2(nearM > 0.0f, r.id);
+    }
+    QCOMPARE(chaseNearPlane(4.0f, 0.25f), 0.25f); // far out: unchanged
+    QCOMPARE(chaseNearPlane(std::nanf(""), 0.25f), 0.25f);
+  }
+
   void trianglesAndNormals() {
     for (const Row &r : kRows) {
       const DroneModel m = buildDroneModel(inputFor(r));

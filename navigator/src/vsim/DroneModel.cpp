@@ -284,6 +284,12 @@ OrbitRange orbitRangeFor(const DroneModel &m) {
   return r;
 }
 
+float chaseNearPlane(float radius, float maxNear) {
+  if (!std::isfinite(radius) || radius <= 0.0f)
+    return maxNear;
+  return std::clamp(radius * 0.25f, std::min(0.01f, maxNear), maxNear);
+}
+
 std::array<float, 3> propTipColor(int spinSign) {
   return spinSign >= 0 ? std::array<float, 3>{1.0f, 0.85f, 0.10f}  // CCW yellow
                        : std::array<float, 3>{0.10f, 0.85f, 1.0f}; // CW cyan

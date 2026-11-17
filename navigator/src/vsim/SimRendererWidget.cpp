@@ -1125,7 +1125,9 @@ void SimRendererWidget::resizeGL(int, int) {
 }
 
 void SimRendererWidget::updateProjection() {
-  const float nearM = (fpv_ || downCam_) ? kNearLensM : kNearChaseM;
+  const float nearM = (fpv_ || downCam_)
+                          ? kNearLensM
+                          : vsim::chaseNearPlane(cam_radius_, kNearChaseM);
   if (nearM == nearCur_ || fbH_ <= 0)
     return;
   nearCur_ = nearM;

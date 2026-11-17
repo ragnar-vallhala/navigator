@@ -84,6 +84,11 @@ struct OrbitRange {
 };
 OrbitRange orbitRangeFor(const DroneModel &m);
 
+// Near clip plane for the chase camera at orbit distance `radius`: a quarter of
+// the distance, never beyond `maxNear`, so a camera zoomed right up to a small
+// model does not cut it off (a fixed near plane would clip a whoop whole).
+float chaseNearPlane(float radius, float maxNear);
+
 // Colours shared with the renderer (blur disc tint).
 std::array<float, 3> propTipColor(int spinSign);
 
