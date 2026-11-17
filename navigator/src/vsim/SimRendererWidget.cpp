@@ -336,7 +336,15 @@ float shadowMapFactor(vec3 wpos, vec3 nrm, vec3 lightDir) {
   // Normal-offset: push the receiver off its own surface — more at grazing sun
   // angles where one shadow texel covers many fragments — so the depth compare
   // samples clear of the caster.
-  vec3 wp = wpos + n * (0.05 + 0.35 * (1.0 - ndl));
+  // The interpolated normal is smooth but the mesh is faceted: on a steep face
+  // they differ enough that a smooth-normal offset can push the lookup INTO the
+  // facet. Offset along the true facet normal (screen derivatives) instead, by a
+  // few shadow texels (0.127 m = 260 m / 2048) scaled by sin(angle to the sun).
+  vec3 ng = normalize(cross(dFdx(wpos), dFdy(wpos)));
+  if (dot(ng, n) < 0.0) ng = -ng;
+  float ndg = clamp(dot(ng, normalize(lightDir)), 0.0, 1.0);
+  float sinG = sqrt(max(1.0 - ndg * ndg, 0.0));
+  vec3 wp = wpos + ng * (0.03 + 0.127 * 1.0 * sinG);
   vec4 lp = u_lightvp * vec4(wp, 1.0);
   vec3 p = lp.xyz / lp.w * 0.5 + 0.5;
   // Receiver-plane depth: how the fragment's own light-space depth changes per
@@ -363,7 +371,12 @@ float shadowMapFactor(vec3 wpos, vec3 nrm, vec3 lightDir) {
       float ref = p.z + dz.x * float(dx) + dz.y * float(dy);
       s += (ref - bias > d) ? 0.0 : 1.0;
     }
-  return s / 9.0;
+  s /= 9.0;
+  // A facet turned away from the sun is self-shadowed by definition; whether the
+  // map calls it lit or dark flips triangle to triangle on a steep face (hatched
+  // saw-tooth). Leave those to the wrapped diffuse term and fade the map in over
+  // the first few percent of facet N.L; cast shadows on sun-facing ground stay.
+  return mix(1.0, s, smoothstep(0.0, 0.10, ndg));
 }
 float shadowFactor(vec3 wpos, vec3 nrm, vec3 lightDir) {
   return shadowMapFactor(wpos, nrm, lightDir) * droneShadow(wpos, lightDir);
