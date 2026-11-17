@@ -86,6 +86,7 @@ private slots:
   void renderAndCollisionSurfacesAgree();
   void spawnAndPadHeightsMatchCollisionSurface();
   void helipadFootprintsAreLevel();
+  void fineReliefIsBoundedGentleAndOptIn();
 };
 
 void TstProcgen::noiseIsDeterministicAndBounded() {
@@ -748,6 +749,57 @@ void TstProcgen::helipadFootprintsAreLevel() {
   qInfo("helipads checked: %d; footprint violations without the screen: %d",
         total, oldViolations);
   QVERIFY2(oldViolations > 0, "fixture no longer exercises the screen");
+}
+
+
+// Fine relief adds hummocks of at most reliefM on top of the field, with a
+// gentle slope, leaves the spawn pad level, and does nothing unless asked for
+// (flat, racing, yard and dune worlds keep their surface exactly).
+void TstProcgen::fineReliefIsBoundedGentleAndOptIn() {
+  FieldParams base;
+  base.seed = 77u;
+  base.heightM = 12.0f;
+  base.mountainMix = 0.0f;
+  base.flatRadiusM = 10.0f;
+  FieldParams rel = base;
+  rel.reliefM = 0.3f;
+  const TerrainField fb(base), fr(rel), fr2(rel);
+  float maxDiff = 0.0f, maxSlope = 0.0f, minDiff = 1.0f;
+  for (float x = -300.0f; x <= 300.0f; x += 3.7f)
+    for (float y = -300.0f; y <= 300.0f; y += 3.7f) {
+      const float d = fr.height(x, y) - fb.height(x, y);
+      maxDiff = std::max(maxDiff, d);
+      minDiff = std::min(minDiff, d);
+      QCOMPARE(fr.height(x, y), fr2.height(x, y)); // deterministic
+      const float s = std::fabs(fr.height(x + 1.0f, y) - fr.height(x, y)) -
+                      std::fabs(fb.height(x + 1.0f, y) - fb.height(x, y));
+      maxSlope = std::max(maxSlope, s);
+    }
+  QVERIFY(minDiff >= -1e-5f);                 // never digs below the field
+  QVERIFY(maxDiff <= 0.3f + 1e-4f);           // within reliefM
+  QVERIFY(maxDiff > 0.1f);                    // and it actually shows
+  QVERIFY(maxSlope < 0.1f);                   // adds less than 0.1 rise/run
+  QCOMPARE(fr.height(0.0f, 0.0f), fb.height(0.0f, 0.0f)); // pad stays level
+  QCOMPARE(fr.height(6.0f, 3.0f), fb.height(6.0f, 3.0f));
+  // opt-in: default params and a dune world are untouched
+  FieldParams dune = rel;
+  dune.shape = 1;
+  FieldParams duneOff = dune;
+  duneOff.reliefM = 0.0f;
+  const TerrainField fd(dune), fdo(duneOff);
+  for (float x = -80.0f; x <= 80.0f; x += 9.1f)
+    QCOMPARE(fd.height(x, 5.0f), fdo.height(x, 5.0f));
+  // the presets: only the hilly ones ask for relief
+  for (const char *id : {"flat", "racing", "yard", "desert"}) {
+    PresetData d;
+    QVERIFY(buildWorldPreset(id, 5u, d));
+    QCOMPARE(d.field.reliefM, 0.0f);
+  }
+  for (const char *id : {"hills", "alpine", "forest", "meadow"}) {
+    PresetData d;
+    QVERIFY(buildWorldPreset(id, 5u, d));
+    QVERIFY(d.field.reliefM > 0.0f && d.field.reliefM <= 0.3f);
+  }
 }
 
 QTEST_MAIN(TstProcgen)
