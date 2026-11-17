@@ -991,7 +991,13 @@ void SimRendererWidget::setComMarker(const QVector3D &com) {
   update();
 }
 
-void SimRendererWidget::initializeGL() { initResources(); }
+void SimRendererWidget::initializeGL() {
+  // Qt calls this even when the window could not get a context (no GL on this
+  // platform); every GL call below would crash.
+  if (!context() || !context()->isValid())
+    return;
+  initResources();
+}
 
 namespace {
 std::unique_ptr<QOpenGLShaderProgram>
@@ -1106,6 +1112,8 @@ void SimRendererWidget::resizeGL(int, int) {
   // projection aspect need them; input and picking stay in logical pixels.
   fbW_ = std::max(1, int(std::lround(width() * devicePixelRatio())));
   fbH_ = std::max(1, int(std::lround(height() * devicePixelRatio())));
+  if (!context() || !context()->isValid())
+    return; // no GL here: Qt still calls this
   glViewport(0, 0, fbW_, fbH_);
   nearCur_ = 0.0f; // force a rebuild with the new aspect
   updateProjection();
@@ -1212,6 +1220,8 @@ QMatrix4x4 SimRendererWidget::cameraView() const {
 }
 
 void SimRendererWidget::paintGL() {
+  if (!context() || !context()->isValid())
+    return;
   // After a context-gone the resources were released (and the streamed data
   // queued); come back up on whatever context is current. initializeGL does
   // this when Qt makes a new context; this covers a drop that Qt does not
