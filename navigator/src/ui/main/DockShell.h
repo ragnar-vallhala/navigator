@@ -98,6 +98,8 @@ public:
   // on exit.
   void restoreLast();
   void persistLast();
+  // Close the floating panel windows (main window closing); after persistLast.
+  void closeFloating();
 
 signals:
   void panelShown(const QString &id);

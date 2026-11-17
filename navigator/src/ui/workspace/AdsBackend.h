@@ -59,6 +59,7 @@ public:
   void tabPanel(const QString &id, const QString &ontoId) override;
   void setFloatGeometry(const QString &id, const QRect &g) override;
   QAction *viewAction(const QString &id) override;
+  void closeFloating() override;
   int clampFloatingTo(const QList<QRect> &screens) override;
   void setChangeNotifier(std::function<void()> notify) override {
     m_notify = std::move(notify);
