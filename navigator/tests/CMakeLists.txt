@@ -286,6 +286,17 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
   endif()
 endif()
 
+# ---- No OpenGL context: the 3D views show a notice instead of crashing ----
+# Sets QT_XCB_GL_INTEGRATION=none itself; a real check on xcb (an Xvfb).
+find_package(Qt6 REQUIRED COMPONENTS OpenGL OpenGLWidgets)
+navigator_test(tst_gl_unavailable
+    tst_gl_unavailable.cpp
+    ${SRC}/ui/widgets/AttitudeWidget.cpp
+    ${SRC}/ui/widgets/Drone3DWidget.cpp
+    ${SRC}/core/Theme.cpp)
+target_include_directories(tst_gl_unavailable PRIVATE ${SRC}/ui/widgets ${SRC}/core)
+target_link_libraries(tst_gl_unavailable PRIVATE Qt6::OpenGL Qt6::OpenGLWidgets)
+
 # ---- GPU grass respects the ground-cover mask (grass builds only) ----------
 # The mask data checks run anywhere; the blade readback needs a real GL platform
 # (xcb on an Xvfb + LIBGL_ALWAYS_SOFTWARE=1) and skips on offscreen.
