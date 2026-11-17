@@ -17,6 +17,7 @@
 #include "SimulatorWidget.h"
 #include <QThread>
 #include <cmath>
+#include "GlAvailability.h"
 #include "SimPanelsCommon.h"
 #include "../../vsim/FlightEventLog.h"
 #include "../../vsim/ThreadRetire.h"
@@ -2041,7 +2042,7 @@ void SimulatorWidget::syncPipRail() {
 }
 
 QImage SimulatorWidget::grabSimView() {
-  return m_renderer ? m_renderer->grabFrame() : QImage();
+  return m_renderer && glavail::available() ? m_renderer->grabFrame() : QImage();
 }
 
 // ----------------------------------------------------------------------------

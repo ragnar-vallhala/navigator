@@ -16,6 +16,7 @@
  */
 #pragma once
 
+#include "GlAvailability.h"
 #include "NativeClip.h"
 
 #include <QOpenGLFunctions>
@@ -36,11 +37,17 @@
 class GlPaintHost : public QWidget {
 public:
   explicit GlPaintHost(QWidget *parent = nullptr) : QWidget(parent) {
+    auto *l = new QVBoxLayout(this);
+    l->setContentsMargins(0, 0, 0, 0);
+    if (!glavail::available()) {
+      // No GL context can exist here: a window would crash in initializeGL.
+      m_box = glavail::makeNotice(this);
+      l->addWidget(m_box);
+      return;
+    }
     m_win = new Win(this);
     m_box = QWidget::createWindowContainer(m_win, this);
     new NativeClip(m_box, m_win);
-    auto *l = new QVBoxLayout(this);
-    l->setContentsMargins(0, 0, 0, 0);
     l->addWidget(m_box);
   }
   ~GlPaintHost() override {
@@ -53,9 +60,12 @@ public:
   // Repaint the window that holds the pixels. (Named apart from
   // QWidget::update(), which this used to shadow; subclasses call it
   // unqualified.)
-  void updateScene() { m_win->update(); }
+  void updateScene() {
+    if (m_win)
+      m_win->update();
+  }
   // initializeGL() calls of the hosted window (1 for the widget's life).
-  int glInitCount() const { return m_win->inits; }
+  int glInitCount() const { return m_win ? m_win->inits : 0; }
 
 protected:
   virtual void paintScene(QPainter &p) = 0;
@@ -68,12 +78,22 @@ private:
 
   protected:
     void initializeGL() override {
+      // The context can still be missing (the probe passed, the window's own
+      // creation failed); Qt calls this anyway.
+      if (!context() || !context()->isValid())
+        return;
       initializeOpenGLFunctions();
       ++inits;
       glClearColor(0.08f, 0.09f, 0.12f, 1.0f);
     }
-    void resizeGL(int w, int h) override { glViewport(0, 0, w, h); }
+    void resizeGL(int w, int h) override {
+      if (!context() || !context()->isValid())
+        return;
+      glViewport(0, 0, w, h);
+    }
     void paintGL() override {
+      if (!context() || !context()->isValid())
+        return;
       glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
       QPainter p(this);
       m_h->paintScene(p);

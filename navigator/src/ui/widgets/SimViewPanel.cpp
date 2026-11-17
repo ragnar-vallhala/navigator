@@ -16,6 +16,7 @@
  */
 #include "SimViewPanel.h"
 
+#include "GlAvailability.h"
 #include "NativeClip.h"
 #include "SimPanelsCommon.h"
 
@@ -39,10 +40,18 @@ railLay->setContentsMargins(0, 0, 0, 0);
 railLay->setSpacing(4);
 viewLay->addWidget(m_pipRail);
 
+// Without OpenGL the renderers still exist (the rest of the page feeds them)
+// but are never put in a container, so no window is shown and no context is
+// asked for; a notice takes the view's place.
+const bool glOk = glavail::available();
 m_renderer = new vsim::SimRendererWidget();
-m_rendererBox = QWidget::createWindowContainer(m_renderer, viewHost);
+if (glOk) {
+  m_rendererBox = QWidget::createWindowContainer(m_renderer, viewHost);
+  new NativeClip(m_rendererBox, m_renderer); // a short dock area must not let it overflow
+} else {
+  m_rendererBox = glavail::makeNotice(viewHost);
+}
 m_rendererBox->setMinimumSize(300, 300); // narrow enough for a laptop screen
-new NativeClip(m_rendererBox, m_renderer); // a short dock area must not let it overflow
 m_rendererBox->setFocusPolicy(Qt::StrongFocus); // G/R/X/Y/Z/Esc/WASD
 viewLay->addWidget(m_rendererBox, 1);
 
@@ -64,9 +73,14 @@ railLay->addWidget(m_horizonPip);
 m_downRenderer = new vsim::SimRendererWidget();
 m_downRenderer->setDownCam(true);
 m_downRenderer->setWorldVisible(true);
-QWidget *downBox = QWidget::createWindowContainer(m_downRenderer);
+QWidget *downBox = nullptr;
+if (glOk) {
+  downBox = QWidget::createWindowContainer(m_downRenderer);
+  new NativeClip(downBox, m_downRenderer);
+} else {
+  downBox = glavail::makeNotice(nullptr);
+}
 downBox->setMinimumSize(100, 80);
-new NativeClip(downBox, m_downRenderer);
 m_downPip = new PipPane(tr("DOWN CAM"), downBox, 170, m_pipRail);
 railLay->addWidget(m_downPip);
 
