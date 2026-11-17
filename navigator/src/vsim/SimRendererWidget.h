@@ -25,6 +25,7 @@
 #include "GpuGrass.h"
 #endif
 #include "DroneModel.h"
+#include "FarTerrain.h"
 #include "SimWorker.h"
 #include "TrainingCourse.h"
 
@@ -142,7 +143,7 @@ public:
 
   // Far clip [m]. Fog (see drawLit) has fully taken over well before this; the
   // old 200 m clip chopped the terrain off in a hard line against the sky.
-  static constexpr float kFarPlaneM = 3000.0f;
+  static constexpr float kFarPlaneM = 8000.0f;
   // Near clip [m]. A 24-bit depth buffer resolves about d^2 / (near * 2^24) at
   // distance d, so 0.05 m against a 3000 m far plane could not tell surfaces
   // 5 cm apart apart beyond ~200 m (horizon plane vs arena, decals). The chase
@@ -184,6 +185,9 @@ public:
                      const std::vector<QVector3D> &colors);
   void removeWorldChunk(qint64 key);
   void clearWorldChunks();
+  // The streaming biome's field: drives the coarse far-terrain ring beyond the
+  // chunk window and the height-fog reference (null: no ring).
+  void setTerrainField(std::shared_ptr<const procgen::TerrainField> f);
   bool hasWorldChunks() const {
     return !worldChunks_.empty() || !pendingChunkUploads_.empty();
   }
@@ -340,6 +344,7 @@ private:
   bool chunkCpuMode() const; // keep CPU copies of chunks (GLES / forced)
   void eraseChunk(qint64 key); // release + erase (a Mesh dtor frees no GL)
   void eraseAllChunks();
+  void updateFarTerrain(bool showChunks);
 #ifdef VAYU_SIM_GRASS
   void eraseFlora(qint64 key);
   void eraseAllFlora();
@@ -602,6 +607,9 @@ private:
 
   // Imported world mesh (pos+normal interleaved; same deferred-upload path).
   Mesh worldMesh_;
+  Mesh farMesh_;               // far-terrain ring (FarTerrain)
+  FarTerrain farTerrain_;
+  float fogBaseZ_ = 0.0f;      // NED z of the ground under the camera (height fog)
   bool hasWorldMesh_ = false;
   bool worldMeshDirty_ = false;
   // CPU copies, kept (see pendingPos_) so a new context can re-upload them.

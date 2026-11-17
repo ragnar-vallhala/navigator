@@ -903,6 +903,9 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
   if (!endless && m_chunkStreamer.active()) {
     ++m_streamGen; // invalidate in-flight builds
     m_chunkStreamer.deactivate();
+    m_renderer->setTerrainField(nullptr);
+    if (m_downRenderer)
+      m_downRenderer->setTerrainField(nullptr);
     m_chunkCache.clear();
     m_floraCache.clear();
     m_floraShown.clear();
@@ -945,6 +948,9 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
     sc.field = w.field; // user-tuned terrain shape + colour bands
     sc.field.seed = static_cast<uint32_t>(w.proceduralSeed);
     m_chunkStreamer.configure(sc);
+    m_renderer->setTerrainField(m_chunkStreamer.field()); // far-terrain ring
+    if (m_downRenderer)
+      m_downRenderer->setTerrainField(m_chunkStreamer.field());
     m_floraParams = w.flora; // user-tuned grass density / slope / height
     m_floraParams.seed = static_cast<uint32_t>(w.proceduralSeed);
     // The pads set up above sampled the PREVIOUS field (none on a fresh

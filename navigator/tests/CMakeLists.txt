@@ -274,15 +274,16 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
   navigator_test(tst_sim_gl_context
       tst_sim_gl_context.cpp
       ${SRC}/vsim/SimRendererWidget.cpp ${SRC}/vsim/SimRendererWidget.h
+      ${SRC}/vsim/FarTerrain.cpp ${SRC}/vsim/FarTerrain.h
+      ${SRC}/vsim/procgen/Noise.cpp ${SRC}/vsim/procgen/TerrainField.cpp
+      ${SRC}/vsim/procgen/GroundCover.cpp
       ${SRC}/ui/widgets/SimHudWidget.cpp ${SRC}/ui/widgets/SimHudWidget.h
       ${SRC}/core/Units.cpp
       ${SRC}/vsim/DroneModel.cpp)
   target_include_directories(tst_sim_gl_context PRIVATE ${SRC}/vsim ${SRC}/ui/widgets ${VAYU_SITL_SDK})
   target_link_libraries(tst_sim_gl_context PRIVATE Qt6::OpenGL Qt6::OpenGLWidgets)
   if(NAVIGATOR_SIM_GRASS) # same renderer configuration as the app
-    target_sources(tst_sim_gl_context PRIVATE ${SRC}/vsim/GpuGrass.cpp
-        ${SRC}/vsim/procgen/Noise.cpp ${SRC}/vsim/procgen/TerrainField.cpp
-        ${SRC}/vsim/procgen/GroundCover.cpp)
+    target_sources(tst_sim_gl_context PRIVATE ${SRC}/vsim/GpuGrass.cpp)
     target_compile_definitions(tst_sim_gl_context PRIVATE VAYU_SIM_GRASS=1)
   endif()
 endif()
