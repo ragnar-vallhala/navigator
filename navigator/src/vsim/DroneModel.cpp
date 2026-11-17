@@ -528,6 +528,7 @@ DroneModel buildDroneModel(const DroneModelInput &in) {
         M.body.data[v * 9 + 2] -= lowest;
       for (int i = 0; i < 4; ++i)
         M.hub[i][2] -= lowest;
+      M.lift = lowest;
     }
   }
 

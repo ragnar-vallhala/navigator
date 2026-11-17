@@ -145,6 +145,8 @@ private slots:
       for (size_t v = 0; v < m.body.vertexCount(); ++v)
         lowest = std::max(lowest, m.body.data[v * 9 + 2]); // z is down
       QVERIFY2(std::fabs(lowest) < 1e-3f, r.id);
+      // the lift is reported so editor markers can follow the drawn motors
+      QVERIFY2(m.lift >= 0.0f && m.lift < 0.06f, r.id);
       // props stay above the body's feet
       for (int i = 0; i < 4; ++i)
         QVERIFY2(m.hub[i][2] < 0.0f, r.id);
@@ -170,6 +172,8 @@ private slots:
       QVERIFY2(feet >= 4 * 8, id); // four rubber feet on the ground plane
       QVERIFY2(m.bmin[2] < -0.1f, id); // lifted by the leg height: props well up
     }
+    QVERIFY(body("7in").lift > 0.02f && body("10in").lift > 0.03f); // legs
+    QVERIFY(body("5in").lift < 0.01f && body("whoop65").lift < 0.01f);
     QVERIFY(body("whoop65").body.vertexCount() > 100);
     QVERIFY(body("7in").body.vertexCount() > body("5in").body.vertexCount());
   }
