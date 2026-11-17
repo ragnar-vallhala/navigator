@@ -165,6 +165,14 @@ void AdsBackend::setPanelFixed(const QString &id, bool fixed) {
 // bring the Panels-menu checks in line with what is really open.
 void AdsBackend::syncActions() {
   for (Panel &p : m_panels) {
+    // A closed panel keeps no drawn tab. ADS shows a tab again whenever it
+    // becomes its area's current one, closed or not (and place() forces tabs
+    // on), so a panel parked in the area that Attitude, say, is opened into
+    // would reappear as a ghost tab beside it, whose X (closing a closed dock)
+    // and Panels entry (a "show" on a panel ADS thinks is closed) need two
+    // clicks. Closed means no tab.
+    if (p.dock && p.dock->isClosed() && p.dock->dockAreaWidget())
+      p.dock->tabWidget()->hide();
     QAction *a = m_actions.value(p.id);
     if (a)
       a->setChecked(p.dock && p.dock->dockAreaWidget() && !p.dock->isClosed());
