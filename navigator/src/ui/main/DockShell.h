@@ -31,7 +31,7 @@ class QMenu;
 class QMenuBar;
 class QWidget;
 
-// The dock host of the real Navigator window (todo #187 step 3): every page is
+// The dock host of the real Navigator window: every page is
 // a registered panel with a stable id, laid out by the workspace system in
 // src/ui/workspace/. It is the window's only layout.
 //
