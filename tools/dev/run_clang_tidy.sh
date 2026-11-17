@@ -49,6 +49,13 @@
 # arm-none-eabi), so adding a build dir needs no extra configuration here.
 #
 # Usage: run_clang_tidy.sh [build-dir ...]   (default: the list below)
+#
+# TIDY_FILES=<path>  analyse only the files listed in <path> (repo-relative, one
+#                    per line; see tools/dev/tidy_changed_files.sh), still
+#                    through each database's own flags. An empty list analyses
+#                    nothing and succeeds. The gap report is skipped: with a
+#                    partial list nearly every source would be "not analysed".
+#                    Unset (the default) is the full pass.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -146,6 +153,9 @@ for build in "${BUILDS[@]}"; do
   files="$(jq -r '.[].file' "$db" | sed "s|^$ROOT/||" | sort -u \
            | grep -v '^extern/' | grep -vE '(^|/)build[^/]*/' \
            | git check-ignore -nv --stdin 2>/dev/null | sed -n 's/^::\t//p' || true)"
+  if [ -n "${TIDY_FILES:-}" ]; then
+    files="$(comm -12 <(sort -u <<<"$files") <(sort -u "$TIDY_FILES") || true)"
+  fi
   if [ -z "$files" ]; then continue; fi
 
   args=()
@@ -159,6 +169,9 @@ done
 for entry in "${NODB[@]}"; do
   spec="${entry%% *}"; flags="${entry#* }"
   files="$(git ls-files "$spec")"
+  if [ -n "${TIDY_FILES:-}" ]; then
+    files="$(comm -12 <(sort -u <<<"$files") <(sort -u "$TIDY_FILES") || true)"
+  fi
   if [ -z "$files" ]; then continue; fi
   echo "== $spec ($(wc -l <<<"$files") files, no database)" >&2
   # shellcheck disable=SC2086 -- flags are a deliberate word list
@@ -166,6 +179,11 @@ for entry in "${NODB[@]}"; do
   report_err
   cat >>"$analysed" <<<"$files"
 done
+
+if [ -n "${TIDY_FILES:-}" ]; then
+  echo "== partial pass (TIDY_FILES): gap report skipped" >&2
+  exit $rc
+fi
 
 # Anything left is unanalysed: wire up its build, add it to NODB, or delete it
 # if nothing builds it any more. firmware/docs carries scratch sources attached
