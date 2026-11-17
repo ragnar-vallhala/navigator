@@ -400,9 +400,22 @@ private slots:
     if (!SitlModule::instance().available())
       QSKIP("no engine module (set VAYU_SITL_MODULE)");
     a_->changeWorld(changes()[0].edit); // start on a raised world
+    a_->shipDelay(4000); // a slow runner: the collision build outlasts a fixed settle
     a_->start();
     QVERIFY(a_->running());
-    QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 20000));
+    // shipBusy() is false right after start(): the engine is not online yet, so
+    // nothing is queued. Waiting for it to go false alone passes at once and
+    // leaves the vehicle at the engine's default pose (far below a raised
+    // world's ground) until the collision has shipped and Start's reset has
+    // placed it. Wait for that ship, then for the placement, then settle.
+    QVERIFY(waitFor(
+        [&] {
+          return a_->logText().contains(QStringLiteral("world mesh \u2192 daemon")) &&
+                 !a_->shipBusy();
+        },
+        30000));
+    QVERIFY(waitFor([&] { return altAbove(*a_) > 0.0f && altAbove(*a_) < 3.0f; },
+                    10000));
     pump(3000); // settle on the pad
     qInfo("running: initial alt=%.2f above deck=%.2f", altAbove(*a_),
           aboveDeck(*a_));
