@@ -26,6 +26,8 @@
 #include "procgen/Flora.h"
 #include "procgen/GroundCover.h"
 #include "procgen/Heightfield.h"
+#include "procgen/Helipads.h"
+#include "procgen/WorldPresets.h"
 #include "procgen/Noise.h"
 #include "procgen/TerrainField.h"
 #include "procgen/TerrainGen.h"
@@ -83,6 +85,7 @@ private slots:
   void floraTilesWithoutDuplicates();
   void renderAndCollisionSurfacesAgree();
   void spawnAndPadHeightsMatchCollisionSurface();
+  void helipadFootprintsAreLevel();
 };
 
 void TstProcgen::noiseIsDeterministicAndBounded() {
@@ -703,6 +706,48 @@ void TstProcgen::fieldMeshColoursVary() {
     }
     QVERIFY2(hi - lo > 0.08f, qPrintable(QString("palette %1 mesh is one colour").arg(pal)));
   }
+}
+
+// A pad is a rigid disc (deck 0.9 m above the centre surface, skirt 1.3 m below):
+// the meshed surface under its whole footprint must stay within 0.6 m of the
+// centre, or the pad floats / is buried. Counts the violations the old
+// single-point screen let through (footprint screen off) and requires none now.
+void TstProcgen::helipadFootprintsAreLevel() {
+  const float kMaxRelief = 0.6f;
+  int oldViolations = 0, total = 0;
+  for (const char *id : {"alpine", "hills", "flat", "desert"})
+    for (uint32_t seed : {1337u, 42u, 9001u}) {
+      PresetData d;
+      QVERIFY(buildWorldPreset(id, seed, d));
+      const TerrainField f(d.field);
+      const HeightFn surf = [&](float x, float y) {
+        return streamSurfaceHeight(f, x, y);
+      };
+      const HeightFn raw = [&](float x, float y) { return f.height(x, y); };
+
+      HelipadParams oldP; // old behaviour: no footprint screen
+      oldP.maxReliefM = 0.0f;
+      for (const PgVec3 &p : helipadsAround(surf, raw, 0.0f, 0.0f, 350.0f, oldP))
+        if (helipadRelief(surf, p.x, p.y, oldP.radiusM) > kMaxRelief)
+          ++oldViolations;
+
+      const std::vector<PgVec3> pads =
+          helipadsAround(surf, raw, 0.0f, 0.0f, 350.0f);
+      QVERIFY(!pads.empty());
+      QCOMPARE(pads[0].x, 0.0f); // home pad first, at the origin
+      QCOMPARE(pads[0].y, 0.0f);
+      for (const PgVec3 &p : pads) {
+        ++total;
+        const float rel = helipadRelief(surf, p.x, p.y, 3.0f);
+        QVERIFY2(rel <= kMaxRelief,
+                 qPrintable(QString("%1 seed %2 pad (%3,%4) relief %5 m")
+                                .arg(id).arg(seed).arg(p.x).arg(p.y).arg(rel)));
+        QVERIFY(std::fabs(p.z - surf(p.x, p.y)) < 1e-4f);
+      }
+    }
+  qInfo("helipads checked: %d; footprint violations without the screen: %d",
+        total, oldViolations);
+  QVERIFY2(oldViolations > 0, "fixture no longer exercises the screen");
 }
 
 QTEST_MAIN(TstProcgen)
