@@ -881,6 +881,11 @@ void SimRendererWidget::rebuildDroneModel() {
   }
   in.cls = vsim::droneClassFor(presetId_.toStdString(), propRadius_);
   model_ = vsim::buildDroneModel(in);
+  const vsim::OrbitRange orbit = vsim::orbitRangeFor(model_);
+  camMinRadius_ = orbit.min;
+  camMaxRadius_ = orbit.max;
+  cam_radius_ = userZoomed_ ? std::clamp(cam_radius_, camMinRadius_, camMaxRadius_)
+                            : orbit.def;
   uploadColoredMesh(modelBody_, model_.body.data);
   for (int i = 0; i < 4; ++i)
     uploadColoredMesh(modelProp_[i], model_.prop[i].data);
@@ -3364,11 +3369,8 @@ void SimRendererWidget::wheelEvent(QWheelEvent *e) {
     return;
   }
   const float k = (e->angleDelta().y() > 0) ? 0.9f : 1.1f;
-  cam_radius_ *= k;
-  if (cam_radius_ < 0.5f)
-    cam_radius_ = 0.5f;
-  if (cam_radius_ > 50.0f)
-    cam_radius_ = 50.0f;
+  userZoomed_ = true;
+  cam_radius_ = std::clamp(cam_radius_ * k, camMinRadius_, camMaxRadius_);
   update();
 }
 

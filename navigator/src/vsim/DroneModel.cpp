@@ -272,6 +272,18 @@ ModelMesh makeProp(const Style &S, float k, float r, int spin, bool front) {
 
 } // namespace
 
+OrbitRange orbitRangeFor(const DroneModel &m) {
+  float half = m.visualPropRadius;
+  for (const auto &h : m.hub)
+    half = std::max(half, std::hypot(h[0], h[1]) + m.visualPropRadius);
+  OrbitRange r;
+  if (!std::isfinite(half) || half <= 0.0f)
+    return r;
+  r.def = std::clamp(half * 6.0f, 0.15f, 6.0f);
+  r.min = std::clamp(half * 1.5f, 0.04f, 0.5f);
+  return r;
+}
+
 std::array<float, 3> propTipColor(int spinSign) {
   return spinSign >= 0 ? std::array<float, 3>{1.0f, 0.85f, 0.10f}  // CCW yellow
                        : std::array<float, 3>{0.10f, 0.85f, 1.0f}; // CW cyan

@@ -91,6 +91,33 @@ private slots:
     QCOMPARE(int(droneClassFor("", -1.0f)), int(DroneClass::Freestyle5));
   }
 
+  // The orbit camera fits each airframe: bigger drones start farther out, the
+  // whoop may zoom in far closer than the old fixed 0.5 m floor, and the range
+  // is always ordered and finite (a degenerate model gets the old defaults).
+  void orbitRangeScalesWithAirframe() {
+    auto range = [](const char *id) {
+      for (const Row &r : kRows)
+        if (std::string(r.id) == id)
+          return orbitRangeFor(buildDroneModel(inputFor(r)));
+      return OrbitRange{};
+    };
+    for (const Row &r : kRows) {
+      const OrbitRange o = range(r.id);
+      QVERIFY2(std::isfinite(o.def) && std::isfinite(o.min) && std::isfinite(o.max), r.id);
+      QVERIFY2(o.min < o.def && o.def < o.max, r.id);
+    }
+    const OrbitRange whoop = range("whoop65"), in3 = range("3in"), in5 = range("5in"),
+                     in7 = range("7in"), in10 = range("10in");
+    QVERIFY(whoop.def < in3.def && in3.def < in5.def && in5.def < in7.def &&
+            in7.def < in10.def);
+    QVERIFY(whoop.min < 0.1f); // the old fixed 0.5 m floor was 7x its width
+    QVERIFY(whoop.def < 0.5f);
+    // a degenerate model keeps the old fixed distances
+    const OrbitRange d = orbitRangeFor(DroneModel{});
+    QCOMPARE(d.def, 4.0f);
+    QCOMPARE(d.min, 0.5f);
+  }
+
   void trianglesAndNormals() {
     for (const Row &r : kRows) {
       const DroneModel m = buildDroneModel(inputFor(r));
