@@ -150,6 +150,13 @@ uniform float u_fogdensity;  // aerial-perspective strength
 uniform float u_fogstart;    // metres before fog begins
 uniform float u_sunint;      // sun-intensity look knob (matches grass)
 uniform float u_ambstr;      // ambient-strength look knob (matches grass)
+uniform float u_proto;       // PROTOTYPE: 1 = textured terrain + tone mapping
+uniform sampler2D u_t0;      // grass albedo
+uniform sampler2D u_t1;      // rock albedo
+uniform sampler2D u_t2;      // dirt albedo
+uniform sampler2D u_n0;
+uniform sampler2D u_n1;
+uniform sampler2D u_n2;
 )GLSL";
 
 const char *kLitFragmentMain = R"GLSL(
@@ -174,6 +181,21 @@ float gridLine(vec2 p, float cell, float w) {
   vec2 l = 1.0 - smoothstep(half_ - fw, half_ + fw, d);
   return max(l.x, l.y) * (1.0 - smoothstep(0.12, 0.35, max(fw.x, fw.y)));
 }
+// PROTOTYPE helpers. A texture is sampled at two scales and two orientations so
+// the tiling never lines up, the far one taking over with distance.
+vec3 tex2(sampler2D t, vec2 p, float dist) {
+  vec2 q = vec2(p.x * 0.8 - p.y * 0.6, p.x * 0.6 + p.y * 0.8);
+  vec3 a = texture(t, p / 2.6).rgb * texture(t, q / 11.0).rgb * 2.0;
+  vec3 b = texture(t, p / 23.0).rgb;
+  return mix(a, b, smoothstep(30.0, 160.0, dist));
+}
+vec2 nrm2(sampler2D t, vec2 p, float dist) {
+  vec2 q = vec2(p.x * 0.8 - p.y * 0.6, p.x * 0.6 + p.y * 0.8);
+  return (texture(t, p / 2.6).xy + texture(t, q / 7.0).xy - 1.0) * (1.0 - smoothstep(20.0, 90.0, dist));
+}
+vec3 filmic(vec3 x) { // ACES fit (Narkowicz)
+  return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+}
 void main() {
   vec3 n = normalize(v_normal);
   vec3 toFrag = v_world - u_campos;
@@ -188,7 +210,29 @@ void main() {
   vec3 ambient = mix(vec3(0.07, 0.09, 0.09),
                      vec3(0.22, 0.25, 0.26), clamp(hemi, 0.0, 1.0)) * u_ambstr;
   vec3 base = u_color * v_color;
-  if (u_terrain > 0.5) {
+  bool proto = u_proto > 0.5 && u_terrain > 0.5;
+  if (proto) {
+    vec2 p = v_world.xy;
+    float slope = 1.0 - clamp(-n.z, 0.0, 1.0);
+    float luma = dot(v_color, vec3(0.30, 0.59, 0.11));
+    // Splat weights: rock on slopes and in rocky cover, dirt where the cover
+    // colour turns brown (tracks, bare patches), grass elsewhere.
+    float rockW = smoothstep(0.18, 0.42, slope + 0.5 * (gn(p / 31.0) - 0.5));
+    float dirtW = smoothstep(-0.02, 0.10, v_color.r - v_color.g * 0.92) * (1.0 - rockW);
+    vec3 a0 = tex2(u_t0, p, dist), a1 = tex2(u_t1, p, dist), a2 = tex2(u_t2, p, dist);
+    vec3 alb = mix(mix(a0, a2, dirtW), a1, rockW);
+    // Keep the cover's hue (green fields, brown tracks); take the brightness
+    // detail from the photo, and its own colour only on rock and dirt.
+    vec3 alin = pow(alb, vec3(2.2));
+    float al = max(dot(alin, vec3(0.30, 0.59, 0.11)), 0.02);
+    vec3 cover = pow(v_color, vec3(2.2)) * 0.95;
+    cover = mix(vec3(dot(cover, vec3(0.30, 0.59, 0.11))), cover, 0.7); // calmer saturation
+    float own = max(rockW * 0.8, dirtW * 0.45);
+    base = mix(cover * (al / 0.18), alin * 1.1, own);
+    vec2 nm = mix(mix(nrm2(u_n0, p, dist), nrm2(u_n2, p, dist), dirtW), nrm2(u_n1, p, dist), rockW);
+    n = normalize(n + vec3(nm.x, nm.y, 0.0) * 1.1);
+    wrap = clamp(dot(n, sun) * 0.45 + 0.55, 0.0, 1.0); wrap *= wrap;
+  } else if (u_terrain > 0.5) {
     vec2 p = v_world.xy;
     float f1 = 1.0 - smoothstep(4.0, 24.0, dist);
     float f2 = 1.0 - smoothstep(25.0, 140.0, dist);
@@ -213,6 +257,11 @@ void main() {
     base = (mod(k, 2.0) < 0.5) ? vec3(0.80, 0.14, 0.08) : vec3(0.92, 0.92, 0.88);
   }
   vec3 lit  = base * (ambient + sunCol * wrap * 0.95 * shadowFactor(v_world, n, sun));
+  if (proto) {
+    vec3 amb = pow(ambient, vec3(2.2)) * 1.6;
+    vec3 sc = pow(sunCol, vec3(2.2)) * 1.5;
+    lit = pow(filmic(base * (amb + sc * wrap * shadowFactor(v_world, n, sun)) * 1.15), vec3(1.0 / 2.2));
+  }
   if (u_bands > 0.5) {
     // A survey pole is a thin vertical marker seen against bright snow and
     // rock, often from its sun-shaded side or in a terrain shadow; with only
@@ -997,6 +1046,35 @@ void SimRendererWidget::setComMarker(const QVector3D &com) {
   update();
 }
 
+void SimRendererWidget::loadProtoTextures() {
+  const QString dir = qEnvironmentVariable("NAV_PROTO_TEX");
+  if (dir.isEmpty())
+    return;
+  const char *names[3] = {"grass_path_2", "rocky_trail_02", "brown_mud_03"};
+  for (int i = 0; i < 6; ++i) {
+    const QString n = QString::fromLatin1(names[i % 3]);
+    const QString f = dir + "/" + n + (i < 3 ? "_diff_1k.jpg" : "_nor_gl_1k.jpg");
+    QImage img(f);
+    if (img.isNull()) {
+      qWarning("proto texture missing: %s", qPrintable(f));
+      for (GLuint &t : protoTex_)
+        t = 0;
+      return;
+    }
+    img = img.convertToFormat(QImage::Format_RGBA8888);
+    glGenTextures(1, &protoTex_[i]);
+    glBindTexture(GL_TEXTURE_2D, protoTex_[i]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, img.width(), img.height(), 0, GL_RGBA, GL_UNSIGNED_BYTE, img.constBits());
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameterf(GL_TEXTURE_2D, 0x84FE, 8.0f); // anisotropic filtering
+  }
+  glBindTexture(GL_TEXTURE_2D, 0);
+}
+
 void SimRendererWidget::initializeGL() {
   // Qt calls this even when the window could not get a context (no GL on this
   // platform); every GL call below would crash.
@@ -1061,6 +1139,12 @@ void SimRendererWidget::initResources() {
   ul_ambstr_ = progLit_->uniformLocation("u_ambstr");
   ul_terrain_ = progLit_->uniformLocation("u_terrain");
   ul_bands_ = progLit_->uniformLocation("u_bands");
+  ul_proto_ = progLit_->uniformLocation("u_proto");
+  for (int i = 0; i < 3; ++i) {
+    ul_ptex_[i] = progLit_->uniformLocation(QByteArray("u_t") + char('0' + i));
+    ul_ptex_[3 + i] = progLit_->uniformLocation(QByteArray("u_n") + char('0' + i));
+  }
+  loadProtoTextures();
 
   progDepth_ = buildProgram("depth", kDepthVertexShader, kDepthFragmentShader);
   ud_lightmvp_ = progDepth_->uniformLocation("u_lightmvp");
@@ -1617,6 +1701,12 @@ void SimRendererWidget::drawLit(const Mesh &m, const QMatrix4x4 &view,
   progLit_->setUniformValue(ul_bands_, bands);
   glActiveTexture(GL_TEXTURE1);
   glBindTexture(GL_TEXTURE_2D, shadowTex_);
+  progLit_->setUniformValue(ul_proto_, protoTex_[0] ? float(qEnvironmentVariableIntValue("NAV_GFX_PROTO")) : 0.0f);
+  for (int i = 0; i < 6; ++i) {
+    progLit_->setUniformValue(ul_ptex_[i], 2 + i);
+    glActiveTexture(GL_TEXTURE2 + i);
+    glBindTexture(GL_TEXTURE_2D, protoTex_[i]);
+  }
   glActiveTexture(GL_TEXTURE0);
   QOpenGLVertexArrayObject::Binder b(
       const_cast<QOpenGLVertexArrayObject *>(&m.vao));

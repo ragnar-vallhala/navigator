@@ -468,6 +468,10 @@ private:
   int ul_ambstr_ = -1;
   int ul_terrain_ = -1;
   int ul_bands_ = -1;
+  // PROTOTYPE (not for merge): CC0 ground textures + filmic tone mapping.
+  GLuint protoTex_[6] = {0, 0, 0, 0, 0, 0};
+  int ul_proto_ = -1, ul_ptex_[6] = {-1, -1, -1, -1, -1, -1};
+  void loadProtoTextures();
   float litSunInt_ = 1.0f; // terrain lighting look knobs (match grass)
   float litAmbStr_ = 1.0f;
 

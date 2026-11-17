@@ -271,6 +271,17 @@ target_include_directories(tst_dronemodel PRIVATE ${SRC}/vsim)
 # the offscreen platform ctest uses, which crashes QOpenGLWidget/QOpenGLWindow.
 if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
   find_package(Qt6 REQUIRED COMPONENTS OpenGL OpenGLWidgets)
+  navigator_test(tst_shot_world
+      tst_shot_world.cpp
+      ${SRC}/vsim/SimRendererWidget.cpp ${SRC}/vsim/SimRendererWidget.h
+      ${SRC}/ui/widgets/SimHudWidget.cpp ${SRC}/ui/widgets/SimHudWidget.h
+      ${SRC}/core/Units.cpp ${SRC}/vsim/DroneModel.cpp
+      ${SRC}/vsim/procgen/Noise.cpp ${SRC}/vsim/procgen/TerrainGen.cpp
+      ${SRC}/vsim/procgen/TerrainField.cpp ${SRC}/vsim/procgen/GroundCover.cpp
+      ${SRC}/vsim/procgen/WorldPresets.cpp ${SRC}/vsim/procgen/Flora.cpp
+      ${SRC}/vsim/procgen/Helipads.cpp ${SRC}/vsim/ChunkStreamer.cpp)
+  target_include_directories(tst_shot_world PRIVATE ${SRC}/vsim ${SRC}/ui/widgets ${VAYU_SITL_SDK})
+  target_link_libraries(tst_shot_world PRIVATE Qt6::OpenGL Qt6::OpenGLWidgets)
   navigator_test(tst_sim_gl_context
       tst_sim_gl_context.cpp
       ${SRC}/vsim/SimRendererWidget.cpp ${SRC}/vsim/SimRendererWidget.h
