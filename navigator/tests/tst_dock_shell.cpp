@@ -126,6 +126,17 @@ struct Fixture {
 };
 } // namespace
 
+namespace {
+int visibleFloats() {
+  int n = 0;
+  for (QWidget *tw : QApplication::topLevelWidgets())
+    if (tw->isVisible() &&
+        QByteArray(tw->metaObject()->className()).contains("Floating"))
+      ++n;
+  return n;
+}
+} // namespace
+
 class TstDockShell : public QObject {
   Q_OBJECT
   QTemporaryDir m_dir;
@@ -675,6 +686,48 @@ private slots:
     QVERIFY(!b->panelState("settings").visible);
     QVERIFY(b->viewAction("settings") && !b->viewAction("settings")->isChecked());
     QCOMPARE(shownTabsBeside(labelFor(f.win, "settings")), 0);
+  }
+  // Closing the main window must take the floating panel windows with it: a
+  // visible floating window ignores the app's quit request, so the quit is
+  // cancelled and the window (and the process) outlives the main window. The
+  // layout is saved first, so the next start restores the floats.
+  void closeFloatingSavesFirstThenClosesFloats() {
+    {
+      Fixture f;
+      QVERIFY(QTest::qWaitForWindowExposed(&f.win));
+      QTest::qWait(300); // the queued splitter sizing of the first layout
+      auto *b = f.shell->workspaces()->backend();
+      b->floatPanel("imu");
+      QTest::qWait(400);
+      b->floatPanel("logs");
+      QTest::qWait(400);
+      // On the offscreen platform the dock manager's flag reset on window
+      // activation can leave a float hidden; show them as a desktop does.
+      for (QWidget *tw : QApplication::topLevelWidgets())
+        if (QByteArray(tw->metaObject()->className()).contains("Floating"))
+          tw->show();
+      QCOMPARE(visibleFloats(), 2);
+      f.shell->persistLast(); // what MainWindow::closeEvent does, in this order
+      f.shell->closeFloating();
+      QTest::qWait(100);
+      QCOMPARE(visibleFloats(), 0);
+      QVERIFY(!b->panelState("logs").visible);
+      QVERIFY(!b->panelState("imu").visible);
+      // closing them was not a layout edit: nothing is saved over the layout
+      QTest::qWait(900);
+      QVERIFY(visibleFloats() == 0);
+    }
+    // next start: the floated layout comes back
+    QMainWindow win;
+    DockShell shell(&win);
+    for (const QString &id : allIds())
+      shell.addPanel(id, new QLabel(id));
+    shell.start(false);
+    win.show();
+    shell.restoreLast();
+    QTest::qWait(300);
+    QVERIFY(shell.workspaces()->backend()->panelState("logs").floating);
+    QVERIFY(shell.workspaces()->backend()->panelState("imu").floating);
   }
 };
 

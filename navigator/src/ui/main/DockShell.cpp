@@ -306,6 +306,11 @@ void DockShell::restoreLast() {
     m_wm->restoreLast();
 }
 
+void DockShell::closeFloating() {
+  if (m_wm)
+    m_wm->backend()->closeFloating();
+}
+
 void DockShell::persistLast() {
   if (m_wm)
     m_wm->persistLast();

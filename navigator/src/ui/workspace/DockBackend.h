@@ -87,6 +87,10 @@ public:
   // such are what a debounced autosave listens to. Default: never called.
   virtual void setChangeNotifier(std::function<void()> /*notify*/) {}
 
+  // Close every floating window (the main window is closing). It must not count
+  // as a layout edit: the layout is saved before this is called. Default: none.
+  virtual void closeFloating() {}
+
   // Move every floating window that is not reachable on `screens` back onto
   // one. Returns how many were moved.
   virtual int clampFloatingTo(const QList<QRect> &screens) = 0;
