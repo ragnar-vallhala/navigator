@@ -567,6 +567,9 @@ void MainWindow::setupDockHost() {
 void MainWindow::closeEvent(QCloseEvent *event) {
   m_dock->persistLast();
   saveUiState();
+  // After the save (the floated layout is what the next start restores): a
+  // visible floating window would cancel the quit and outlive the main window.
+  m_dock->closeFloating();
 
   // Tear down the worker thread before the engine (and its transports/recorder)
   // are destroyed. forceIdle first so any GUI-side source (replay/sim) stops.

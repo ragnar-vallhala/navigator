@@ -33,7 +33,7 @@ using ws::LayoutNode;
 using ws::LayoutSpec;
 using ws::WorkspaceManager;
 
-const std::vector<const char *> DockShell::kFixedPanels = {dockpanel::kView3d};
+const std::vector<const char *> DockShell::kFixedPanels = {};
 namespace {
 
 void collect(const LayoutNode &n, QStringList &out) {
@@ -187,10 +187,9 @@ void DockShell::start(bool applyLayout) {
   // Qt 6.4 and the window can stop repainting (workspace mock README,
   // tst_workspace_gl). With the container, one context lives for the widget's
   // life across workspace switches (tst_workspace_gl: initializeGL count 1).
-  // The panel is still pinned to the main window (can be hidden, shown, split
-  // next to; not floated), which is the conservative choice until floating a
-  // window container out of the main window is checked on real GPUs. The
-  // simulator view uses the same container approach and floats freely.
+  // Like the simulator view it floats freely: the window container follows
+  // its dock widget out of the main window (kFixedPanels is empty; a panel
+  // listed there stays pinned).
   for (const char *id : kFixedPanels)
     m_wm->backend()->setPanelFixed(QString::fromLatin1(id), true);
   m_wm->setBuiltins(builtins());
@@ -305,6 +304,11 @@ void DockShell::resetLayout() {
 void DockShell::restoreLast() {
   if (m_wm)
     m_wm->restoreLast();
+}
+
+void DockShell::closeFloating() {
+  if (m_wm)
+    m_wm->backend()->closeFloating();
 }
 
 void DockShell::persistLast() {

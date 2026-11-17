@@ -31,7 +31,7 @@ class QMenu;
 class QMenuBar;
 class QWidget;
 
-// The dock host of the real Navigator window (todo #187 step 3): every page is
+// The dock host of the real Navigator window: every page is
 // a registered panel with a stable id, laid out by the workspace system in
 // src/ui/workspace/. It is the window's only layout.
 //
@@ -60,8 +60,8 @@ public:
                               const std::function<QAction *(const QString &)> &actionFor);
   // Every panel, in registration order (the MRU/recent-views index too).
   static const std::vector<PanelInfo> &panelInfos();
-  // Panels pinned to the main window (GL views in window containers; not
-  // checked yet for floating out of the main window on real GPUs).
+  // Panels pinned to the main window (cannot be floated or moved). Empty: the
+  // GL views (window containers) all float.
   static const std::vector<const char *> kFixedPanels;
   // Fly (the default), Tune, Debug link, Sim, then one per old full-window
   // page: RC channels, Motors, Control loop, Packets, Kernel perf. (Fly is
@@ -98,6 +98,8 @@ public:
   // on exit.
   void restoreLast();
   void persistLast();
+  // Close the floating panel windows (main window closing); after persistLast.
+  void closeFloating();
 
 signals:
   void panelShown(const QString &id);

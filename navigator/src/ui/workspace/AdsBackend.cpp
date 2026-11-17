@@ -165,6 +165,14 @@ void AdsBackend::setPanelFixed(const QString &id, bool fixed) {
 // bring the Panels-menu checks in line with what is really open.
 void AdsBackend::syncActions() {
   for (Panel &p : m_panels) {
+    // A closed panel keeps no drawn tab. ADS shows a tab again whenever it
+    // becomes its area's current one, closed or not (and place() forces tabs
+    // on), so a panel parked in the area that Attitude, say, is opened into
+    // would reappear as a ghost tab beside it, whose X (closing a closed dock)
+    // and Panels entry (a "show" on a panel ADS thinks is closed) need two
+    // clicks. Closed means no tab.
+    if (p.dock && p.dock->isClosed() && p.dock->dockAreaWidget())
+      p.dock->tabWidget()->hide();
     QAction *a = m_actions.value(p.id);
     if (a)
       a->setChecked(p.dock && p.dock->dockAreaWidget() && !p.dock->isClosed());
@@ -578,6 +586,22 @@ void AdsBackend::setFloatGeometry(const QString &id, const QRect &g) {
 
 QAction *AdsBackend::viewAction(const QString &id) {
   return m_actions.value(id, nullptr);
+}
+
+// A visible floating window ignores the app's quit request (ADS' closeEvent
+// ignores it and hides the window itself), which cancels the quit and leaves
+// the window, and the process, behind once the main window is gone. Closing
+// them with the main window is quiet: the layout was saved first.
+void AdsBackend::closeFloating() {
+  if (!m_dm)
+    return;
+  const bool wasQuiet = m_quiet;
+  m_quiet = true;
+  const QList<ads::CFloatingDockContainer *> floats = m_dm->floatingWidgets();
+  for (ads::CFloatingDockContainer *fc : floats)
+    if (fc)
+      fc->close();
+  m_quiet = wasQuiet;
 }
 
 int AdsBackend::clampFloatingTo(const QList<QRect> &screens) {
