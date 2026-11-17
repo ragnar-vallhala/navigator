@@ -234,12 +234,16 @@ private slots:
     QSettings().clear();
   }
 
-  // A tab drag must use an opaque preview window: ADS's default on X11 is a
-  // translucent ARGB top-level that leaves ghost trails under a compositor.
-  void dragPreviewIsAnOpaqueFramedWindow() {
+  // On X11 a tab drag must use an opaque preview window: ADS's default there
+  // is a translucent ARGB top-level that leaves ghost trails under a
+  // compositor. Other platforms (Wayland, offscreen) keep ADS's own preview.
+  void dragPreviewIsAnOpaqueFramedWindowOnXcb() {
     Fixture f;
-    QVERIFY(ads::CDockManager::testConfigFlag(
-        ads::CDockManager::DragPreviewHasWindowFrame));
+    const bool xcb = QGuiApplication::platformName() == QLatin1String("xcb");
+    QCOMPARE(ws::AdsBackend::dragPreviewNeedsFrame(), xcb);
+    QCOMPARE(ads::CDockManager::testConfigFlag(
+                 ads::CDockManager::DragPreviewHasWindowFrame),
+             xcb);
   }
 
   void panelIdsAreTheAgreedOnes() {

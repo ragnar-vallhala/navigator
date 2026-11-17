@@ -89,14 +89,22 @@ private:
 };
 }
 
+bool AdsBackend::dragPreviewNeedsFrame() {
+  return QGuiApplication::platformName() == QLatin1String("xcb");
+}
+
 AdsBackend::AdsBackend(QMainWindow *host) : m_host(host) {
   using M = ads::CDockManager;
+  M::setConfigFlags(M::DefaultOpaqueConfig | M::DockAreaHasUndockButton |
+                    M::AlwaysShowTabs);
   // DragPreviewHasWindowFrame: without it ADS drags a see-through (ARGB,
   // WA_TranslucentBackground) top-level preview on X11, which leaves ghost
   // trails behind it under a compositor on some drivers. With it the preview
-  // is an opaque framed window instead.
-  M::setConfigFlags(M::DefaultOpaqueConfig | M::DragPreviewHasWindowFrame |
-                    M::DockAreaHasUndockButton | M::AlwaysShowTabs);
+  // is an opaque framed window instead. xcb only: ADS tests this flag before
+  // its Wayland branch (a translucent child of the source window), so setting
+  // it there would swap the working preview for a framed top-level.
+  if (dragPreviewNeedsFrame())
+    M::setConfigFlag(M::DragPreviewHasWindowFrame, true);
   M::setConfigFlag(M::FocusHighlighting, false);
 }
 
