@@ -729,6 +729,64 @@ private slots:
     QVERIFY(shell.workspaces()->backend()->panelState("logs").floating);
     QVERIFY(shell.workspaces()->backend()->panelState("imu").floating);
   }
+
+  // Quit and start again: the panels that were floated come back floating,
+  // visible and where they were, from the settings alone (every object of the
+  // first run is gone). A panel closed before the quit stays closed.
+  void restartRestoresFloatedPanelsWhereTheyWere() {
+    const QRect imuAt(40, 60, 300, 220), logsAt(380, 150, 320, 240);
+    {
+      Fixture f;
+      QVERIFY(QTest::qWaitForWindowExposed(&f.win));
+      QTest::qWait(300);
+      auto *b = f.shell->workspaces()->backend();
+      b->floatPanel("imu");
+      b->floatPanel("logs");
+      b->floatPanel("rc");
+      QTest::qWait(400);
+      for (QWidget *tw : QApplication::topLevelWidgets())
+        if (QByteArray(tw->metaObject()->className()).contains("Floating"))
+          tw->show();
+      b->setFloatGeometry("imu", imuAt);
+      b->setFloatGeometry("logs", logsAt);
+      b->hidePanel("rc"); // floated, then closed: stays closed
+      QTest::qWait(400);
+      QVERIFY(b->panelState("imu").floating);
+      f.shell->persistLast(); // what MainWindow::closeEvent does, in this order
+      f.shell->closeFloating();
+      QTest::qWait(900); // past the autosave delay: closing is not an edit
+    }
+    QMainWindow win;
+    DockShell shell(&win);
+    for (const QString &id : allIds())
+      shell.addPanel(id, new QLabel(id));
+    shell.start(false);
+    win.show();
+    shell.restoreLast();
+    // Shown by the restore itself. (Later, the offscreen platform hides floats
+    // when the dock manager's window is activated: the stay-on-top emulation
+    // there re-sets a window flag; X11 and Wayland do not.)
+    const int shownByRestore = visibleFloats();
+    QTest::qWait(400);
+    auto *b = shell.workspaces()->backend();
+    const auto near = [](const QRect &a, const QRect &e) {
+      return qAbs(a.x() - e.x()) <= 4 && qAbs(a.y() - e.y()) <= 4 &&
+             qAbs(a.width() - e.width()) <= 4 && qAbs(a.height() - e.height()) <= 4;
+    };
+    const ws::PanelState imu = b->panelState("imu"), logs = b->panelState("logs");
+    QVERIFY(imu.visible && imu.floating);
+    QVERIFY(logs.visible && logs.floating);
+    QVERIFY2(near(imu.floatGeometry, imuAt),
+             qPrintable(QStringLiteral("imu at %1,%2 %3x%4")
+                            .arg(imu.floatGeometry.x()).arg(imu.floatGeometry.y())
+                            .arg(imu.floatGeometry.width()).arg(imu.floatGeometry.height())));
+    QVERIFY2(near(logs.floatGeometry, logsAt),
+             qPrintable(QStringLiteral("logs at %1,%2 %3x%4")
+                            .arg(logs.floatGeometry.x()).arg(logs.floatGeometry.y())
+                            .arg(logs.floatGeometry.width()).arg(logs.floatGeometry.height())));
+    QVERIFY(!b->panelState("rc").visible);
+    QCOMPARE(shownByRestore, 2);
+  }
 };
 
 QTEST_MAIN(TstDockShell)

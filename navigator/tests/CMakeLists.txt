@@ -247,6 +247,7 @@ navigator_test(tst_procgen
     ${SRC}/vsim/procgen/GroundCover.cpp
     ${SRC}/vsim/procgen/WorldPresets.cpp
     ${SRC}/vsim/procgen/Flora.cpp
+    ${SRC}/vsim/procgen/Helipads.cpp
     ${SRC}/vsim/ChunkStreamer.cpp)
 target_include_directories(tst_procgen PRIVATE ${SRC}/vsim)
 

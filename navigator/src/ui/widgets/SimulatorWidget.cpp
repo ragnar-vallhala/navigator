@@ -21,6 +21,7 @@
 #include "SimPanelsCommon.h"
 #include "../../vsim/FlightEventLog.h"
 #include "../../vsim/ThreadRetire.h"
+#include "../../vsim/procgen/Helipads.h"
 #include "../../vsim/VehicleJson.h"
 
 #include <QApplication>
@@ -1334,66 +1335,11 @@ std::vector<QVector3D> SimulatorWidget::helipadsAround(float cx, float cy,
   std::vector<QVector3D> pads;
   if (!m_terrainHeightAt)
     return pads;
-  pads.push_back(QVector3D(0, 0, m_terrainHeightAt(0.0f, 0.0f)));
-
-  // Deterministic coarse grid: one jittered candidate per cell, accepted on
-  // flat enough ground. Mirrors the flora global-grid idea but far sparser, so
-  // the same pads appear regardless of view history. Computed within kRange of
-  // the view centre so pads stream in/out as you roam.
-  const float kGrid = 70.0f, kRange = range, kEps = 2.0f, kMaxSlope = 0.09f;
-  const int kCandidates = 4; // probe several spots/cell, keep the flattest
-  auto hash = [](int gx, int gy) -> uint32_t {
-    uint32_t h = uint32_t(gx) * 0x9e3779b1u ^ uint32_t(gy) * 0x85ebca77u;
-    h ^= h >> 16;
-    h *= 0x7feb352du;
-    h ^= h >> 15;
-    h *= 0x846ca68bu;
-    h ^= h >> 16;
-    return h;
-  };
-  auto slopeAt = [&](float px, float py) {
-    const float dhdx =
-        (m_terrainRawHeightAt(px + kEps, py) -
-         m_terrainRawHeightAt(px - kEps, py)) /
-        (2.0f * kEps);
-    const float dhdy =
-        (m_terrainRawHeightAt(px, py + kEps) -
-         m_terrainRawHeightAt(px, py - kEps)) /
-        (2.0f * kEps);
-    return std::sqrt(dhdx * dhdx + dhdy * dhdy);
-  };
-  const int gx0 = int(std::floor((cx - kRange) / kGrid));
-  const int gx1 = int(std::floor((cx + kRange) / kGrid));
-  const int gy0 = int(std::floor((cy - kRange) / kGrid));
-  const int gy1 = int(std::floor((cy + kRange) / kGrid));
-  for (int gx = gx0; gx <= gx1; ++gx)
-    for (int gy = gy0; gy <= gy1; ++gy) {
-      if (gx == 0 && gy == 0)
-        continue; // origin reserved for the home pad
-      if ((hash(gx, gy) & 0xffu) > 180u)
-        continue; // ~70% of cells get a pad
-      // Probe several jittered spots in the cell, keep the flattest one.
-      float bestSlope = 1e9f, bx = 0, by = 0;
-      for (int k = 0; k < kCandidates; ++k) {
-        const uint32_t h2 =
-            hash(gx * 73856093 + k * 19349663, gy * 83492791 - k);
-        const float jx = float(h2 & 0xffu) / 255.0f - 0.5f;
-        const float jy = float((h2 >> 8) & 0xffu) / 255.0f - 0.5f;
-        const float px = (float(gx) + 0.5f + jx * 0.8f) * kGrid;
-        const float py = (float(gy) + 0.5f + jy * 0.8f) * kGrid;
-        const float s = slopeAt(px, py);
-        if (s < bestSlope) {
-          bestSlope = s;
-          bx = px;
-          by = py;
-        }
-      }
-      if (bestSlope > kMaxSlope)
-        continue; // no flat-enough spot in this cell
-      if ((bx - cx) * (bx - cx) + (by - cy) * (by - cy) > kRange * kRange)
-        continue;
-      pads.emplace_back(bx, by, m_terrainHeightAt(bx, by));
-    }
+  vsim::procgen::HelipadParams hp;
+  hp.radiusM = vsim::SimRendererWidget::kHelipadRadiusM;
+  for (const auto &p : vsim::procgen::helipadsAround(
+           m_terrainHeightAt, m_terrainRawHeightAt, cx, cy, range, hp))
+    pads.emplace_back(p.x, p.y, p.z);
   return pads;
 }
 

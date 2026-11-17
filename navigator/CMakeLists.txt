@@ -258,6 +258,7 @@ set(GCS_SITL_SOURCES
     src/vsim/procgen/TerrainField.cpp
     src/vsim/procgen/GroundCover.cpp
     src/vsim/procgen/WorldPresets.cpp
+    src/vsim/procgen/Helipads.cpp
     src/vsim/MassProperties.cpp
     src/vsim/RcBridge.cpp
     src/vsim/TrainingCourse.cpp
