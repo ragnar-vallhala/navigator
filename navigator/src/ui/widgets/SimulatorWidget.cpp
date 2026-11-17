@@ -2573,6 +2573,7 @@ void SimulatorWidget::persistWorld(const vsim::WorldConfig &w) {
     s.setValue("ry", o.rotate.y());
     s.setValue("rz", o.rotate.z());
     s.setValue("rest", o.restitution);
+    s.setValue("style", o.style);
   }
   s.endArray();
   s.endGroup();
@@ -2620,6 +2621,7 @@ vsim::WorldConfig SimulatorWidget::restoreWorld() {
     o.rotate = QVector3D(s.value("rx").toFloat(), s.value("ry").toFloat(),
                          s.value("rz").toFloat());
     o.restitution = s.value("rest", 0.3).toFloat();
+    o.style = s.value("style", 0).toInt(); // absent in older settings
     w.obstacles.push_back(o);
   }
   s.endArray();

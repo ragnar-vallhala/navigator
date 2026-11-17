@@ -101,6 +101,7 @@ public:
   }
   float homePadTerrain() const { return w_.m_homePad.z(); }
   void persist() { w_.persistWorld(w_.m_worldEditor->config()); }
+  vsim::WorldConfig restore() { return w_.restoreWorld(); }
   void start() { w_.startInAppSim(); }
   void stop() { w_.stopInAppSim(); }
   // Change the world the way the World tab does.
@@ -321,6 +322,35 @@ private slots:
     QVERIFY2(above < 1.0f, "parked vehicle is not on the home pad");
   }
 
+
+  // The prop look (Obstacle::style: tree trunk, canopy, container, ...) is part
+  // of the saved world, so a preset's trees and containers must not turn into
+  // plain shapes after a restart. Round-trips the settings store only.
+  void obstacleStyleSurvivesRestart_data() {
+    QTest::addColumn<QString>("preset");
+    QTest::newRow("forest") << QStringLiteral("forest");
+    QTest::newRow("yard") << QStringLiteral("yard");
+  }
+  void obstacleStyleSurvivesRestart() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    QFETCH(QString, preset);
+    a_->changeWorld([&](vsim::WorldConfig &c) {
+      QVERIFY(vsim::applyWorldPreset(c, preset, 5));
+    });
+    const QVector<vsim::Obstacle> want = a_->editor()->config().obstacles;
+    int styled = 0;
+    for (const vsim::Obstacle &o : want)
+      styled += o.style != 0;
+    QVERIFY2(styled > 0, "the preset has no styled obstacle to check");
+    a_->persist();
+    const QVector<vsim::Obstacle> got = a_->restore().obstacles;
+    QCOMPARE(got.size(), want.size());
+    for (int i = 0; i < want.size(); ++i)
+      QVERIFY2(got[i].style == want[i].style,
+               qPrintable(QStringLiteral("obstacle %1 style %2 -> %3")
+                              .arg(i).arg(want[i].style).arg(got[i].style)));
+  }
 
   // Every shipped preset (not just a sample), stopped, then restored by a fresh
   // widget as the next launch does.
