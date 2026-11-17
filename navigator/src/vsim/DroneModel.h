@@ -65,6 +65,10 @@ struct DroneModel {
   // z is above the motor bell, i.e. negative).
   std::array<std::array<float, 3>, 4> hub{};
   float visualPropRadius = 0.0f; // blade radius actually modelled [m]
+  // How far the whole model (body and hubs) was lifted so its lowest point
+  // rests on body z = 0, the plane the engine rests the vehicle on [m, up].
+  // Anything drawn at the layout positions (editor markers) moves up by it.
+  float lift = 0.0f;
   int bladeCount = 2;
   // Axis-aligned bounds of body + props placed at their hubs.
   std::array<float, 3> bmin{}, bmax{};

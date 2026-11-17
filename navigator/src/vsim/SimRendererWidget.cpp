@@ -881,6 +881,7 @@ void SimRendererWidget::rebuildDroneModel() {
   }
   in.cls = vsim::droneClassFor(presetId_.toStdString(), propRadius_);
   model_ = vsim::buildDroneModel(in);
+  modelLift_ = model_.lift;
   const vsim::OrbitRange orbit = vsim::orbitRangeFor(model_);
   camMinRadius_ = orbit.min;
   camMaxRadius_ = orbit.max;
@@ -1446,7 +1447,7 @@ void SimRendererWidget::paintGL() {
       const QQuaternion ori =
           QQuaternion::rotationTo(QVector3D(0, 0, 1), axisN);
 
-      QMatrix4x4 mr = model;
+      QMatrix4x4 mr = markerModel();
       mr.translate(motorPos_[i]);
       mr.rotate(ori);
       const QVector3D base = (motorSpin_[i] >= 0)
@@ -1460,7 +1461,7 @@ void SimRendererWidget::paintGL() {
       drawMesh(rotor_, view * mr, c);
 
       // Thrust direction: unit +Z segment rotated onto the axis, shortened.
-      QMatrix4x4 ml = model;
+      QMatrix4x4 ml = markerModel();
       ml.translate(motorPos_[i]);
       ml.rotate(ori);
       ml.scale(1.0f, 1.0f, 0.18f);
@@ -2522,7 +2523,7 @@ void SimRendererWidget::drawMotorLabels(const QMatrix4x4 &view) {
   const float s = 0.07f; // glyph size [m]
   glDisable(GL_DEPTH_TEST);
   for (int i = 0; i < 4; ++i) {
-    const QVector3D pos = model.map(motorPos_[i]) + up * 0.12f; // above marker
+    const QVector3D pos = markerModel().map(motorPos_[i]) + up * 0.12f; // above marker
     QMatrix4x4 m;
     m.setColumn(0, QVector4D(right * s, 0));
     m.setColumn(1, QVector4D(up * s, 0));
@@ -3021,6 +3022,17 @@ void SimRendererWidget::keyPressEvent(QKeyEvent *e) {
 
 // ---------- gizmo editing ----------
 
+// Body -> world for the editor markers (motor discs, thrust lines, numbers,
+// gizmo). The procedural model is lifted by modelLift_ so its lowest point rests
+// on the ground; the markers sit on the drawn motors, which moved with it.
+// motorPos_ itself is the true layout and is never shifted.
+QMatrix4x4 SimRendererWidget::markerModel() const {
+  QMatrix4x4 m = modelMatrix();
+  if (!hasMesh_)
+    m.translate(0.0f, 0.0f, -modelLift_);
+  return m;
+}
+
 QMatrix4x4 SimRendererWidget::modelMatrix() const {
   QMatrix4x4 m;
   m.translate(snap_.pos_w);
@@ -3061,7 +3073,7 @@ bool SimRendererWidget::pickMotor(const QPoint &px, int *outIndex) const {
   float best = 22.0f; // pixel radius
   int bestI = -1;
   for (int i = 0; i < 4; ++i) {
-    const QVector3D wp = model.map(motorPos_[i]);
+    const QVector3D wp = markerModel().map(motorPos_[i]);
     const QVector4D clip = vp * QVector4D(wp, 1.0f);
     if (clip.w() <= 0.0f)
       continue;
@@ -3086,7 +3098,7 @@ void SimRendererWidget::beginTool(Tool t) {
   startPos_ = motorPos_[selected_];
   startAxis_ = motorAxis_[selected_];
   toolStartMouse_ = last_mouse_ = mapFromGlobal(QCursor::pos());
-  startWorld_ = modelMatrix().map(startPos_);
+  startWorld_ = markerModel().map(startPos_);
   // Drag plane: through the motor, facing the camera.
   QVector3D eye, tgt;
   cameraEyeTarget(&eye, &tgt);
@@ -3125,7 +3137,7 @@ void SimRendererWidget::updateToolFromMouse(const QPoint &px) {
       const QVector3D axisW = model.mapVector(axisB).normalized();
       delta = axisW * QVector3D::dotProduct(delta, axisW);
     }
-    motorPos_[selected_] = model.inverted().map(startWorld_ + delta);
+    motorPos_[selected_] = markerModel().inverted().map(startWorld_ + delta);
   } else { // Rotate the thrust axis about a body axis (default X).
     const int k = (axisLock_ >= 0) ? axisLock_ : 0;
     const QVector3D kk(k == 0 ? 1.f : 0.f, k == 1 ? 1.f : 0.f,
@@ -3157,7 +3169,7 @@ void SimRendererWidget::commitTool(bool confirm) {
 void SimRendererWidget::drawGizmo(const QMatrix4x4 &view) {
   if (selected_ < 0)
     return;
-  QMatrix4x4 base = modelMatrix();
+  QMatrix4x4 base = markerModel();
   base.translate(motorPos_[selected_]);
   const float L = 0.18f;
   const QVector3D cX(0.90f, 0.25f, 0.25f), cY(0.25f, 0.85f, 0.25f),
