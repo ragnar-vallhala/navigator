@@ -91,8 +91,12 @@ private:
 
 AdsBackend::AdsBackend(QMainWindow *host) : m_host(host) {
   using M = ads::CDockManager;
-  M::setConfigFlags(M::DefaultOpaqueConfig | M::DockAreaHasUndockButton |
-                    M::AlwaysShowTabs);
+  // DragPreviewHasWindowFrame: without it ADS drags a see-through (ARGB,
+  // WA_TranslucentBackground) top-level preview on X11, which leaves ghost
+  // trails behind it under a compositor on some drivers. With it the preview
+  // is an opaque framed window instead.
+  M::setConfigFlags(M::DefaultOpaqueConfig | M::DragPreviewHasWindowFrame |
+                    M::DockAreaHasUndockButton | M::AlwaysShowTabs);
   M::setConfigFlag(M::FocusHighlighting, false);
 }
 
