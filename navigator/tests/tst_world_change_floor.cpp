@@ -81,6 +81,7 @@ public:
   void shipDelay(int ms) { w_.m_testShipDelayMs = ms; }
   bool running() const { return w_.m_sim != nullptr; }
   QString logText() const { return w_.m_log->toPlainText(); }
+  void clearLog() { w_.m_log->clear(); }
   bool shipBusy() const {
     return w_.m_shipWatcher || w_.m_shipPending || w_.m_collisionPending ||
            w_.m_spawnResetPending || w_.m_heldPose.has_value();
@@ -220,6 +221,21 @@ private slots:
     QVERIFY(QTest::qWaitForWindowExposed(w_));
     a_->worldMode(); // editing the world: stopped, free-roam camera
     pump(500);
+  }
+
+  // Every case starts from the same state: sim stopped, log empty. A case that
+  // leaves the sim running (inFlightChangesPlaceVehicleOnGround does) would
+  // otherwise hand the next case its "World changed" lines, and
+  // runningChangesPlaceVehicleOnGround asserts there are none after Start. CI
+  // runs each case in its own process, so only a one-process run showed it.
+  void init() {
+    if (!gl_)
+      return;
+    if (a_->running()) {
+      a_->stop();
+      QVERIFY(waitFor([&] { return !a_->running(); }, 10000));
+    }
+    a_->clearLog();
   }
 
   void cleanupTestCase() {
