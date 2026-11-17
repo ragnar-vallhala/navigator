@@ -404,6 +404,7 @@ private:
   // ---- gizmo editing (Blender-style; active only when editable_) ----
   enum class Tool { None, Move, Rotate, Scale };
   QMatrix4x4 modelMatrix() const; // body -> world
+  QMatrix4x4 markerModel() const; // same, shifted onto the drawn motors
   void cameraEyeTarget(QVector3D *eye, QVector3D *target) const;
   void rayThroughPixel(const QPoint &px, QVector3D *o, QVector3D *d) const;
   bool pickMotor(const QPoint &px, int *outIndex) const;
@@ -675,6 +676,7 @@ private:
 
   // Camera state (orbit around drone).
   float cam_radius_ = 4.0f;
+  float modelLift_ = 0.0f;     // how far the procedural model is lifted [m]
   float camMinRadius_ = 0.5f;  // zoom limits, set from the airframe's size
   float camMaxRadius_ = 50.0f;
   bool userZoomed_ = false;    // the wheel was used: keep the distance on a rebuild

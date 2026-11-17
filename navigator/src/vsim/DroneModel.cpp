@@ -57,6 +57,9 @@ const Col kBoardEsc = {0.08f, 0.08f, 0.09f};
 const Col kLens = {0.08f, 0.16f, 0.45f};
 const Col kBlade = {0.40f, 0.43f, 0.50f};
 const Col kHub = {0.62f, 0.64f, 0.68f};
+const Col kCanopy = {0.16f, 0.46f, 0.74f};    // whoop canopy shell
+const Col kCanopyTop = {0.30f, 0.62f, 0.90f};
+const Col kRubber = {0.06f, 0.06f, 0.07f};  // landing-leg feet
 
 // ---- mesh builder (body frame, NED: up is -z; heights h are "up") ---------
 struct B {
@@ -200,11 +203,24 @@ struct Style {
   bool gps;
 };
 
+// Landing-leg length at the class's reference size [m]; 0 = no legs. Only the
+// big airframes stand on legs; the small ones rest on their arms.
+float legHeightFor(DroneClass c) {
+  switch (c) {
+  case DroneClass::LongRange7:
+    return 0.030f;
+  case DroneClass::Heavy10:
+    return 0.045f;
+  default:
+    return 0.0f;
+  }
+}
+
 Style styleOf(DroneClass c) {
   switch (c) {
-  case DroneClass::Light3:
-    return {0.0381f, 0.013f, 0.009f, 0.0030f, 0.075f, 0.034f, 0.0016f, 0.016f,
-            0.060f,  0.022f, 0.020f,  0.0095f, 0.011f, 3,      0.0095f, false,
+  case DroneClass::Light3: // toothpick: slim arms, a small stack
+    return {0.0381f, 0.0085f, 0.0058f, 0.0022f, 0.062f, 0.028f, 0.0014f, 0.014f,
+            0.052f,  0.020f,  0.018f,  0.0095f, 0.011f, 3,      0.0095f, false,
             false};
   case DroneClass::LongRange7:
     return {0.0889f, 0.024f, 0.015f, 0.0060f, 0.150f, 0.058f, 0.0030f, 0.030f,
@@ -439,6 +455,19 @@ DroneModel buildDroneModel(const DroneModelInput &in) {
           camHalfY * 0.62f, camH * 0.36f, kBoardEsc, kBoardEsc);
     b.box(camX + 0.0142f * k, cy, plateLo + camH / 2, 0.0006f * k,
           camHalfY * 0.36f, camH * 0.2f, kLens, kLens);
+    // 7in stretch frame: two long side plates between the plates and a cage of
+    // bars round the camera
+    if (in.cls == DroneClass::LongRange7) {
+      const float railL = L * 1.18f, railH = (topLo - plateHi) + 2 * pT;
+      for (int sy = -1; sy <= 1; sy += 2) {
+        b.box(cx - 0.04f * L, cy + sy * (W * 0.5f + 0.0012f * k),
+              plateLo + railH / 2, railL / 2, 0.0012f * k, railH / 2, kCarbon,
+              kCarbonTop);
+        b.box(camX, cy + sy * (camHalfY + 0.0035f * k), plateLo + camH / 2,
+              0.0075f * k, 0.0012f * k, camH / 2 + 0.002f * k, kCarbon,
+              kCarbonTop);
+      }
+    }
     // GPS puck on a mast at the rear (long range / heavy)
     if (S.gps) {
       const float gx = cx - L / 2 + 0.012f * k;
@@ -451,10 +480,12 @@ DroneModel buildDroneModel(const DroneModelInput &in) {
     // whoop: flat body, tiny battery on top, camera in front
     const float bl = std::min(S.battL * k, L), bw = std::min(S.battW * k, W * 0.8f);
     const float bh = S.battH * k;
-    b.box(cx, cy, plateHi + 0.0009f * k + bh / 2, bl / 2, bw / 2, bh / 2, kBattery,
-          kBatteryTop);
-    b.box(cx, cy, plateHi + 0.0006f * k, 0.011f * k, 0.008f * k, 0.0006f * k,
-          kBoardFc, kBoardFc);
+    // canopy shell over the board, the battery strapped on top of it
+    const float cap = 0.0048f * k;
+    b.prism(octo(L * 0.86f, W * 0.92f), cx, cy, plateHi, plateHi + cap, kCanopy,
+            kCanopyTop);
+    b.box(cx, cy, plateHi + cap + 0.0009f * k + bh / 2, bl / 2, bw / 2, bh / 2,
+          kBattery, kBatteryTop);
     b.box(cx + L / 2 - 0.001f * k, cy, plateHi + 0.0055f * k, 0.0045f * k,
           0.0058f * k, 0.0045f * k, kFront, kFront);
     b.box(cx + L / 2 + 0.0036f * k, cy, plateHi + 0.0055f * k, 0.0008f * k,
@@ -480,6 +511,38 @@ DroneModel buildDroneModel(const DroneModelInput &in) {
     const float hubUp = T / 2 + motorH + 0.0015f * k;
     M.hub[i] = {mx, my, pos[i][2] - hubUp};
     M.prop[i] = makeProp(S, k, vr, in.spin[i] >= 0 ? +1 : -1, front);
+  }
+
+  // ---- landing legs (big airframes) ----
+  // The engine rests the vehicle on contact points at the rotor-hub plane
+  // (body z = 0) and has no collision shape for legs, so legs hanging below that
+  // plane would sink into the ground. Instead the whole model is lifted until
+  // the lowest leg foot sits exactly on z = 0 (see the lift below): the visual
+  // stands on its legs at the height the physics rests at.
+  const float legH = legHeightFor(in.cls) * k;
+  if (legH > 0.0f) {
+    for (int i = 0; i < 4; ++i) {
+      const float t = 0.55f; // along the arm, under the arm's thick part
+      const float lx = cx + (pos[i][0] - cx) * t, ly = cy + (pos[i][1] - cy) * t;
+      const float top = -T / 2;
+      b.cyl(lx, ly, top - legH, top, 0.0035f * k, 0.0035f * k, 10, kAlu, kAlu);
+      b.cyl(lx, ly, top - legH - 0.0030f * k, top - legH, 0.0085f * k,
+            0.0070f * k, 12, kRubber, kRubber);
+    }
+  }
+  // Every class: lift so the lowest point of the body sits on z = 0 (the arm
+  // undersides used to hang a few mm below it, into the ground).
+  {
+    float lowest = -1e30f; // largest z (down)
+    for (size_t v = 0; v < M.body.vertexCount(); ++v)
+      lowest = std::max(lowest, M.body.data[v * 9 + 2]);
+    if (std::isfinite(lowest)) {
+      for (size_t v = 0; v < M.body.vertexCount(); ++v)
+        M.body.data[v * 9 + 2] -= lowest;
+      for (int i = 0; i < 4; ++i)
+        M.hub[i][2] -= lowest;
+      M.lift = lowest;
+    }
   }
 
   // ---- bounds (body + props placed at hubs) ----
