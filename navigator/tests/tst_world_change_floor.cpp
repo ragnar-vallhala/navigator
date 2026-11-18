@@ -519,10 +519,14 @@ private slots:
       QSKIP("no engine module (set VAYU_SITL_MODULE)");
     QFETCH(QString, preset);
     QFETCH(float, dist);
+    // Per-phase wall time, logged so a CI timeout shows where it went.
+    QElapsedTimer row;
+    row.start();
     if (!a_->running()) {
       a_->start();
       QVERIFY(a_->running());
     }
+    const qint64 tStart = row.elapsed();
     a_->changeWorld([&](vsim::WorldConfig &c) {
       if (preset == QLatin1String("endless")) {
         c.worldPreset.clear();
@@ -533,6 +537,7 @@ private slots:
       }
     });
     QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 30000));
+    const qint64 tWorld = row.elapsed();
     pump(2000);
 
     const float x = dist * 0.8f, y = dist * 0.6f; // |(x, y)| == dist
@@ -544,6 +549,7 @@ private slots:
           return std::hypot(p.x() - x, p.y() - y) < 30.0f && !a_->shipBusy();
         },
         60000));
+    const qint64 tShip = row.elapsed();
     // Fall (8 m) and settle, sampling the pose so a failure shows whether the
     // vehicle was still falling, resting on the engine's z=0 floor, or lifted.
     QString trace;
@@ -551,8 +557,21 @@ private slots:
       QElapsedTimer tl;
       tl.start();
       qint64 next = 0;
+      // Up to 6 s, but done as soon as the vehicle has lain still for 1 s
+      // after at least 2 s (the fall is 8 m, about 1.3 s): a fixed 6 s per
+      // row was most of the test's wall time on a slow runner.
+      qint64 stillSince = -1;
       while (tl.elapsed() < 6000) {
         pump(20);
+        if (std::fabs(a_->lastVel().z()) < 0.05f && std::fabs(a_->lastVel().x()) < 0.3f &&
+            std::fabs(a_->lastVel().y()) < 0.3f) {
+          if (stillSince < 0)
+            stillSince = tl.elapsed();
+          if (tl.elapsed() >= 2000 && tl.elapsed() - stillSince >= 1000)
+            break;
+        } else {
+          stillSince = -1;
+        }
         if (tl.elapsed() >= next) {
           next += 500;
           trace += QStringLiteral(" t=%1:z=%2,vz=%3,busy=%4")
@@ -577,6 +596,13 @@ private slots:
       }
     }
 #endif
+    qInfo("far %s %.0f m phases: start=%lld world=%lld teleport-ship=%lld "
+          "settle=%lld total=%lld ms",
+          qPrintable(preset), dist, static_cast<long long>(tStart),
+          static_cast<long long>(tWorld - tStart),
+          static_cast<long long>(tShip - tWorld - 2000),
+          static_cast<long long>(row.elapsed() - tShip),
+          static_cast<long long>(row.elapsed()));
     qInfo("far %s %.0f m: vehicle=(%.1f %.1f %.2f) ground=%.2f alt=%.2f "
           "vz=%.2f chunks=%zu pads=%zu rss=%ld MB",
           qPrintable(preset), dist, p.x(), p.y(), p.z(), g, alt,
