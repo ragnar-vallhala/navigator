@@ -176,7 +176,8 @@ public:
   void clearChunkVegetation();
   void setVegetationEnabled(bool on);
   bool vegetationEnabled() const { return vegEnabled_; }
-  // Trees are a separate opt-in (QSettings sim/vegetationTrees, NAV_VEGETATION_TREES).
+  // Trees have their own switch (QSettings sim/vegetationTrees, NAV_VEGETATION_TREES);
+  // on by default.
   void setVegetationTreesEnabled(bool on);
   bool vegetationTreesEnabled() const { return veg_ && veg_->treesEnabled(); }
   size_t vegetationInstanceCount(int species) const { return veg_ ? veg_->instanceCount(species) : 0; }

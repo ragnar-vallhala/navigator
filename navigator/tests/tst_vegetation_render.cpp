@@ -33,6 +33,7 @@
 #include <QApplication>
 #include <QGuiApplication>
 #include <QOpenGLContext>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QSurfaceFormat>
 #include <QVBoxLayout>
@@ -155,7 +156,7 @@ struct Rig {
     lay->setContentsMargins(0, 0, 0, 0);
     r = new SimRendererWidget;
     r->setGlErrorCheck(true);
-    r->setVegetationTreesEnabled(trees); // opt-in, like the app's setting
+    r->setVegetationTreesEnabled(trees); // explicit, whatever the default is
     auto *box = QWidget::createWindowContainer(r, &host);
     box->setFixedSize(800, 500);
     lay->addWidget(box);
@@ -173,7 +174,7 @@ class TstVegetationRender : public QObject {
 private slots:
   void initTestCase() {
     qputenv("NAV_VEGETATION", "1");
-    qunsetenv("NAV_VEGETATION_TREES"); // the default: trees off
+    qunsetenv("NAV_VEGETATION_TREES"); // the default: trees on
     QStandardPaths::setTestModeEnabled(true); // no stored sim/vegetationTrees
     if (QGuiApplication::platformName() == "offscreen")
       QSKIP("the GL view needs a real platform: set QT_QPA_PLATFORM=xcb, DISPLAY "
@@ -263,11 +264,12 @@ private slots:
     QCOMPARE(rig.r->vegetationInstanceCount(), size_t(0));
   }
 
-  // The default: trees are off, so a forest palette still gets shrubs, ground
-  // plants, grass tufts and rocks, but no tree instances, impostors or atlas.
-  void defaultHasNoTreesButGroundCover() {
+  // With trees switched off (NAV_VEGETATION_TREES=0 or the setting), a forest
+  // palette still gets shrubs, ground plants, grass tufts and rocks, but no
+  // tree instances, impostors or atlas.
+  void treesOffHasNoTreesButGroundCover() {
     const World forest = buildWorld(kPalForest, -1, 0);
-    Rig rig; // trees off
+    Rig rig; // trees off (explicit)
     QVERIFY(!rig.r->vegetationTreesEnabled());
     loadTerrain(rig.r, forest);
     loadVegetation(rig.r, forest);
@@ -295,12 +297,31 @@ private slots:
     QVERIFY(!VegetationRenderer::enabledByConfig());
     qputenv("NAV_VEGETATION", "1");
     QVERIFY(VegetationRenderer::enabledByConfig());
+    // No env var and no stored setting: trees are on.
+    qunsetenv("NAV_VEGETATION_TREES");
+    QVERIFY(VegetationRenderer::treesEnabledByConfig());
+    qputenv("NAV_VEGETATION_TREES", "1");
+    QVERIFY(VegetationRenderer::treesEnabledByConfig());
+    for (const char *off : {"0", "false", "FALSE", "off", "Off"}) {
+      qputenv("NAV_VEGETATION_TREES", off);
+      QVERIFY2(!VegetationRenderer::treesEnabledByConfig(), off);
+    }
+    // The stored setting turns them off when no env var overrides it, and the
+    // env var wins over the setting.
+    qunsetenv("NAV_VEGETATION_TREES");
+    {
+      QSettings s;
+      s.setValue("sim/vegetationTrees", false);
+    }
     QVERIFY(!VegetationRenderer::treesEnabledByConfig());
     qputenv("NAV_VEGETATION_TREES", "1");
     QVERIFY(VegetationRenderer::treesEnabledByConfig());
-    qputenv("NAV_VEGETATION_TREES", "0");
-    QVERIFY(!VegetationRenderer::treesEnabledByConfig());
     qunsetenv("NAV_VEGETATION_TREES");
+    {
+      QSettings s;
+      s.remove("sim/vegetationTrees");
+    }
+    QVERIFY(VegetationRenderer::treesEnabledByConfig());
   }
 
   // Forest scene near the ground: vegetation ON differs from OFF, neither is

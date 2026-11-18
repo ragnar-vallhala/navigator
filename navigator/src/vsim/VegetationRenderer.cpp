@@ -554,7 +554,7 @@ bool VegetationRenderer::treesEnabledByConfig() {
   if (!env.isEmpty())
     return env != "0" && env.toLower() != "false" && env.toLower() != "off";
   QSettings s;
-  return s.value("sim/vegetationTrees", false).toBool();
+  return s.value("sim/vegetationTrees", true).toBool();
 }
 
 VegetationRenderer::VegetationRenderer() : treesOn_(treesEnabledByConfig()) {}
