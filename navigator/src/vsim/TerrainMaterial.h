@@ -56,6 +56,13 @@ inline constexpr float kDirtEdge0 = -0.02f;   // dirt where cover r - kDirtG*g p
 inline constexpr float kDirtEdge1 = 0.10f;    // ...and is complete here
 inline constexpr float kDirtG = 0.92f;
 
+// Snow: bright, unsaturated cover. There the photos are not used for colour
+// (the rock photo is orange); the cover hue is kept, as on grass.
+inline constexpr float kSnowLuma0 = 0.52f;
+inline constexpr float kSnowLuma1 = 0.68f;
+inline constexpr float kSnowSat0 = 0.10f; // saturation (max-min)/max edges
+inline constexpr float kSnowSat1 = 0.22f;
+
 struct Splat {
   float grass = 1.0f, rock = 0.0f, dirt = 0.0f; // sum to 1
 };
@@ -74,6 +81,14 @@ inline Splat splatWeights(float slope, float coverR, float coverG, float noise01
   s.dirt = smooth01(kDirtEdge0, kDirtEdge1, coverR - coverG * kDirtG) * (1.0f - s.rock);
   s.grass = 1.0f - s.rock - s.dirt;
   return s;
+}
+
+// 0..1 snow amount of a cell colour (r, g, b display values).
+inline float snowWeight(float r, float g, float b) {
+  const float luma = 0.30f * r + 0.59f * g + 0.11f * b;
+  const float mx = std::max(r, std::max(g, b)), mn = std::min(r, std::min(g, b));
+  const float sat = (mx - mn) / std::max(mx, 1e-3f);
+  return smooth01(kSnowLuma0, kSnowLuma1, luma) * (1.0f - smooth01(kSnowSat0, kSnowSat1, sat));
 }
 
 } // namespace vsim::terrain

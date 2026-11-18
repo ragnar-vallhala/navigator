@@ -76,6 +76,21 @@ private slots:
     const float hi = splatWeights(0.3f, 0.2f, 0.45f, 0.9f).rock;
     QVERIFY(hi > lo);
   }
+  void snowIsBrightAndUnsaturated() {
+    QVERIFY(snowWeight(0.85f, 0.87f, 0.90f) > 0.99f);     // fresh snow
+    QVERIFY(snowWeight(0.70f, 0.70f, 0.72f) > 0.99f);     // shaded snow
+    QVERIFY(snowWeight(0.25f, 0.45f, 0.20f) < 0.001f);    // grass
+    QVERIFY(snowWeight(0.55f, 0.45f, 0.30f) < 0.001f);    // dirt / sand
+    QVERIFY(snowWeight(0.30f, 0.30f, 0.30f) < 0.001f);    // dark grey rock
+    QVERIFY(snowWeight(0.85f, 0.78f, 0.55f) < 0.5f);      // pale sand, saturated
+    float prev = 0.0f;                                    // grows with brightness
+    for (int i = 0; i <= 20; ++i) {
+      const float v = 0.4f + 0.5f * i / 20.0f;
+      const float w = snowWeight(v, v, v);
+      QVERIFY(w >= prev - 1e-6f);
+      prev = w;
+    }
+  }
   void softwareRasterisersDefaultToLow_data() {
     QTest::addColumn<QString>("renderer");
     QTest::addColumn<bool>("low");

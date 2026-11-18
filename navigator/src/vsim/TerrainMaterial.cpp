@@ -1,6 +1,7 @@
 #include "TerrainTextures.h"
 
 #include <QImage>
+#include <QOpenGLContext>
 #include <QOpenGLExtraFunctions>
 #include <QString>
 
@@ -14,6 +15,8 @@ namespace {
 // map, 2..7 are ours (3 diffuse, then 3 normal).
 constexpr int kFirstUnit = 2;
 constexpr int kTexCount = 6;
+constexpr GLenum kMaxAnisotropyExt = 0x84FE;      // GL_TEXTURE_MAX_ANISOTROPY(_EXT)
+constexpr GLenum kMaxAnisotropyLimitExt = 0x84FF; // GL_MAX_TEXTURE_MAX_ANISOTROPY(_EXT)
 
 // grass, rock, dirt; diffuse then normal map. Poly Haven, CC0, see
 // resources/terrain/LICENSES.md.
@@ -47,9 +50,8 @@ vec2 tmH22(vec2 p) {
 // and offset into the texture, and the four cells around a pixel are blended
 // with smooth weights. Gradients come from the unrotated coordinates, so mips
 // and anisotropic filtering stay right across cell borders.
-vec3 tmStoch(sampler2D t, vec2 p, bool isNormal) {
+vec3 tmStoch(sampler2D t, vec2 p, vec2 dx, vec2 dy, bool isNormal) {
   vec2 i = floor(p), f = fract(p);
-  vec2 dx = dFdx(p), dy = dFdy(p);
   vec3 acc = vec3(0.0); float ws = 0.0, w2 = 0.0;
   for (int b = 0; b < 2; ++b)
     for (int a = 0; a < 2; ++a) {
@@ -78,17 +80,17 @@ vec3 tmStoch(sampler2D t, vec2 p, bool isNormal) {
 // Two scales per texture: ~3 m near, ~21 m far, crossfaded between 25 and
 // 140 m, so neither the near repeat nor the far one reads. Only the scales
 // that contribute are sampled.
-vec3 tmTex(sampler2D t, vec2 p, float dist) {
+vec3 tmTex(sampler2D t, vec2 p, vec2 dx, vec2 dy, float dist) {
   float k = smoothstep(25.0, 140.0, dist);
-  vec3 a = k < 0.999 ? tmStoch(t, p / 3.2, false) : vec3(0.0);
-  vec3 b = k > 0.001 ? tmStoch(t, p / 21.0, false) : vec3(0.0);
+  vec3 a = k < 0.999 ? tmStoch(t, p / 3.2, dx / 3.2, dy / 3.2, false) : vec3(0.0);
+  vec3 b = k > 0.001 ? tmStoch(t, p / 21.0, dx / 21.0, dy / 21.0, false) : vec3(0.0);
   return mix(a, b, k);
 }
-vec2 tmNrm(sampler2D t, vec2 p, float dist) {
+vec2 tmNrm(sampler2D t, vec2 p, vec2 dx, vec2 dy, float dist) {
   float k = smoothstep(25.0, 140.0, dist), fade = 1.0 - smoothstep(30.0, 150.0, dist);
   if (fade <= 0.001) return vec2(0.0);
-  vec2 a = k < 0.999 ? tmStoch(t, p / 3.2, true).xy - 0.5 : vec2(0.0);
-  vec2 b = k > 0.001 ? tmStoch(t, p / 21.0, true).xy - 0.5 : vec2(0.0);
+  vec2 a = k < 0.999 ? tmStoch(t, p / 3.2, dx / 3.2, dy / 3.2, true).xy - 0.5 : vec2(0.0);
+  vec2 b = k > 0.001 ? tmStoch(t, p / 21.0, dx / 21.0, dy / 21.0, true).xy - 0.5 : vec2(0.0);
   return mix(a, b * 0.6, k) * 2.0 * fade;
 }
 float tmLuma(vec3 c) { return dot(c, vec3(0.30, 0.59, 0.11)); }
@@ -97,13 +99,21 @@ float tmLuma(vec3 c) { return dot(c, vec3(0.30, 0.59, 0.11)); }
 // vcol is the mesh's cell colour (GroundCover); base and n are updated.
 void terrainMaterial(vec3 vcol, vec2 p, float dist, inout vec3 base, inout vec3 n) {
   float slope = 1.0 - clamp(-n.z, 0.0, 1.0);
+  vec2 dx = dFdx(p), dy = dFdy(p); // once, here: not inside a per-pixel branch
   // Splat rule: must match splatWeights() in TerrainMaterial.h.
   float rockW = smoothstep(%1, %2, slope + %3 * (tmNoise(p / 31.0) - 0.5));
   float dirtW = smoothstep(%4, %5, vcol.r - vcol.g * %6) * (1.0 - rockW);
-  bool useG = rockW < 0.999 && dirtW < 0.999;
-  vec3 a0 = useG ? tmTex(u_t0, p, dist) : vec3(0.0);
-  vec3 a1 = rockW > 0.001 ? tmTex(u_t1, p, dist) : vec3(0.0);
-  vec3 a2 = dirtW > 0.001 ? tmTex(u_t2, p, dist) : vec3(0.0);
+  // Snow (bright, unsaturated cover) keeps the cover's hue like grass does: the
+  // photos are not snow, and the rock photo is orange. Same rule as snowWeight().
+  float cmax = max(vcol.r, max(vcol.g, vcol.b)), cmin = min(vcol.r, min(vcol.g, vcol.b));
+  float snowW = smoothstep(%7, %8, tmLuma(vcol)) *
+                (1.0 - smoothstep(%9, %10, (cmax - cmin) / max(cmax, 1e-3)));
+  // The grass photo also carries the snow's brightness detail, so it is sampled
+  // wherever there is snow, even on slopes that are otherwise all rock.
+  bool useG = (rockW < 0.999 && dirtW < 0.999) || snowW > 0.001;
+  vec3 a0 = useG ? tmTex(u_t0, p, dx, dy, dist) : vec3(0.0);
+  vec3 a1 = rockW > 0.001 ? tmTex(u_t1, p, dx, dy, dist) : vec3(0.0);
+  vec3 a2 = dirtW > 0.001 ? tmTex(u_t2, p, dx, dy, dist) : vec3(0.0);
   // Grass keeps the cover's hue (green fields, brown tracks) and takes only
   // the photo's brightness detail, relative to the photo's own mean so the
   // overall level stays the cover's. Rock and dirt show their own colour.
@@ -115,16 +125,17 @@ void terrainMaterial(vec3 vcol, vec2 p, float dist, inout vec3 base, inout vec3 
   vec3 own = mix(a0, a2 * 1.25, dirtW);
   own = mix(own, a1 * 1.15, rockW) * lvl;
   own = mix(vec3(tmLuma(own)), own, 0.7); // the rock photo is orange: calm it
-  float own_k = max(rockW * 0.85, dirtW * 0.55);
+  float own_k = max(rockW * 0.85, dirtW * 0.55) * (1.0 - snowW);
+  // (when own_k is 0 the grass term is the whole albedo: a0 must exist)
   vec3 alb = mix(grass, own, own_k);
   // Macro variation, 50 to 200 m: brightness and a warm/cool drift, so large
   // fields never read as one repeated swatch.
   float mA = tmNoise(p / 190.0 + 17.3) - 0.5, mB = tmNoise(p / 67.0 + 41.7) - 0.5;
   alb *= (1.0 + 0.55 * mA + 0.35 * mB) * vec3(1.0 + 0.20 * mA, 1.0 + 0.05 * mB, 1.0 - 0.22 * mA);
   base = alb;
-  vec2 n0 = useG ? tmNrm(u_n0, p, dist) : vec2(0.0);
-  vec2 n1 = rockW > 0.001 ? tmNrm(u_n1, p, dist) : vec2(0.0);
-  vec2 n2 = dirtW > 0.001 ? tmNrm(u_n2, p, dist) : vec2(0.0);
+  vec2 n0 = useG ? tmNrm(u_n0, p, dx, dy, dist) : vec2(0.0);
+  vec2 n1 = rockW > 0.001 ? tmNrm(u_n1, p, dx, dy, dist) : vec2(0.0);
+  vec2 n2 = dirtW > 0.001 ? tmNrm(u_n2, p, dx, dy, dist) : vec2(0.0);
   vec2 nm = mix(mix(n0, n2, dirtW), n1, rockW);
   n = normalize(n + vec3(nm.x, nm.y, 0.0) * 1.1);
 }
@@ -135,12 +146,17 @@ void terrainMaterial(vec3 vcol, vec2 p, float dist, inout vec3 base, inout vec3 
 QByteArray terrainMaterialGLSL() {
   QString s = QString::fromLatin1(kGlslTemplate);
   auto f = [](float v) { return QString::number(static_cast<double>(v), 'f', 4); };
-  s.replace(QStringLiteral("%1"), f(kRockSlope0))
-      .replace(QStringLiteral("%2"), f(kRockSlope1))
-      .replace(QStringLiteral("%3"), f(kRockNoise))
-      .replace(QStringLiteral("%4"), f(kDirtEdge0))
+  // Highest index first: "%1" is a prefix of "%10".
+  s.replace(QStringLiteral("%10"), f(kSnowSat1))
+      .replace(QStringLiteral("%9"), f(kSnowSat0))
+      .replace(QStringLiteral("%8"), f(kSnowLuma1))
+      .replace(QStringLiteral("%7"), f(kSnowLuma0))
+      .replace(QStringLiteral("%6"), f(kDirtG))
       .replace(QStringLiteral("%5"), f(kDirtEdge1))
-      .replace(QStringLiteral("%6"), f(kDirtG));
+      .replace(QStringLiteral("%4"), f(kDirtEdge0))
+      .replace(QStringLiteral("%3"), f(kRockNoise))
+      .replace(QStringLiteral("%2"), f(kRockSlope1))
+      .replace(QStringLiteral("%1"), f(kRockSlope0));
   return s.toLatin1();
 }
 
@@ -150,6 +166,16 @@ bool TerrainTextures::load(QOpenGLExtraFunctions *gl) {
   if (loaded())
     return true;
   GLuint t[kTexCount] = {};
+  // Anisotropic filtering is an extension (core only from GL 4.6, absent on
+  // some GLES): ask for it only when the context has it, up to 8x.
+  float aniso = 0.0f;
+  if (const QOpenGLContext *ctx = QOpenGLContext::currentContext();
+      ctx && (ctx->hasExtension("GL_EXT_texture_filter_anisotropic") ||
+              ctx->hasExtension("GL_ARB_texture_filter_anisotropic"))) {
+    GLfloat maxAniso = 1.0f;
+    gl->glGetFloatv(kMaxAnisotropyLimitExt, &maxAniso);
+    aniso = std::min(8.0f, maxAniso);
+  }
   for (int i = 0; i < kTexCount; ++i) {
     QImage img(QString::fromLatin1(kFiles[i]));
     if (img.isNull()) {
@@ -167,7 +193,8 @@ bool TerrainTextures::load(QOpenGLExtraFunctions *gl) {
     gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    gl->glTexParameterf(GL_TEXTURE_2D, 0x84FE /*GL_TEXTURE_MAX_ANISOTROPY*/, 8.0f);
+    if (aniso > 1.0f)
+      gl->glTexParameterf(GL_TEXTURE_2D, kMaxAnisotropyExt, aniso);
   }
   gl->glBindTexture(GL_TEXTURE_2D, 0);
   for (int i = 0; i < kTexCount; ++i)
