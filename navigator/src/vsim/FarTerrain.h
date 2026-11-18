@@ -20,7 +20,7 @@
 // past its edge nothing was drawn, so from altitude the terrain ended in a cut
 // silhouette in front of a featureless fog band. FarTerrain samples the same
 // infinite TerrainField on a few concentric square rings whose cell size doubles
-// with distance (48 / 96 / 192 / 384 m) out to ~6.5 km, so the terrain carries
+// with distance (24 / 48 / 96 / 192 / 384 m) out to ~6.5 km, so the terrain carries
 // on into the fog and dissolves into the horizon.
 //
 // Qt- and GL-free: it yields interleaved vertices (pos3, normal3, colour3 — the
@@ -79,8 +79,10 @@ public:
     }
   };
 
-  static constexpr float kOverlapM = 48.0f; // ring starts this far inside the window
-  static constexpr float kBlendM = 96.0f; // ring heights: meshed surface -> raw field
+  static constexpr float kOverlapM = 24.0f; // ring starts this far inside the window
+  static constexpr float kSkirtM = 12.0f;    // wall hanging below the ring's edge
+  static constexpr float kSkirtGapM = 0.05f; // ...just outside the clip rectangle
+  static constexpr float kBlendM = 48.0f;  // ring heights: meshed surface -> raw field
 
   // The field to sample (null disables the ring and drops the geometry).
   void setField(std::shared_ptr<const procgen::TerrainField> f);
