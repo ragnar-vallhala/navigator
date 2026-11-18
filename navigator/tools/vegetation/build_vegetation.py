@@ -87,6 +87,9 @@ SMALL = (3000, 800, 150)
 # Full-size trees (8-20 m): the crown is the whole point, so LOD 0 keeps enough
 # cards to read as a dense crown from a drone at 20 m, and the far LODs stay
 # cheap because the billboard impostor takes over beyond them.
+# Broadleaf foliage: the scans are olive-yellow (hue about 70 deg); natural leaf
+# green sits near 90-100. (hue rotation in degrees, chroma and value factors)
+GRADE_LEAF = (-22.0, 0.95, 0.85)
 BIG_CONIFER = (32000, 7000, 1200)
 BIG_BROADLEAF = (36000, 7000, 1200)
 
@@ -104,15 +107,16 @@ SPECIES = [
                              wid=1.25, droop=(38, 22), r0=0.17, r1=0.03)])),
     dict(id='pine_sapling_medium', gltf='pine_sapling_medium_1k.gltf', category='tree',
          title='Pine (card conifer, Poly Haven pine_sapling_medium textures)',
+         # whorls of a few long, upward-curving branches with sky between them
          cards=dict(bark='pine_sapling_medium_bark', twig='pine_sapling_medium_twig', key='black',
-                    crop=(30, 40, 235, 455), grade=(0.55, 0.78, 0.86), thick=1.6,
+                    crop=(30, 40, 235, 455), grade=(0.85, 1.20, 1.35), thick=1.6, de_yellow=0.8,
                     variants=[
-                        dict(H=12.0, tiers=(7, 5, 4), cards=(14, 10, 7), y0=0.30, R=3.5, len=1.3,
-                             wid=1.4, droop=(24, 12), r0=0.25, r1=0.05),
-                        dict(H=12.0, tiers=(6, 5, 3), cards=(14, 10, 7), y0=0.26, R=3.1, len=1.3,
-                             wid=1.4, droop=(28, 14), r0=0.25, r1=0.05),
-                        dict(H=12.0, tiers=(8, 6, 4), cards=(14, 10, 7), y0=0.36, R=3.8, len=1.3,
-                             wid=1.4, droop=(22, 10), r0=0.25, r1=0.05)])),
+                        dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.30, R=3.2, len=1.25,
+                             wid=1.5, droop=(10, 5), curve=0.32, r0=0.17, r1=0.04, trunk_top=0.9, jit=0.015, sag=0.06, az=0.38),
+                        dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.28, R=2.8, len=1.25,
+                             wid=1.5, droop=(12, 6), curve=0.34, r0=0.17, r1=0.04, trunk_top=0.9, jit=0.015, sag=0.06, az=0.38),
+                        dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.32, R=3.5, len=1.25,
+                             wid=1.5, droop=(8, 4), curve=0.30, r0=0.17, r1=0.04, trunk_top=0.9, jit=0.015, sag=0.06, az=0.38)])),
     dict(id='jacaranda_tree', gltf='jacaranda_tree_1k.gltf', category='tree',
          title='Jacaranda tree (broadleaf)', pivot='base',
          variants=['jacaranda_tree_LOD0', 'jacaranda_tree_LOD0_wide'],
@@ -120,7 +124,7 @@ SPECIES = [
          derive={'jacaranda_tree_LOD0_wide': dict(src='jacaranda_tree_LOD0', rot=2.4, sx=1.16, sy=0.86, sz=0.92)},
          budget=lod_budgets(BIG_BROADLEAF),
          mats={'jacaranda_tree_trunk': dict(weight=0.08, cutout=False, cull=False, size=512),
-               'jacaranda_tree_leaves': dict(weight=0.82, cutout=True, key_black=True, cull=True,
+               'jacaranda_tree_leaves': dict(weight=0.82, cutout=True, key_black=True, cull=True, grade=GRADE_LEAF,
                                              size=1024, scale_cap=(3.5, 4.5, 6.0), tris_per_comp=2),
                'jacaranda_tree_branches': dict(weight=0.10, cutout=False, cull=True, size=512,
                                                scale_cap=(2.0, 2.5, 3.0), tris_per_comp=12)}),
@@ -130,7 +134,7 @@ SPECIES = [
          derive={'island_tree_01_LOD0_slim': dict(src='island_tree_01_LOD0', rot=1.9, sx=0.88, sy=1.1, sz=1.08)},
          budget=lod_budgets(BIG_BROADLEAF),
          mats={'island_tree_01': dict(weight=0.10, cutout=False, cull=False, size=512),
-               'island_tree_01_leaves': dict(weight=0.78, cutout=True, key_black=True, cull=True,
+               'island_tree_01_leaves': dict(weight=0.78, cutout=True, key_black=True, cull=True, grade=GRADE_LEAF,
                                              size=1024, scale_cap=(3.5, 4.5, 6.0), tris_per_comp=2),
                'island_tree_01_branches': dict(weight=0.12, cutout=False, cull=True, size=512,
                                                scale_cap=(2.0, 2.5, 3.0), tris_per_comp=12)}),
@@ -566,7 +570,17 @@ def save_jpg(arr01, path, subsampling):
         path, 'JPEG', quality=JPEG_QUALITY, optimize=True, subsampling=subsampling)
 
 
-def process_textures(raw_dir, info, out_prefix, size, mask):
+def grade_albedo(d, hue_deg, chroma, value):
+    """Rotate the hue (YIQ plane), scale chroma and value of sRGB colour d."""
+    M = np.array([[0.299, 0.587, 0.114], [0.596, -0.274, -0.322], [0.211, -0.523, 0.312]])
+    q = d @ M.T
+    c, s_ = np.cos(np.radians(hue_deg)), np.sin(np.radians(hue_deg))
+    i, qq = q[..., 1] * c - q[..., 2] * s_, q[..., 1] * s_ + q[..., 2] * c
+    out = np.stack([q[..., 0] * value, i * chroma * value, qq * chroma * value], -1)
+    return np.clip(out @ np.linalg.inv(M).T, 0, 1).astype(np.float32)
+
+
+def process_textures(raw_dir, info, out_prefix, size, mask, grade=None):
     """mask: bool (1024x1024-ish at source res) or None.  Returns file names."""
     def load(rel):
         im = Image.open(safe_join(raw_dir, rel)).convert('RGB')
@@ -586,6 +600,8 @@ def process_textures(raw_dir, info, out_prefix, size, mask):
     if mk is not None:
         d = flood_background(d, mk)
     d = lin_to_srgb(resize_box(srgb_to_lin(d), size)).astype(np.float32)
+    if grade:
+        d = grade_albedo(d, *grade)
     save_jpg(d, out_prefix + '_diff.jpg', 2)
     # normal: linear vector, renormalise after filtering
     n = load(info['normal'])
@@ -702,7 +718,13 @@ def sprig_card_textures(raw_dir, info, cfg, out_prefix, size):
     d = flood_background(np.pad(d, pad + ((0, 0),)), a > 0.5)
     n = flood_background(np.pad(n, pad + ((0, 0),), constant_values=0.5), a > 0.5)
     r = flood_background(np.pad(r, pad + ((0, 0),), constant_values=0.5), a > 0.5)
-    lin = srgb_to_lin(d) * np.array(cfg['grade'], np.float32)
+    lin = srgb_to_lin(d)
+    if cfg.get('de_yellow'):
+        # dry, straw-coloured needles: pull red back toward green so they read as needles
+        dry = lin[..., 0] > cfg['de_yellow'] * lin[..., 1]
+        lin[..., 0] = np.where(dry, lin[..., 1] * cfg['de_yellow'] * 0.7, lin[..., 0])
+        lin[..., 1] = np.where(dry, lin[..., 1] * 0.9, lin[..., 1])
+    lin = lin * np.array(cfg['grade'], np.float32)
     lin = resize_box(lin.astype(np.float32), size)
     a8 = np.asarray(Image.fromarray(np.round(a * 255).astype(np.uint8), 'L').resize((size, size), Image.BOX))
     cov = a8 > 127
@@ -738,7 +760,7 @@ def card_conifer_mesh(cv, lod, rng):
     rings = (5, 3, 2)[lod]
     TP, TN, TU, TT = [], [], [], []
     for i in range(rings + 1):
-        y = H * 0.72 * i / rings
+        y = H * cv.get('trunk_top', 0.72) * i / rings
         for k in range(sides + 1):
             a = 2 * np.pi * k / sides
             TP.append((trunk_r(y) * np.cos(a), y, trunk_r(y) * np.sin(a)))
@@ -753,14 +775,14 @@ def card_conifer_mesh(cv, lod, rng):
 
     P, N, UV, T = [], [], [], []
 
-    def add_card(root, out, up_n, L, W, droop, sag, nalong):
+    def add_card(root, out, up_n, L, W, droop, sag, nalong, curve=0.0):
         # root: 3-vector; out: unit horizontal direction; the card hangs along
         # `out`, drooping by `droop` (slope) and sagging `sag` toward its sides
         perp = np.array([-out[2], 0.0, out[0]])
         base = len(P)
         for i in range(nalong + 1):
             s = i / nalong
-            c = root + out * (s * L) + np.array([0.0, -droop * s * L, 0.0])
+            c = root + out * (s * L) + np.array([0.0, (-droop * s + curve * s * s) * L, 0.0])
             for t in (-1.0, 0.0, 1.0):
                 q = c + perp * (t * 0.5 * W) + np.array([0.0, -sag * L * abs(t) * s, 0.0])
                 q[1] = max(q[1], 0.4)    # no card hangs into the ground
@@ -771,7 +793,7 @@ def card_conifer_mesh(cv, lod, rng):
             for k in range(2):
                 a = base + i * 3 + k
                 T.append((a, a + 1, a + 4))
-                T.append((a + 1, a + 5, a + 4))
+                T.append((a, a + 4, a + 3))
 
     for j in range(ntier):
         t = j / max(ntier - 1, 1)
@@ -784,13 +806,13 @@ def card_conifer_mesh(cv, lod, rng):
         droop = np.tan(np.radians(cv['droop'][0] + (cv['droop'][1] - cv['droop'][0]) * t))
         off = rng.uniform(0, 2 * np.pi)
         for k in range(ncard):
-            th = off + 2 * np.pi * (k + 0.5 * (j % 2) + rng.uniform(-0.18, 0.18)) / ncard
+            th = off + 2 * np.pi * (k + 0.5 * (j % 2) + rng.uniform(-1.0, 1.0) * cv.get('az', 0.18)) / ncard
             out = np.array([np.cos(th), 0.0, np.sin(th)])
             lj = L * rng.uniform(0.88, 1.12)
-            yj = y + rng.uniform(-0.04, 0.04) * H
+            yj = y + rng.uniform(-1.0, 1.0) * cv.get('jit', 0.04) * H
             root = out * (trunk_r(yj) * 0.6) + np.array([0.0, yj, 0.0])
             un = out * 0.45 + np.array([0.0, 0.9, 0.0])
-            add_card(root, out, un / np.linalg.norm(un), lj, W * lj / L, droop, 0.14, nalong)
+            add_card(root, out, un / np.linalg.norm(un), lj, W * lj / L, droop, cv.get('sag', 0.14), nalong, cv.get('curve', 0.0))
     # leader: two crossed upright cards
     for ph in (0.0, np.pi / 2):
         out = np.array([np.cos(ph), 0.0, np.sin(ph)])
@@ -932,7 +954,7 @@ def process_species(sp, raw_dir, out_dir, log):
                 a.save(os.path.join(odir, alpha_file), optimize=True)
             else:
                 mask = None
-        files = process_textures(mdir, info, os.path.join(odir, name), cfg['size'], mask)
+        files = process_textures(mdir, info, os.path.join(odir, name), cfg['size'], mask, cfg.get('grade'))
         materials.append(dict(
             name=name, diffuse=files[0], normal=files[1], arm=files[2], alpha=alpha_file,
             alphaMode='MASK' if alpha_file else 'OPAQUE', alphaCutoff=0.5 if alpha_file else None,

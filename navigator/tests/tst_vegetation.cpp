@@ -107,6 +107,8 @@ private slots:
   void paletteSpeciesShares();
   void forestHasTwoConifersAndTwoBroadleafs();
   void grassIsTintedPerPalette();
+  void coniferShareFollowsPalette();
+  void treeTintSpreads();
   void emptyForNoChunk();
 };
 
@@ -442,6 +444,63 @@ void TstVegetation::forestHasTwoConifersAndTwoBroadleafs() {
   }
   const double share = double(conifers) / total;
   QVERIFY2(share > 0.15 && share < 0.85, qPrintable(QString("conifer share %1").arg(share)));
+}
+
+// The conifer share of the trees that stand follows the palette's
+// stands.coniferShare (crown spacing and clumping move it, not far), and where
+// it is high both conifer kinds are common, so a chase view is not mostly
+// broadleaf.
+void TstVegetation::coniferShareFollowsPalette() {
+  std::vector<std::pair<double, double>> shares; // set share, measured share
+  for (int pal : {int(kPalForest), int(kPalAlpine), int(kPalHills), int(kPalMeadow), int(kPalPasture)}) {
+    const TerrainField f = makeField(pal);
+    const VegParams p = vegParamsForPalette(pal);
+    int n[kVegTreeKindCount] = {0}, total = 0;
+    for (int j = -2; j <= 1; ++j)
+      for (int i = -2; i <= 1; ++i)
+        for (const VegInstance &v : scatterVegetation(f, i, j, 256.0f, p))
+          if (v.species == kVegTree) { ++n[v.kind]; ++total; }
+    QVERIFY2(total > 40, qPrintable(QString("palette %1: %2 trees").arg(pal).arg(total)));
+    const int conifers = n[0] + n[1];
+    const double share = double(conifers) / total;
+    qInfo("palette %d: coniferShare %.2f measured %.2f (fir %d pine %d jac %d isl %d)", pal,
+          double(p.stands.coniferShare), share, n[0], n[1], n[2], n[3]);
+    // Conifers pack tighter (smaller crowns), so the count runs above the area share.
+    QVERIFY2(share > double(p.stands.coniferShare) - 0.15 &&
+                 share < double(p.stands.coniferShare) + 0.40,
+             qPrintable(QString("palette %1: share %2 vs %3").arg(pal).arg(share).arg(double(p.stands.coniferShare))));
+    shares.emplace_back(double(p.stands.coniferShare), share);
+    if (p.stands.coniferShare >= 0.35f && conifers > 40) {
+      QVERIFY2(n[0] > conifers / 4 && n[1] > conifers / 4,
+               qPrintable(QString("palette %1: fir %2 pine %3").arg(pal).arg(n[0]).arg(n[1])));
+    }
+  }
+  // A palette with a clearly higher setting measures clearly higher.
+  for (const auto &x : shares)
+    for (const auto &y : shares)
+      if (x.first >= y.first + 0.3)
+        QVERIFY2(x.second > y.second,
+                 qPrintable(QString("set %1/%2 measured %3/%4").arg(x.first).arg(y.first).arg(x.second).arg(y.second)));
+}
+
+// Each tree's colour factor is a hash of its cell: it spreads over 0..1, so the
+// crowns of a stand do not share one green.
+void TstVegetation::treeTintSpreads() {
+  const TerrainField f = makeField(kPalForest);
+  const VegParams p = vegParamsForPalette(kPalForest);
+  double sum = 0, sum2 = 0;
+  int n = 0, lo = 0, hi = 0;
+  for (int j = -1; j <= 0; ++j)
+    for (int i = -1; i <= 0; ++i)
+      for (const VegInstance &v : scatterVegetation(f, i, j, 256.0f, p))
+        if (v.species == kVegTree) {
+          sum += v.tint; sum2 += double(v.tint) * v.tint; ++n;
+          lo += v.tint < 0.25f; hi += v.tint > 0.75f;
+        }
+  QVERIFY(n > 100);
+  const double mean = sum / n, sd = std::sqrt(sum2 / n - mean * mean);
+  QVERIFY2(sd > 0.22, qPrintable(QString("tint sd %1").arg(sd)));
+  QVERIFY(lo > n / 8 && hi > n / 8);
 }
 
 // Grass tufts carry the palette's own ground hue to tint toward; it differs

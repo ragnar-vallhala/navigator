@@ -215,6 +215,52 @@ private slots:
     }
   }
 
+  // The pine reads as a pine: a trunk that shows below the first whorl, and
+  // needle whorls with clear air between them. Needle area is binned by height
+  // (triangle centroids); a whorl is a run of occupied 10 cm bins, two whorls
+  // are separated by at least 30 cm with next to no needle area. Every LOD keeps
+  // one separated whorl per tier.
+  void pineHasSeparatedWhorls() {
+    const VegSpeciesAssets *s = assets_.find("pine_sapling_medium");
+    QVERIFY(s);
+    for (const VegVariant &v : s->variants)
+      for (int l = 0; l < kVegLodCount; ++l) {
+        const VegMesh &m = v.lods[l];
+        const VegSubmesh &sm = m.submeshes[1]; // needles
+        const float H = m.bboxMax.y();
+        const float bin = 0.1f;
+        std::vector<double> area(size_t(H / bin) + 2, 0.0);
+        double total = 0;
+        float lowest = H;
+        for (uint32_t i = sm.firstIndex; i + 2 < sm.firstIndex + sm.indexCount; i += 3) {
+          QVector3D p[3];
+          for (int k = 0; k < 3; ++k) {
+            const float *f = &m.vertices[size_t(m.indices[i + uint32_t(k)]) * VegMesh::kFloatsPerVertex];
+            p[k] = QVector3D(f[0], f[1], f[2]);
+          }
+          const double a = 0.5 * double(QVector3D::crossProduct(p[1] - p[0], p[2] - p[0]).length());
+          const float cy = (p[0].y() + p[1].y() + p[2].y()) / 3.0f;
+          area[std::min(size_t(cy / bin), area.size() - 1)] += a;
+          total += a;
+          lowest = std::min(lowest, std::min({p[0].y(), p[1].y(), p[2].y()}));
+        }
+        int whorls = 0, empty = 99;
+        for (double a : area) {
+          if (a > 0.003 * total) {
+            if (empty >= 3) ++whorls;
+            empty = 0;
+          } else {
+            ++empty;
+          }
+        }
+        qInfo("%s lod%d: %d whorls of %d tiers, lowest needle %.1f of %.1f", qPrintable(v.name), l,
+              whorls, m.tiers, double(lowest), double(H));
+        QVERIFY2(whorls >= m.tiers - 1 && whorls <= m.tiers + 1, // the leader may read as one more
+                 qPrintable(QString("%1 lod%2: %3 whorls vs %4 tiers").arg(v.name).arg(l).arg(whorls).arg(m.tiers)));
+        QVERIFY2(lowest > 0.22f * H, qPrintable(QString("%1 lod%2: lowest needle %3 of %4").arg(v.name).arg(l).arg(double(lowest)).arg(double(H))));
+      }
+  }
+
   // The conifer needle albedo must not be brighter than the broadleaf leaves
   // (mean linear luminance over the covered texels).
   void coniferIsNotBrighterThanBroadleaf() {

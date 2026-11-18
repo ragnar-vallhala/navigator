@@ -74,7 +74,7 @@ inline constexpr int kVegTreeKindCount = 4;
 inline constexpr VegTreeKind kVegTreeKinds[kVegTreeKindCount] = {
     // id                   conifer height  scale range   trunk  crown
     {"fir_tree_01",         true,   16.0f,  0.70f, 1.25f, 0.15f, 2.8f},
-    {"pine_sapling_medium", true,   12.0f,  0.75f, 1.30f, 0.22f, 2.8f},
+    {"pine_sapling_medium", true,   12.0f,  0.75f, 1.30f, 0.15f, 2.8f},
     {"jacaranda_tree",      false,  13.0f,  0.62f, 1.45f, 0.45f, 8.2f},
     {"island_tree_01",      false,   9.5f,  0.85f, 1.30f, 0.50f, 4.6f},
 };
