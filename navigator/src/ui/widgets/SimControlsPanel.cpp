@@ -504,6 +504,28 @@ void SimulatorWidget::buildSimControls(QWidget *host) {
   keepRow->addStretch();
   sv->addLayout(keepRow);
 
+  auto *tqRow = new QHBoxLayout();
+  tqRow->addWidget(new QLabel(tr("Terrain detail:"), simBody));
+  auto *tqCombo = new QComboBox(simBody);
+  tqCombo->addItem(tr("Auto"), QStringLiteral("auto"));
+  tqCombo->addItem(tr("High (photo textures)"), QStringLiteral("high"));
+  tqCombo->addItem(tr("Low (plain)"), QStringLiteral("low"));
+  tqCombo->setCurrentIndex(std::max(
+      0, tqCombo->findData(QSettings().value(kTerrainQualityKey, QStringLiteral("auto")))));
+  tqCombo->setToolTip(
+      tr("Ground shading in the 3D views. High uses photo textures with "
+         "normal maps; Low is the plain look and much cheaper. Auto picks "
+         "High, except when the graphics are drawn by the CPU (software "
+         "OpenGL), where it picks Low."));
+  connect(tqCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+          [this, tqCombo] {
+            QSettings().setValue(kTerrainQualityKey, tqCombo->currentData());
+            applyTerrainQuality();
+          });
+  tqRow->addWidget(tqCombo);
+  tqRow->addStretch();
+  sv->addLayout(tqRow);
+
   m_logPathLabel = new ui::ElidedLabel(simBody);
   m_logPathLabel->setFullText(tr("Current log: (none)"));
   m_logPathLabel->setStyleSheet(

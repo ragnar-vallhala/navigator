@@ -22,6 +22,7 @@
 // the SITL view renders terrain without grass. The code is retained in-tree for
 // later re-enable (cmake -DNAVIGATOR_SIM_GRASS=ON).
 #include "Atmosphere.h"
+#include "TerrainTextures.h"
 #include "ShadowCascades.h"
 #ifdef VAYU_SIM_GRASS
 #include "GpuGrass.h"
@@ -283,6 +284,23 @@ public:
     update();
   }
   ShadowQuality shadowQuality() const { return shadowQuality_; }
+  // Terrain material quality. High: photo-textured, splat-blended ground with
+  // anti-tiling and normal maps (TerrainMaterial.h); Low: the plain shader.
+  // Until set, the default follows the GL renderer (Low on a CPU rasteriser,
+  // where High costs 4-5x a frame, High otherwise). Applied on the next frame.
+  void setTerrainQuality(vsim::terrain::Quality q) {
+    terrainQualitySet_ = true;
+    terrainQuality_ = q;
+    update();
+  }
+  void setTerrainQualityAuto() { // back to the renderer-based default
+    terrainQualitySet_ = false;
+    update();
+  }
+  // What is drawn: the chosen quality, else the default for this GL renderer.
+  vsim::terrain::Quality terrainQuality() const {
+    return terrainQualitySet_ ? terrainQuality_ : terrainDefault_;
+  }
   // World-space XY the terrain streamer should centre on: the free-fly camera
   // when roaming (sim stopped), otherwise the drone. Lets endless terrain follow
   // both WASD navigation and actual flight.
@@ -528,6 +546,11 @@ private:
   int ul_ambstr_ = -1;
   int ul_terrain_ = -1;
   int ul_bands_ = -1;
+  int ul_matq_ = -1;
+  vsim::terrain::TerrainTextures terrainTex_;
+  vsim::terrain::Quality terrainQuality_ = vsim::terrain::Quality::High;
+  vsim::terrain::Quality terrainDefault_ = vsim::terrain::Quality::High;
+  bool terrainQualitySet_ = false; // false: use terrainDefault_ (from GL_RENDERER)
   float litSunInt_ = 1.0f; // terrain lighting look knobs (match grass)
   float litAmbStr_ = 1.0f;
 

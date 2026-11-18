@@ -216,6 +216,9 @@ inline constexpr const char *kRepoRootSettingKey = "simulator/repoRoot";
 inline constexpr const char *kLogDirSettingKey = "simulator/logDir";
 // How many runs (gt-*.bin + ev-*.jsonl pairs) to keep in the log dir; 0 = all.
 inline constexpr const char *kLogKeepRunsSettingKey = "simulator/logKeepRuns";
+// Terrain material quality of the 3D views: "auto" (High, except on a CPU
+// rasteriser), "low" or "high". NAV_TERRAIN_QUALITY overrides it for a run.
+inline constexpr const char *kTerrainQualityKey = "simulator/terrainQuality";
 inline constexpr int kLogKeepRunsDefault = 50;
 inline constexpr const char *kGeomGroup = "simulator/geometry";
 inline constexpr const char *kWorldGroup = "simulator/world";

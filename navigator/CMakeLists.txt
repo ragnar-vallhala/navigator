@@ -250,6 +250,7 @@ set(GCS_SITL_SOURCES
     src/vsim/FlightEventLog.cpp
     src/vsim/SimRendererWidget.cpp
     src/vsim/FarTerrain.cpp
+    src/vsim/TerrainMaterial.cpp
     src/vsim/MeshLoader.cpp
     src/vsim/WorldMeshBuilder.cpp
     src/vsim/ProceduralWorld.cpp

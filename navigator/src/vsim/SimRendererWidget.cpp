@@ -195,6 +195,12 @@ void main() {
   vec3 base = u_color * v_color;
   if (u_terrain > 0.5) {
     vec2 p = v_world.xy;
+    if (u_matq > 0.5) {
+      // Textured ground (TerrainMaterial.cpp): albedo and normal from photos.
+      terrainMaterial(v_color, p, dist, base, n);
+      wrap = clamp(dot(n, sun) * 0.45 + 0.55, 0.0, 1.0); wrap *= wrap;
+      ambient = ambientLight(n) * u_ambstr;
+    } else {
     float f1 = 1.0 - smoothstep(4.0, 24.0, dist);
     float f2 = 1.0 - smoothstep(25.0, 140.0, dist);
     float f3 = 1.0 - smoothstep(120.0, 800.0, dist);
@@ -205,6 +211,7 @@ void main() {
     float m1 = gn(p / 310.0 + 3.7) - 0.5, m2 = gn(p / 95.0 + 9.1) - 0.5;
     vec3 macroTint = vec3(1.0 + 0.30 * m1 + 0.10 * m2, 1.0 + 0.10 * m1, 1.0 - 0.26 * m1 - 0.08 * m2);
     base *= (1.0 + v) * macroTint;
+    }
     // Survey grid: a calm hint, not a net. The fine lines fade out within ~30 m,
     // the 10 m lines by ~250 m, and only the 100 m lines reach the horizon.
     float up = smoothstep(0.55, 0.85, -n.z);       // grid only on level ground
@@ -663,6 +670,7 @@ int SimRendererWidget::liveGlObjects() const {
   n += (prog_ ? 1 : 0) + (progLit_ ? 1 : 0) + (progDepth_ ? 1 : 0) +
        (progSky_ ? 1 : 0);
   n += (shadowFbo_ ? 1 : 0) + (shadowTex_ ? 1 : 0);
+  n += terrainTex_.loaded() ? 6 : 0;
   if (veg_)
     n += veg_->liveObjects();
 #ifdef VAYU_SIM_GRASS
@@ -790,6 +798,7 @@ void SimRendererWidget::releaseGLResources(bool readBack) {
   if (shadowTex_)
     glDeleteTextures(1, &shadowTex_);
   shadowFbo_ = shadowTex_ = 0;
+  terrainTex_.release(this, true);
   shadowReady_ = shadowOn_ = false;
 
   // Everything CPU-side that the GL objects were built from is still held:
@@ -1031,6 +1040,7 @@ void SimRendererWidget::initResources() {
   progLit_ = buildProgram("lit", kLitVertexShader,
                           QByteArray(kLitFragmentHead) + kAtmosphereGLSL + kFogGLSL +
                               kLightingGLSL + kCascadeShadowGLSL + kShadowGLSL +
+                              vsim::terrain::terrainMaterialGLSL() +
                               kLitFragmentMain);
   ul_mvp_ = progLit_->uniformLocation("u_mvp");
   ul_model_ = progLit_->uniformLocation("u_model");
@@ -1046,6 +1056,9 @@ void SimRendererWidget::initResources() {
   ul_ambstr_ = progLit_->uniformLocation("u_ambstr");
   ul_terrain_ = progLit_->uniformLocation("u_terrain");
   ul_bands_ = progLit_->uniformLocation("u_bands");
+  ul_matq_ = progLit_->uniformLocation("u_matq");
+  terrainDefault_ = vsim::terrain::defaultQuality(
+      reinterpret_cast<const char *>(glGetString(GL_RENDERER)));
 
   progDepth_ = buildProgram("depth", kDepthVertexShader, kDepthFragmentShader);
   ud_lightmvp_ = progDepth_->uniformLocation("u_lightmvp");
@@ -1742,6 +1755,15 @@ void SimRendererWidget::drawLit(const Mesh &m, const QMatrix4x4 &view,
   progLit_->setUniformValue(ul_sunint_, litSunInt_);
   progLit_->setUniformValue(ul_ambstr_, litAmbStr_);
   progLit_->setUniformValue(ul_terrain_, terrain ? 1.0f : 0.0f);
+  {
+    // The textures upload on first use; a missing resource leaves the plain look.
+    const bool mat = terrain &&
+                     terrainQuality() == vsim::terrain::Quality::High &&
+                     (terrainTex_.loaded() || terrainTex_.load(this));
+    progLit_->setUniformValue(ul_matq_, mat ? 1.0f : 0.0f);
+    if (mat)
+      terrainTex_.bind(this, progLit_.get());
+  }
   progLit_->setUniformValue(ul_bands_, bands);
   glActiveTexture(GL_TEXTURE1);
   glBindTexture(GL_TEXTURE_2D, shadowTex_);

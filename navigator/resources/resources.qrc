@@ -1,6 +1,13 @@
 <!DOCTYPE RCC><RCC version="1.0">
 <qresource prefix="/">
     <file>styles/dark.qss</file>
+    <!-- Terrain photo textures: Poly Haven, CC0 (terrain/LICENSES.md) -->
+    <file>terrain/grass_path_2_diff_1k.jpg</file>
+    <file>terrain/grass_path_2_nor_gl_1k.jpg</file>
+    <file>terrain/rocky_trail_02_diff_1k.jpg</file>
+    <file>terrain/rocky_trail_02_nor_gl_1k.jpg</file>
+    <file>terrain/brown_mud_03_diff_1k.jpg</file>
+    <file>terrain/brown_mud_03_nor_gl_1k.jpg</file>
     <!-- Add icons and assets here as project grows -->
     <!-- <file>icons/drone.svg</file> -->
 </qresource>
