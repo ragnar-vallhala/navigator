@@ -100,6 +100,7 @@ struct VegSpeciesInfo {
   float fallbackMax;         // same, when no impostor is available
   float sway;                // wind bend at the top, fraction of height
   bool impostor;             // gets a baked billboard beyond LOD2
+  bool coniferBark = false;  // impostor bark lit like the conifer mesh trunk
 };
 const VegSpeciesInfo *vegSpeciesTable(int *count);
 // Model units to metres at instance scale 1 for one variant of a species.
@@ -191,6 +192,8 @@ public:
     long long foliagePx = 0, barkPx = 0;
     double foliageHeightSum = 0, barkHeightSum = 0; // 0 foot .. 1 top, summed over texels
   };
+  // Tests: draw every tree at this LOD (0-2 mesh, 3 impostor), -1 = by distance.
+  void setForcedLod(int lod) { forcedLod_ = lod; }
   void setBakeStats(bool on) { bakeStats_ = on; bakeStatsOut_ = BakeStats(); }
   const BakeStats &bakeStats() const { return bakeStatsOut_; }
 
@@ -269,6 +272,7 @@ private:
   } loc_;
   unsigned atlasTex_ = 0, atlasFbo_ = 0, atlasDepth_ = 0, atlasMask_ = 0;
   bool bakeStats_ = false;
+  int forcedLod_ = -1;
   BakeStats bakeStatsOut_;
   bool atlasOk_ = false, glReady_ = false, atlasTried_ = false, treesOn_ = false;
   bool a2c_ = false; // alpha-to-coverage this frame (multisampled target)

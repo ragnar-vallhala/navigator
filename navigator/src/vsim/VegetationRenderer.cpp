@@ -42,8 +42,8 @@ constexpr float kLodBand = 0.07f;  // cross-fade half width, fraction of the edg
 // distance otherwise). Fog is nearly opaque by ~500 m, so nothing goes farther.
 const VegSpeciesInfo kTable[] = {
     // id                       cat            size  span   lod ends         max   fb    sway  imp
-    {"fir_tree_01",             procgen::kVegTree,  procgen::kVegTreeKinds[0].heightM, false, {30, 70, 130}, 560, 300, 0.012f, true},
-    {"pine_sapling_medium",     procgen::kVegTree,  procgen::kVegTreeKinds[1].heightM, false, {30, 70, 130}, 560, 300, 0.012f, true},
+    {"fir_tree_01",             procgen::kVegTree,  procgen::kVegTreeKinds[0].heightM, false, {30, 70, 130}, 560, 300, 0.012f, true, true},
+    {"pine_sapling_medium",     procgen::kVegTree,  procgen::kVegTreeKinds[1].heightM, false, {30, 70, 130}, 560, 300, 0.012f, true, true},
     {"jacaranda_tree",          procgen::kVegTree,  procgen::kVegTreeKinds[2].heightM, false, {30, 70, 130}, 560, 300, 0.008f, true},
     {"island_tree_01",          procgen::kVegTree,  procgen::kVegTreeKinds[3].heightM, false, {30, 70, 130}, 560, 300, 0.008f, true},
     {"shrub_03",                procgen::kVegBush,  1.0f, false, {25, 60, 110}, 170, 170, 0.030f, false},
@@ -322,6 +322,7 @@ in vec3 v_world;
 out vec4 o_color;
 uniform sampler2D u_atlas;   // display-referred colour, coverage in alpha
 uniform sampler2D u_atlasMask; // alpha: foliage share of the covered texels
+uniform float u_barkLit;      // 1: light bark like the conifer mesh trunk
 )GLSL";
 
 const char *kBillFSMain = R"GLSL(
@@ -341,7 +342,6 @@ void main() {
   vec3 rgb = (c0.rgb * c0.a * (1.0 - v_w) + c1.rgb * c1.a * v_w) / max(a, 1e-3);
   // Foliage takes the crown tint; bark keeps its colour, as on the meshes.
   float fol = clamp(mix(texture(u_atlasMask, v_uv0).a, texture(u_atlasMask, v_uv1).a, v_w) / max(a, 1e-3), 0.0, 1.0);
-  vec3 tint = mix(tintMul(v_tint), foliageTint(v_tint), fol);
   vec3 toFrag = v_world - u_campos;
   float dist = length(toFrag);
   vec3 sun = normalize(u_sundir);
@@ -350,7 +350,23 @@ void main() {
   vec3 N = normalize(vec3(-hz * 0.45, -0.85));
   // Same foliage terms as the mesh shader (ambient floor, light through leaves).
   vec3 L = ambientLit(N) * 1.5 + sunLightColor() * (wrapDiffuse(N, sun) * 0.95 + 0.25);
-  o_color = vec4(applyAerialPerspective(rgb * tint * L, toFrag, dist), 1.0);
+  // Bark is lit like the mesh trunk (no crown rounding, no light through leaves):
+  // the mean over the visible half of a vertical cylinder, with the mesh's warm
+  // bark grade and lighting weights. Foliage keeps the crown terms above.
+  vec2 pp = vec2(-hz.y, hz.x);
+  vec3 nb0 = vec3(-hz, 0.0);
+  vec3 nb1 = normalize(vec3(-0.5 * hz + 0.866 * pp, 0.0));
+  vec3 nb2 = normalize(vec3(-0.5 * hz - 0.866 * pp, 0.0));
+  vec3 Lb = vec3(0.0);
+  for (int i = 0; i < 3; ++i) {
+    vec3 nb = i == 0 ? nb0 : (i == 1 ? nb1 : nb2);
+    Lb += (i == 0 ? 0.4 : 0.3) * (ambientLit(nb) * 1.3 + sunLightColor() * wrapDiffuse(nb, sun));
+  }
+  vec3 barkTint = tintMul(v_tint);
+  vec3 barkLit = rgb * barkTint * L; // broadleaf trunks: their old lighting, unchanged
+  if (u_barkLit > 0.5) barkLit = rgb * barkTint * vec3(1.0, 0.90, 0.78) * Lb;
+  vec3 lit = mix(barkLit, rgb * foliageTint(v_tint) * L, fol);
+  o_color = vec4(applyAerialPerspective(lit, toFrag, dist), 1.0);
 }
 )GLSL";
 
@@ -1248,6 +1264,7 @@ void VegetationRenderer::drawImpostors(VariantGpu &v, const std::vector<float> &
   progBillboard_->setUniformValue(loc_.half, v.billH);
   progBillboard_->setUniformValue(loc_.tile, float(v.tile));
   progBillboard_->setUniformValue("u_k", v.k);
+  progBillboard_->setUniformValue("u_barkLit", kTable[v.info].coniferBark ? 1.0f : 0.0f);
   glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, n);
   ++stats_.drawCalls;
   stats_.impostors += int(n);
@@ -1389,7 +1406,13 @@ void VegetationRenderer::draw(const VegFrame &f) {
         continue;
       const float d = std::sqrt(d2);
       const bool billReady = atlasOk_ && v.baked;
-      const VegLodChoice ch = vegChooseLod(info, d, billReady);
+      VegLodChoice ch = vegChooseLod(info, d, billReady);
+      if (forcedLod_ >= 0 && d < info.maxDist) { // tests: one LOD at every distance
+        ch = VegLodChoice();
+        ch.n = 1;
+        ch.lod[0] = forcedLod_ == 3 && !billReady ? 2 : forcedLod_;
+        ch.fade[0] = 1.0f;
+      }
       for (int k = 0; k < ch.n; ++k) {
         std::vector<float> &b = buckets_[size_t(r.variant) * 4 + size_t(ch.lod[k])];
         b.insert(b.end(), {r.x, r.y, r.z, r.yaw, r.scale, r.tint, ch.fade[k], r.paint});
