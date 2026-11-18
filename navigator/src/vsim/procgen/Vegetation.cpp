@@ -161,7 +161,8 @@ VegParams vegParamsForPalette(int palette) {
   switch (palette) {
   case kPalForest:
     T = sp(7.0f, 0.85f, 0.85f, 0.0f, 0.70f, 1.0f, 1.0f, 0.5f);
-    p.stands.coniferShare = 0.4f; // crowns of the broadleaf are wide: fewer, bigger
+    p.stands.coniferShare = 0.55f; // crowns of the broadleaf are wide: fewer, bigger
+    p.stands.clumpM = 80.0f;       // stands small enough that a view holds both groups
     p.stands.openShare = 0.12f;
     B = sp(4.0f, 0.50f, 0.80f, 0.0f, 0.70f, 0.7f, 1.3f, 0.5f);
     G = sp(1.6f, 0.50f, 0.85f, 0.0f, 0.60f, 0.7f, 1.4f, 0.5f);
@@ -321,8 +322,10 @@ std::vector<VegInstance> scatterVegetation(const TerrainField &f, int cx, int cy
                           standField(c.x, c.y, st.clumpM, p.seed, 9200u));
         const bool conifer = u01(hcell(gx, gy, p.seed, salt + 7)) < pc;
         const uint32_t grp = conifer ? 9300u : 9400u;
-        const float pk = smoothstep(0.5f - w, 0.5f + w,
-                                    standField(c.x, c.y, 0.7f * st.clumpM, p.seed, grp));
+        // Which of the group: finer, softer clumps than the group itself, so
+        // both conifers (and both broadleafs) turn up within one view.
+        const float pk = smoothstep(0.5f - 2.5f * w, 0.5f + 2.5f * w,
+                                    standField(c.x, c.y, 0.3f * st.clumpM, p.seed, grp));
         const bool first = u01(hcell(gx, gy, p.seed, salt + 8)) < pk;
         c.kind = static_cast<uint8_t>((conifer ? 0 : 2) + (first ? 0 : 1));
         const VegTreeKind &k = kVegTreeKinds[c.kind];
