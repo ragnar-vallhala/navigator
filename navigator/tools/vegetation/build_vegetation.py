@@ -87,8 +87,8 @@ SMALL = (3000, 800, 150)
 # Full-size trees (8-20 m): the crown is the whole point, so LOD 0 keeps enough
 # cards to read as a dense crown from a drone at 20 m, and the far LODs stay
 # cheap because the billboard impostor takes over beyond them.
-BIG_CONIFER = (45000, 9000, 1400)
-BIG_BROADLEAF = (45000, 8000, 1200)
+BIG_CONIFER = (32000, 7000, 1200)
+BIG_BROADLEAF = (36000, 7000, 1200)
 
 SPECIES = [
     dict(id='fir_tree_01', gltf='fir_tree_01_1k.gltf', category='tree',
@@ -100,7 +100,7 @@ SPECIES = [
                'fir_tree_01_trunk_a': dict(weight=0.03, cutout=False, cull=False, size=512),
                'fir_tree_01_trunk_b': dict(weight=0.03, cutout=False, cull=False, size=512),
                'fir_tree_01_twig': dict(weight=0.86, cutout=True, cull=True, size=1024,
-                                        scale_cap=(8.0, 11.0, 16.0), tris_per_comp=4)}),
+                                        scale_cap=(8.0, 11.0, 16.0), tris_per_comp=4, struct_budget=0.1, uv_shrink=0.2)}),
     dict(id='pine_sapling_medium', gltf='pine_sapling_medium_1k.gltf', category='tree',
          title='Pine (medium, conifer)',
          variants=['pine_sapling_medium_a_LOD0', 'pine_sapling_medium_b_LOD0',
@@ -108,7 +108,8 @@ SPECIES = [
          budget=lod_budgets(BIG_CONIFER), pivot='base',
          mats={'pine_sapling_medium_bark': dict(weight=0.08, cutout=False, cull=False, size=512),
                'pine_sapling_medium_twig': dict(weight=0.92, cutout=True, cull=True, size=1024,
-                                                scale_cap=(6.0, 8.0, 12.0), tris_per_comp=4)}),
+                                                scale_cap=(10.0, 14.0, 20.0), tris_per_comp=4, struct_budget=0.1, uv_shrink=0.2,
+                                                fill=1.8)}),
     dict(id='jacaranda_tree', gltf='jacaranda_tree_1k.gltf', category='tree',
          title='Jacaranda tree (broadleaf)', variants=['jacaranda_tree_LOD0'], pivot='base',
          budget=lod_budgets(BIG_BROADLEAF),
@@ -416,7 +417,7 @@ def triangle_area(P, T):
     return 0.5 * np.linalg.norm(np.cross(P[T[:, 1]] - P[T[:, 0]], P[T[:, 2]] - P[T[:, 0]]), axis=1)
 
 
-def cull_components(P, N, UV, T, target, tris_per_comp, scale_cap, rng):
+def cull_components(P, N, UV, T, target, tris_per_comp, scale_cap, rng, struct_budget=3.0, uv_shrink=1.0, fill=1.0):
     """Keep a spatially stratified subset of connected pieces (leaf cards,
     needle tufts) and scale the survivors about their centroids to keep the
     foliage mass.  Returns (P, T) with only kept triangles."""
@@ -428,7 +429,7 @@ def cull_components(P, N, UV, T, target, tris_per_comp, scale_cap, rng):
     nc = len(ulab)
     K = max(1, target // tris_per_comp)
     if nc <= K:
-        return P, T
+        return P, T, UV
     cen = np.zeros((nc, 3))
     ar = triangle_area(P, T)
     for d in range(3):
@@ -452,7 +453,9 @@ def cull_components(P, N, UV, T, target, tris_per_comp, scale_cap, rng):
     struct = np.zeros(nc, bool)
     big = np.argsort(-tcount, kind='stable')
     big = big[tcount[big] >= 6 * np.median(tcount)]
-    budget_tris = 3 * target
+    # long twig stems are 91% of the triangles of the fir sources but little of
+    # the visible foliage: conifers cap what they may take (struct_budget)
+    budget_tris = int(struct_budget * target)
     cum = np.cumsum(tcount[big])
     struct[big[cum <= budget_tris]] = True
     keep_ids = np.lexsort((rng.random(nc), rk))
@@ -462,7 +465,7 @@ def cull_components(P, N, UV, T, target, tris_per_comp, scale_cap, rng):
     kt = keep[tinv]
     nonst = ~struct
     s = float(np.sqrt(carea[nonst].sum() / max(carea[keep & nonst].sum(), 1e-30)))
-    s = min(max(s, 1.0), scale_cap)
+    s = min(max(s * fill, 1.0), scale_cap)  # fill > 1: denser than the source
     P = P.copy()
     vt = np.zeros(len(P), np.int64) - 1
     for k in range(3):
@@ -470,7 +473,19 @@ def cull_components(P, N, UV, T, target, tris_per_comp, scale_cap, rng):
     used = vt >= 0
     sc = np.where(struct[vt[used]], 1.0, s)[:, None]
     P[used] = cen[vt[used]] + (P[used] - cen[vt[used]]) * sc
-    return P, T[kt]
+    if uv_shrink < 1.0:
+        # Needle blades map onto thin slivers of the twig texture (a dozen
+        # texels wide): a mip level or two later the alpha test drops the
+        # whole blade. Pull each kept blade's UVs to the middle of its sliver.
+        UV = UV.copy()
+        cuv = np.zeros((nc, 2))
+        cnt = np.bincount(tinv[kt], minlength=nc).astype(float)
+        for d in range(2):
+            cuv[:, d] = np.bincount(tinv[kt], UV[T[kt, 0], d], minlength=nc)
+        cuv /= np.maximum(cnt, 1.0)[:, None]
+        sel = used & ~struct[np.maximum(vt, 0)]
+        UV[sel] = cuv[vt[sel]] + (UV[sel] - cuv[vt[sel]]) * uv_shrink
+    return P, T[kt], UV
 
 
 def compact(P, N, UV, T):
@@ -486,7 +501,9 @@ def reduce_primitive(prim, target, cfg, lod, diag, seed):
     if len(T) > target:
         if cfg['cull']:
             cap = cfg.get('scale_cap', (1, 1, 1))[lod]
-            P, T = cull_components(P, N, UV, T, target, cfg.get('tris_per_comp', 4), cap, rng)
+            P, T, UV = cull_components(P, N, UV, T, target, cfg.get('tris_per_comp', 4), cap, rng,
+                                       cfg.get('struct_budget', 3.0), cfg.get('uv_shrink', 1.0),
+                                       cfg.get('fill', 1.0))
         if len(T) > target:
             T, P = qem_decimate(P, UV, T, target, diag)
     return compact(P, N, UV, T)
