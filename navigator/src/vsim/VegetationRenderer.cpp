@@ -29,9 +29,9 @@ namespace vsim {
 
 namespace {
 
-constexpr int kAtlasTiles = 10;   // tiles per atlas row and column
+constexpr int kAtlasTiles = kVegAtlasTiles;
 constexpr int kTuftSize = 7;      // grass pieces per grass instance
-constexpr int kAtlasAzimuths = 8;  // views baked per tree variant
+constexpr int kAtlasAzimuths = kVegAtlasAzimuths;
 constexpr int kTilePx = 128;
 constexpr float kPi = 3.14159265358979f;
 constexpr float kSinkM = 0.06f;    // instances stand this far into the surface
@@ -261,8 +261,8 @@ vec4 instVary(vec2 p) {
   return vec4(a > 0.5 ? -1.0 : 1.0, mix(0.80, 1.22, b), c * 6.2831853, d * 0.07);
 }
 vec2 tileUv(float tile, vec2 q) {
-  float col = mod(tile, 8.0), row = floor(tile / 8.0);
-  return (vec2(col, row) + q) / 8.0;
+  float col = mod(tile, @ATLAS_TILES@), row = floor(tile / @ATLAS_TILES@);
+  return (vec2(col, row) + q) / @ATLAS_TILES@;
 }
 void main() {
   vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
@@ -277,11 +277,11 @@ void main() {
   float cyw = cos(i_posyaw.w), syw = sin(i_posyaw.w);
   vec2 hl = vec2(cyw * h.x + syw * h.y, -syw * h.x + cyw * h.y); // into model frame
   hl.y *= vv.x; // a mirrored tree seen from here is the baked one seen from the mirror azimuth
-  float f = atan(hl.y, -hl.x) / 6.28318530718 * 8.0;
-  f = f - 8.0 * floor(f / 8.0);
+  float f = atan(hl.y, -hl.x) / 6.28318530718 * @ATLAS_AZ@;
+  f = f - @ATLAS_AZ@ * floor(f / @ATLAS_AZ@);
   float i0 = floor(f);
   v_w = f - i0;
-  float i1 = mod(i0 + 1.0, 8.0);
+  float i1 = mod(i0 + 1.0, @ATLAS_AZ@);
   vec2 q = (c * 0.5 + 0.5) * 0.96 + 0.02;
   if (vv.x < 0.0) q.x = 1.0 - q.x;
   v_uv0 = tileUv(u_tile + i0, q);
@@ -433,6 +433,15 @@ void restoreCoverage(QImage &img, int cutoff255, double target) {
 }
 
 } // namespace
+
+// The tile and azimuth counts reach the shader from the same constants the
+// bake uses, so the two cannot drift apart.
+QByteArray vegBillboardVertexSource() {
+  QByteArray src(kBillVS);
+  src.replace("@ATLAS_TILES@", QByteArray::number(double(kAtlasTiles), 'f', 1));
+  src.replace("@ATLAS_AZ@", QByteArray::number(double(kAtlasAzimuths), 'f', 1));
+  return src;
+}
 
 const VegSpeciesInfo *vegSpeciesTable(int *count) {
   if (count)
@@ -711,7 +720,7 @@ bool VegetationRenderer::buildPrograms(const VegGlsl &g) {
     return false;
   progBillboard_ = std::make_unique<QOpenGLShaderProgram>();
   const bool billOk = linkProgram(
-      *progBillboard_, "vegetation billboard", QByteArray(kBillVS),
+      *progBillboard_, "vegetation billboard", vegBillboardVertexSource(),
       QByteArray(kBillFSHead) + g.atmosphere + g.lighting + kCommonGLSL + kBillFSMain);
   progBake_ = std::make_unique<QOpenGLShaderProgram>();
   const bool bakeOk = linkProgram(*progBake_, "vegetation bake", kBakeVS, kBakeFS);

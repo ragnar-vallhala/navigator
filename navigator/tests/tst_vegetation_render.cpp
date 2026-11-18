@@ -227,6 +227,25 @@ private slots:
   }
 
   // Instance counts follow the palette: dense forest, almost nothing in a yard.
+  // The billboard shader locates a tile from the atlas layout; if its numbers
+  // differ from the bake's constants, impostors sample the wrong tiles.
+  void billboardShaderUsesAtlasConstants() {
+    const QByteArray src = vsim::vegBillboardVertexSource();
+    QVERIFY2(!src.contains('@'), "unresolved placeholder in the billboard shader");
+    const QByteArray tiles = QByteArray::number(double(vsim::kVegAtlasTiles), 'f', 1);
+    const QByteArray az = QByteArray::number(double(vsim::kVegAtlasAzimuths), 'f', 1);
+    QVERIFY(src.contains("mod(tile, " + tiles + ")"));
+    QVERIFY(src.contains("floor(tile / " + tiles + ")"));
+    QVERIFY(src.contains("+ q) / " + tiles + ";"));
+    QVERIFY(src.contains("* " + az + ";"));
+    QVERIFY(src.contains("mod(i0 + 1.0, " + az + ")"));
+    // The atlas must be able to hold every azimuth of at least one variant.
+    QVERIFY(vsim::kVegAtlasTiles * vsim::kVegAtlasTiles >= vsim::kVegAtlasAzimuths);
+    // A stale tile count would show up as a literal divide by a different number.
+    if (vsim::kVegAtlasTiles != 8)
+      QVERIFY(!src.contains("tile / 8.0") && !src.contains("+ q) / 8.0"));
+  }
+
   void instanceCountFollowsPalette() {
     const World forest = buildWorld(kPalForest, -1, 0);
     const World yard = buildWorld(kPalYard, -1, 0);

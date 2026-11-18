@@ -118,6 +118,15 @@ struct VegLodChoice {
 };
 VegLodChoice vegChooseLod(const VegSpeciesInfo &s, float dist, bool impostorReady);
 
+// Impostor atlas layout: kVegAtlasTiles x kVegAtlasTiles tiles, each tree
+// variant baked from kVegAtlasAzimuths directions.
+constexpr int kVegAtlasTiles = 10;
+constexpr int kVegAtlasAzimuths = 8;
+
+// Vertex shader source of the billboard program, with the atlas layout filled
+// in from the constants above (exposed so a test can check it).
+QByteArray vegBillboardVertexSource();
+
 // Keep-clear discs for the helipads (pad footprint plus a margin) and the
 // world's obstacles (their footprint plus a margin), NED world metres.
 std::vector<procgen::VegExclusion>
