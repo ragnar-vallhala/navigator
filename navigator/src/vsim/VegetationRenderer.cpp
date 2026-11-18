@@ -75,6 +75,13 @@ vec4 instVary(vec2 p) {
   return vec4(a > 0.5 ? -1.0 : 1.0, mix(0.80, 1.22, b), c * 6.2831853, d * 0.07);
 }
 vec3 tintMul(float t) { return mix(vec3(0.86, 0.90, 0.82), vec3(1.10, 1.06, 0.96), t); }
+// Crown colour per tree: value and hue vary independently (t is a hash of the
+// tree's cell, so a tree keeps its colour). Hue runs from a yellower green to a
+// bluer one; value from dim to bright.
+vec3 foliageTint(float t) {
+  float h = fract(t * 7.31 + 0.17);
+  return mix(vec3(1.10, 1.04, 0.78), vec3(0.86, 1.00, 1.14), h) * mix(0.76, 1.20, t);
+}
 vec3 srgbEnc(vec3 c) {
   vec3 hi = 1.055 * pow(max(c, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
   return mix(c * 12.92, hi, step(vec3(0.0031308), c));
@@ -150,6 +157,7 @@ uniform sampler2D u_normal;   // linear, tangent space, +Y up
 uniform sampler2D u_arm;      // linear: R = ambient occlusion, G = roughness
 uniform float u_cutout;
 uniform float u_cutoff;
+uniform float u_a2c;      // 1: alpha-to-coverage (multisampled target)
 uniform float u_sway;
 )GLSL";
 
@@ -184,7 +192,17 @@ void main() {
   float sh = csmVisibility(v_world, N, sun, false) * droneShadow(v_world, sun);
   mat3 TBN = cotangentFrame(N, v_world, v_uv);
   vec4 d = texture(u_diffuse, v_uv);
-  if (u_cutout > 0.5 && d.a < u_cutoff) discard;
+  // Leaf edge: with a multisampled target the cut-out becomes coverage (no
+  // aliased speckle on crowns); otherwise a plain alpha test.
+  float cov = 1.0;
+  if (u_cutout > 0.5) {
+    if (u_a2c > 0.5) {
+      cov = clamp((d.a - u_cutoff) / max(fwidth(d.a), 1e-3) + 0.5, 0.0, 1.0);
+      if (cov <= 0.0) discard;
+    } else if (d.a < u_cutoff) {
+      discard;
+    }
+  }
   // Cross-fade between LODs by screen-door dither: fade in (0,1] keeps pixels
   // above the threshold, fade in [2,3] keeps those below it (the partner).
   float b = bayer4(gl_FragCoord.xy);
@@ -197,7 +215,7 @@ void main() {
   // Albedo is stored sRGB and sampled linear (correct mip filtering); the sim's
   // lighting works on display-referred colour, so encode back before applying
   // the same sun + ambient terms the terrain uses.
-  vec3 base = srgbEnc(d.rgb) * tintMul(v_tint);
+  vec3 base = srgbEnc(d.rgb) * (u_cutout > 0.5 && v_paint < 0.5 ? foliageTint(v_tint) : tintMul(v_tint));
   if (v_paint > 0.5) {
     // Grass: keep the blade's own brightness, move its hue to the ground's.
     int pk = int(v_paint + 0.5);
@@ -229,7 +247,7 @@ void main() {
       L = ambientLit(Nm) * (0.6 + 0.4 * ao) * 1.3 + sunLightColor() * wrapDiffuse(Nm, sun) * 1.0 * sh;
     }
   }
-  o_color = vec4(applyAerialPerspective(base * L, toFrag, dist), 1.0);
+  o_color = vec4(applyAerialPerspective(base * L, toFrag, dist), cov);
 }
 )GLSL";
 
@@ -328,7 +346,7 @@ void main() {
   vec3 N = normalize(vec3(-hz * 0.45, -0.85));
   // Same foliage terms as the mesh shader (ambient floor, light through leaves).
   vec3 L = ambientLit(N) * 1.5 + sunLightColor() * (wrapDiffuse(N, sun) * 0.95 + 0.25);
-  o_color = vec4(applyAerialPerspective(rgb * tintMul(v_tint) * L, toFrag, dist), 1.0);
+  o_color = vec4(applyAerialPerspective(rgb * foliageTint(v_tint) * L, toFrag, dist), 1.0);
 }
 )GLSL";
 
@@ -733,6 +751,7 @@ bool VegetationRenderer::buildPrograms(const VegGlsl &g) {
   loc_.sway = prog_->uniformLocation("u_sway");
   loc_.cutout = prog_->uniformLocation("u_cutout");
   loc_.cutoff = prog_->uniformLocation("u_cutoff");
+  loc_.a2c = prog_->uniformLocation("u_a2c");
   if (progBillboard_) {
     loc_.cy = progBillboard_->uniformLocation("u_cy");
     loc_.half = progBillboard_->uniformLocation("u_half");
@@ -1130,6 +1149,7 @@ void VegetationRenderer::drawBucket(VariantGpu &v, int lod,
     }
     prog_->setUniformValue(loc_.cutout, vm.cutout() ? 1.0f : 0.0f);
     prog_->setUniformValue(loc_.cutoff, vm.alphaCutoff);
+    prog_->setUniformValue(loc_.a2c, a2c_ ? 1.0f : 0.0f);
     glDrawElementsInstanced(GL_TRIANGLES, GLsizei(sm.indexCount), GL_UNSIGNED_INT,
                             reinterpret_cast<void *>(uintptr_t(sm.firstIndex) * 4), n);
     ++stats_.drawCalls;
@@ -1348,6 +1368,16 @@ void VegetationRenderer::draw(const VegFrame &f) {
   glDepthMask(GL_TRUE);
   glDisable(GL_CULL_FACE);
   glDisable(GL_BLEND);
+  // Alpha-to-coverage turns leaf edges into MSAA coverage. It only helps on a
+  // multisampled target, and it reads the fragment alpha, so keep that out of
+  // the framebuffer's own alpha channel.
+  GLint samples = 0;
+  glGetIntegerv(GL_SAMPLES, &samples);
+  a2c_ = samples > 1;
+  if (a2c_) {
+    glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+  }
   glActiveTexture(GL_TEXTURE1);
   glBindTexture(GL_TEXTURE_2D, f.shadowTex);
   prog_->bind();
@@ -1360,6 +1390,10 @@ void VegetationRenderer::draw(const VegFrame &f) {
       if (!buckets_[vi * 4 + size_t(l)].empty())
         drawBucket(var_[vi], l, buckets_[vi * 4 + size_t(l)], f);
   prog_->release();
+  if (a2c_) {
+    glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+  }
 
   if (progBillboard_ && atlasOk_) {
     progBillboard_->bind();
