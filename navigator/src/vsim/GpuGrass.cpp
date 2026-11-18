@@ -16,6 +16,7 @@
  */
 #include "GpuGrass.h"
 
+#include <QByteArray>
 #include <QOpenGLExtraFunctions>
 #include <QVector2D>
 #include <QtGlobal>
@@ -252,16 +253,13 @@ const char *kFrag = R"GLSL(
 in vec3 v_color; in vec3 v_world; in vec3 v_normal; in float v_hf; in float v_flower;
 in float v_across;
 out vec4 o_color;
-uniform vec3 u_campos, u_sundir; uniform float u_fogdensity, u_fogstart;
+uniform vec3 u_campos; uniform float u_fogdensity, u_fogstart;
 uniform sampler2D u_shadowtex; uniform mat4 u_lightvp; uniform float u_shadowon;
 // Live look knobs (procgen::GrassLook).
 uniform float u_sunint, u_ambstr, u_brightness, u_tipwarm, u_backlight, u_sheen,
               u_veinstr, u_rootao;
-vec3 skyColor(vec3 dir){
-  float up=-dir.z;
-  vec3 z=vec3(0.15,0.35,0.66),h=vec3(0.80,0.86,0.93),g=vec3(0.16,0.18,0.22);
-  return (up>=0.0)?mix(h,z,pow(clamp(up,0.0,1.0),0.45)):mix(h,g,clamp(-up*2.5,0.0,1.0));
-}
+// skyColor / fogColor / u_sundir come from Atmosphere.h, spliced in below.
+//@ATMOSPHERE@
 float shadowFactor(vec3 wpos){
   if(u_shadowon<0.5) return 1.0;
   vec4 lp=u_lightvp*vec4(wpos,1.0); vec3 p=lp.xyz/lp.w*0.5+0.5;
@@ -331,9 +329,17 @@ void main(){
 
   float fd=max(dist-u_fogstart,0.0)*u_fogdensity;
   float fog=1.0-exp(-fd*fd);
-  o_color=vec4(mix(col,skyColor(vdir),clamp(fog,0.0,1.0)),1.0);
+  o_color=vec4(mix(col,fogColor(vdir),clamp(fog,0.0,1.0)),1.0);
 }
 )GLSL";
+
+// kFrag with the shared sky/sun GLSL spliced in at its marker, so the grass
+// fades into the same sky as the terrain.
+QByteArray fragmentSource() {
+  QByteArray src(kFrag);
+  src.replace("//@ATMOSPHERE@", kAtmosphereGLSL);
+  return src;
+}
 
 } // namespace
 
@@ -369,7 +375,8 @@ bool GpuGrass::init(QOpenGLExtraFunctions *gl) {
     return false; // compute unsupported -> caller falls back to CPU flora
   }
   if (!draw_->addShaderFromSourceCode(QOpenGLShader::Vertex, kVert) ||
-      !draw_->addShaderFromSourceCode(QOpenGLShader::Fragment, kFrag) ||
+      !draw_->addShaderFromSourceCode(QOpenGLShader::Fragment,
+                                      fragmentSource()) ||
       !draw_->link()) {
     qInfo("[GpuGrass] draw program failed: %s",
           draw_->log().toLocal8Bit().constData());
@@ -866,7 +873,15 @@ void GpuGrass::render(QOpenGLExtraFunctions *gl, const QMatrix4x4 &proj,
   // Height fade only at the very far edge — near grass keeps full height.
   draw_->setUniformValue("u_fadestart", farRadius * 0.85f);
   draw_->setUniformValue("u_fadeend", farRadius * 0.99f);
-  draw_->setUniformValue("u_sundir", sunDir);
+  Atmosphere atmo = atmo_; // the caller's sun wins (it also drives the shadows)
+  atmo.setSunDirection({sunDir.x(), sunDir.y(), sunDir.z()});
+  atmo.forEachUniform([this](const char *name, auto... v) {
+    const float a[] = {static_cast<float>(v)...};
+    if constexpr (sizeof...(v) == 3)
+      draw_->setUniformValue(name, QVector3D(a[0], a[1], a[2]));
+    else
+      draw_->setUniformValue(name, a[0]);
+  });
   draw_->setUniformValue("u_fogdensity", 1.0f / 420.0f);
   draw_->setUniformValue("u_fogstart", 45.0f);
   draw_->setUniformValue("u_lightvp", lightVP);

@@ -41,6 +41,7 @@
 #include <QOpenGLVertexArrayObject>
 #include <QVector3D>
 
+#include "Atmosphere.h"
 #include "procgen/Flora.h" // procgen::GrassLook
 
 #include <cstdint>
@@ -106,6 +107,8 @@ public:
   int liveObjects() const;
   bool ready() const { return ready_; }
   void setParams(const Params &p);
+  // Sky/sun look shared with the terrain (Atmosphere.h): sky colours, fog colour.
+  void setAtmosphere(const Atmosphere &a) { atmo_ = a; }
 
   // Regenerate blades around camPos and draw them. proj/view are the render
   // matrices; sunDir/time feed lighting + wind.
@@ -141,6 +144,7 @@ private:
                   float regionSize, float ringCell);
   procgen::FieldParams maskField() const;
 
+  Atmosphere atmo_ = Atmosphere::defaults();
   bool ready_ = false;
   MaskTile mask_[kRings];
   unsigned int maskGen_ = 1; // bumped by setParams: tiles older than it rebuild
