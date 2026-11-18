@@ -32,6 +32,7 @@
 // their shared edge, so the ring has no cracks.
 #pragma once
 
+#include "Atmosphere.h"
 #include "procgen/TerrainField.h"
 
 #include <cstdint>
@@ -50,7 +51,7 @@ namespace vsim {
 // At ground level the mean is 1, so the look there is the original (start 45 m,
 // density 1/420). The fog colour stays the horizon colour (see skyColor), which
 // is what the sky shows at the horizon, so a fully fogged ring has no seam.
-inline constexpr float kFogHeightM = 150.0f;
+inline constexpr float kFogHeightM = kFogHeightScaleM; // Atmosphere.h
 inline constexpr const char *kFogGLSL = R"GLSL(
 uniform float u_fogbase;    // NED z of the ground under the camera
 uniform float u_fogheight;  // height-fog scale height [m]
