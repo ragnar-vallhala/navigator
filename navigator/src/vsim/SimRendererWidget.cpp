@@ -356,7 +356,7 @@ float shadowMapFactor(vec3 wpos, vec3 nrm, vec3 lightDir) {
   // map calls it lit or dark flips triangle to triangle on a steep face (hatched
   // saw-tooth). Leave those to the wrapped diffuse term and fade the map in over
   // the first few percent of facet N.L; cast shadows on sun-facing ground stay.
-  return mix(1.0, s, smoothstep(0.0, 0.03, ndg));
+  return mix(1.0, s, smoothstep(0.0, 0.10, ndg));
 }
 float shadowFactor(vec3 wpos, vec3 nrm, vec3 lightDir) {
   return shadowMapFactor(wpos, nrm, lightDir) * droneShadow(wpos, lightDir);
@@ -1512,6 +1512,17 @@ void SimRendererWidget::drawMesh(const Mesh &m, const QMatrix4x4 &mvp,
 #endif
 
 void SimRendererWidget::buildShadowMap() {
+  // Depth clamp is core in desktop GL 3.2+, an extension elsewhere (not in GLES).
+  {
+    const QOpenGLContext *ctx = context();
+    const QSurfaceFormat fmt = ctx->format();
+    depthClamp_ =
+        (ctx->isOpenGLES() == false &&
+         (fmt.majorVersion() > 3 ||
+          (fmt.majorVersion() == 3 && fmt.minorVersion() >= 2))) ||
+        ctx->hasExtension("GL_ARB_depth_clamp") ||
+        ctx->hasExtension("GL_EXT_depth_clamp");
+  }
   // Depth-only FBO: a single 32F depth texture, no colour buffer.
   glGenFramebuffers(1, &shadowFbo_);
   glGenTextures(1, &shadowTex_);
@@ -1563,7 +1574,10 @@ void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks) {
   glEnable(GL_DEPTH_TEST);
   // Casters nearer the sun than the near plane (a ridge >200 m up-sun at a low
   // sun) are clamped to depth 0 instead of clipped away, so they still shadow.
-  glEnable(GL_DEPTH_CLAMP);
+#ifdef GL_DEPTH_CLAMP
+  if (depthClamp_)
+    glEnable(GL_DEPTH_CLAMP);
+#endif
   progDepth_->bind();
   auto drawDepth = [&](const Mesh &m) {
     if (m.vertex_count == 0)
@@ -1588,7 +1602,10 @@ void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks) {
       glDrawArrays(GL_TRIANGLES, 0, helipadDisk_.vertex_count);
     }
   progDepth_->release();
-  glDisable(GL_DEPTH_CLAMP);
+#ifdef GL_DEPTH_CLAMP
+  if (depthClamp_)
+    glDisable(GL_DEPTH_CLAMP);
+#endif
 
   glBindFramebuffer(GL_FRAMEBUFFER, context()->defaultFramebufferObject());
   glViewport(0, 0, fbW_, fbH_);

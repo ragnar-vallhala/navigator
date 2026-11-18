@@ -21,8 +21,8 @@
 // compiled and every grass/flora entry point below is stubbed to a no-op, so
 // the SITL view renders terrain without grass. The code is retained in-tree for
 // later re-enable (cmake -DNAVIGATOR_SIM_GRASS=ON).
-#ifdef VAYU_SIM_GRASS
 #include "Atmosphere.h"
+#ifdef VAYU_SIM_GRASS
 #include "GpuGrass.h"
 #endif
 #include "DroneModel.h"
@@ -497,6 +497,7 @@ private:
   unsigned int shadowFbo_ = 0;
   unsigned int shadowTex_ = 0;
   int shadowSize_ = 2048;
+  bool depthClamp_ = false; // GL_DEPTH_CLAMP usable for the shadow pass
   bool shadowReady_ = false; // FBO built ok
   bool shadowOn_ = false;    // a shadow map was rendered this frame
   QMatrix4x4 lightVP_;       // light view-projection (world -> light clip)
