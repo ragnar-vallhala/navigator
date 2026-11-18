@@ -152,6 +152,7 @@ uniform float u_bands;       // >0: pole painted in this many 1 m red/white band
 uniform vec3 u_campos;       // camera world position (NED)
 uniform float u_fogdensity;  // aerial-perspective strength
 uniform float u_fogstart;    // metres before fog begins
+uniform vec4 u_ringclip;     // far ring: discard inside this xy rect (x0,y0,x1,y1)
 uniform float u_sunint;      // sun-intensity look knob (matches grass)
 uniform float u_ambstr;      // ambient-strength look knob (matches grass)
 )GLSL";
@@ -179,6 +180,10 @@ float gridLine(vec2 p, float cell, float w) {
   return max(l.x, l.y) * (1.0 - smoothstep(0.12, 0.35, max(fw.x, fw.y)));
 }
 void main() {
+  if (u_ringclip.z > u_ringclip.x && v_world.x > u_ringclip.x &&
+      v_world.x < u_ringclip.z && v_world.y > u_ringclip.y &&
+      v_world.y < u_ringclip.w)
+    discard;
   vec3 n = normalize(v_normal);
   vec3 toFrag = v_world - u_campos;
   float dist = length(toFrag);
@@ -1329,8 +1334,11 @@ void SimRendererWidget::paintGL() {
       if (kv.second->vertex_count)
         drawLit(*kv.second, view, QMatrix4x4(), QVector3D(1.0f, 1.0f, 1.0f),
                 true);
-  if (showChunks && farMesh_.vertex_count) // coarse ring beyond the window
+  if (showChunks && farMesh_.vertex_count) { // coarse ring beyond the window
+    drawingFarRing_ = true;
     drawLit(farMesh_, view, QMatrix4x4(), QVector3D(1.0f, 1.0f, 1.0f), true);
+    drawingFarRing_ = false;
+  }
 
   // With no terrain mesh in World mode, and around a finite procedural arena,
   // draw a detailed ground out to the horizon instead of the old +/-10 m line
@@ -1609,6 +1617,7 @@ void SimRendererWidget::drawLit(const Mesh &m, const QMatrix4x4 &view,
   progLit_->setUniformValue(ul_fogstart_, 45.0f);
   progLit_->setUniformValue("u_fogbase", fogBaseZ_);
   progLit_->setUniformValue("u_fogheight", kFogHeightM);
+  progLit_->setUniformValue("u_ringclip", drawingFarRing_ ? QVector4D(farTerrain_.clipRect()[0], farTerrain_.clipRect()[1], farTerrain_.clipRect()[2], farTerrain_.clipRect()[3]) : QVector4D());
   progLit_->setUniformValue(ul_lightvp_, lightVP_);
   progLit_->setUniformValue(ul_shadowon_, shadowOn_ ? 1.0f : 0.0f);
   progLit_->setUniformValue(ul_drone_, droneShadowPos_);

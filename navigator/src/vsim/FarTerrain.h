@@ -27,14 +27,15 @@
 // layout of the chunk meshes) for the renderer to upload and draw with the same
 // lit terrain program, after the near chunks. The ring is anchored to the loaded
 // chunk window (rebuilt only when that window moves, i.e. once per chunk
-// crossing), starts kOverlapM inside its edge, and is sunk below the near surface
-// there so the near chunks win; the fine rings conform to the coarser ones along
+// crossing), starts kOverlapM inside its edge but is clipped inside the window, and its heights
+// follow the meshed (slope-capped) near surface at the edge; the fine rings conform to the coarser ones along
 // their shared edge, so the ring has no cracks.
 #pragma once
 
 #include "procgen/TerrainField.h"
 
 #include <cstdint>
+#include <future>
 #include <memory>
 #include <vector>
 
@@ -78,29 +79,40 @@ public:
   };
 
   static constexpr float kOverlapM = 48.0f; // ring starts this far inside the window
-  static constexpr float kSinkM = 2.0f;     // dropped here so the near chunks win
-  static constexpr float kSinkFadeM = 96.0f; // ...fading out over this distance
+  static constexpr float kBlendM = 96.0f; // ring heights: meshed surface -> raw field
 
   // The field to sample (null disables the ring and drops the geometry).
   void setField(std::shared_ptr<const procgen::TerrainField> f);
   bool active() const { return field_ != nullptr; }
 
-  // Rebuilds when the window differs from the last build. True if vertices()
-  // changed (so the caller re-uploads).
+  // Starts a background rebuild when the window differs from the last build and
+  // swaps in a finished one. True if vertices() changed (so the caller
+  // re-uploads); until then the previous ring stays.
   bool update(const Window &w);
 
   // Interleaved pos(3) normal(3) colour(3), triangle soup, NED metres.
   const std::vector<float> &vertices() const { return verts_; }
   int vertexCount() const { return static_cast<int>(verts_.size() / 9); }
 
+  // The loaded window [x0, y0, x1, y1] (NED xy): the renderer discards the ring
+  // inside it, where the chunks are drawn. Empty (x1 <= x0) when unbuilt.
+  const float *clipRect() const { return clip_; }
+
   // NED z of the terrain under (x, y), i.e. the fog reference height; `fallback`
   // when there is no field.
   float groundZ(float x, float y, float fallback) const;
 
 private:
-  void build(const Window &w);
+  struct Built {
+    std::vector<float> verts;
+    float clip[4] = {0, 0, 0, 0};
+  };
+  static Built build(const procgen::TerrainField &f, const Window &w);
+  std::future<Built> pending_;
+  Window pendingWin_;
   std::shared_ptr<const procgen::TerrainField> field_;
   Window built_;
+  float clip_[4] = {0, 0, 0, 0};
   std::vector<float> verts_;
 };
 

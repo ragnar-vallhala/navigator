@@ -609,6 +609,7 @@ private:
   Mesh worldMesh_;
   Mesh farMesh_;               // far-terrain ring (FarTerrain)
   FarTerrain farTerrain_;
+  bool drawingFarRing_ = false; // drawLit clips the ring inside the window
   float fogBaseZ_ = 0.0f;      // NED z of the ground under the camera (height fog)
   bool hasWorldMesh_ = false;
   bool worldMeshDirty_ = false;

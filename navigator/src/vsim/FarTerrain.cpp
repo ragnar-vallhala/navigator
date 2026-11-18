@@ -18,6 +18,7 @@
 #include "FarTerrain.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <unordered_map>
 
@@ -47,7 +48,12 @@ struct Vert {
 } // namespace
 
 void FarTerrain::setField(std::shared_ptr<const procgen::TerrainField> f) {
+  if (pending_.valid())
+    pending_.wait(); // a build in flight reads the old field
+  pending_ = {};
+  pendingWin_ = Window{};
   field_ = std::move(f);
+  clip_[0] = clip_[1] = clip_[2] = clip_[3] = 0.0f;
   built_ = Window{};
   verts_.clear();
 }
@@ -57,16 +63,33 @@ float FarTerrain::groundZ(float x, float y, float fallback) const {
 }
 
 bool FarTerrain::update(const Window &w) {
-  if (!field_ || !w.valid() || w == built_)
+  if (!field_)
     return false;
-  build(w);
-  built_ = w;
-  return true;
+  bool changed = false;
+  // Collect a finished build (the heavy part runs on a worker thread: sampling
+  // the meshed surface around the window costs ~100 ms).
+  if (pending_.valid() &&
+      pending_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+    Built b = pending_.get();
+    verts_ = std::move(b.verts);
+    std::copy(b.clip, b.clip + 4, clip_);
+    built_ = pendingWin_;
+    changed = true;
+  }
+  if (!pending_.valid() && w.valid() && !(w == built_)) {
+    pendingWin_ = w;
+    auto field = field_;
+    pending_ = std::async(std::launch::async,
+                          [field, w] { return build(*field, w); });
+  }
+  return changed;
 }
 
-void FarTerrain::build(const Window &w) {
-  const procgen::TerrainField &f = *field_;
-  verts_.clear();
+FarTerrain::Built FarTerrain::build(const procgen::TerrainField &f,
+                                    const Window &w) {
+  Built out;
+  std::vector<float> &verts_ = out.verts;
+  float(&clip_)[4] = out.clip;
 
   // R_0: the window shrunk by the overlap, on the finest lattice.
   Rect inner{
@@ -74,7 +97,15 @@ void FarTerrain::build(const Window &w) {
       snapDown(static_cast<float>(w.maxCx + 1) * w.chunkM - kOverlapM, kCell[0]),
       snapUp(static_cast<float>(w.minCy) * w.chunkM + kOverlapM, kCell[0]),
       snapDown(static_cast<float>(w.maxCy + 1) * w.chunkM - kOverlapM, kCell[0])};
-  const Rect r0 = inner;
+  const Rect win{static_cast<float>(w.minCx) * w.chunkM,
+                 static_cast<float>(w.maxCx + 1) * w.chunkM,
+                 static_cast<float>(w.minCy) * w.chunkM,
+                 static_cast<float>(w.maxCy + 1) * w.chunkM};
+  const float chunkM = w.chunkM;
+  clip_[0] = win.x0;
+  clip_[1] = win.y0;
+  clip_[2] = win.x1;
+  clip_[3] = win.y1;
 
   for (int ring = 0; ring < kRings; ++ring) {
     const float c = kCell[ring];
@@ -93,7 +124,7 @@ void FarTerrain::build(const Window &w) {
     };
     // Heights are cached per lattice node: each node's normal reuses its
     // neighbours' heights instead of four more field evaluations.
-    std::unordered_map<std::int64_t, float> hcache;
+    std::unordered_map<std::int64_t, float> hcache, scache;
     auto heightAt = [&](float x, float y) {
       const auto k = key(static_cast<int>(std::lround(x / c)),
                          static_cast<int>(std::lround(y / c)));
@@ -114,11 +145,25 @@ void FarTerrain::build(const Window &w) {
       const procgen::PgVec3 n{nx, ny, nz};
       const float flat = n.z < 0.0f ? -n.z : 0.0f;
       const procgen::PgVec3 col = f.colorAt(x, y, h, flat).color;
-      // Sink below the near surface around the overlap, fading with distance
-      // beyond the window (Chebyshev distance outside R_0).
-      const float d = std::max({r0.x0 - x, x - r0.x1, r0.y0 - y, y - r0.y1, 0.0f});
-      const float sink = kSinkM * std::max(0.0f, 1.0f - d / kSinkFadeM);
-      return Vert{{x, y, -h + sink, n.x, n.y, n.z, col.x, col.y, col.z}};
+      // Near the window the ring follows the surface the chunks actually mesh
+      // (slope-capped, so it can sit well below the raw field on steep ground)
+      // and blends to the raw field kBlendM beyond the edge. The renderer clips
+      // the ring inside the window, so there is nothing to poke through.
+      const float d = std::max({win.x0 - x, x - win.x1, win.y0 - y, y - win.y1});
+      float hz = h;
+      if (d < kBlendM) {
+        const float wgt = std::clamp(d / kBlendM, 0.0f, 1.0f);
+        const auto k = key(static_cast<int>(std::lround(x / c)),
+                           static_cast<int>(std::lround(y / c)));
+        auto it = scache.find(k);
+        if (it == scache.end())
+          it = scache
+                   .emplace(k, procgen::surfaceHeight(f, x, y, chunkM,
+                                                      procgen::kStreamChunkRes))
+                   .first;
+        hz = it->second * (1.0f - wgt) + h * wgt;
+      }
+      return Vert{{x, y, -hz, n.x, n.y, n.z, col.x, col.y, col.z}};
     };
     auto vertAt = [&](int i, int j) -> const Vert & {
       const auto k = key(i, j);
@@ -161,6 +206,7 @@ void FarTerrain::build(const Window &w) {
     }
     inner = outer;
   }
+  return out;
 }
 
 } // namespace vsim
