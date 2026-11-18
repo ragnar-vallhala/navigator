@@ -350,6 +350,7 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     out.biome = "endless"; // streamed like every world
     out.field.seed = seed;
     out.field.palette = kPalMeadow; // keeps the meadow ground/flora look
+    out.field.reliefM = 0.2f;
     out.flora.seed = seed;
     return true;
   }
@@ -364,6 +365,7 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     f.mountainBias = 0.6f;
     f.maxSlope = 0.5f;
     f.palette = kPalHills;
+    f.reliefM = 0.25f;
     noSnowNoRock(f);
     f.colSlopeT = 0.9f;
   } else if (id == "alpine") {
@@ -373,6 +375,7 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     f.mountainBias = 0.15f;
     f.maxSlope = 0.9f;
     f.palette = kPalAlpine;
+    f.reliefM = 0.3f;
     f.colBrownT = 0.28f;
     f.colRockT = 0.55f;
     f.colSnowT = 0.58f;
@@ -402,6 +405,7 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     f.mountainBias = 0.5f;
     f.maxSlope = 0.5f;
     f.palette = kPalForest;
+    f.reliefM = 0.3f;
     noSnowNoRock(f);
     f.colSlopeT = 0.8f;
   } else if (id == "racing") {

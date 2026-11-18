@@ -68,6 +68,11 @@ struct FieldParams {
   // Radius [m] of a level pad blended in around the origin (the spawn) at the
   // elevation the raw field has there; 0 disables. Blends out over 1.5x radius.
   float flatRadiusM = 0.0f;
+  // Peak height [m] of small-scale ground relief (hummocks and hollows with a
+  // 15..30 m wavelength) added on top of the field; 0 = none (default). Kept at
+  // centimetre to a few decimetres so the slope stays gentle; ignored on the
+  // spawn pad and for dune worlds.
+  float reliefM = 0.0f;
 };
 
 class TerrainField {
@@ -103,9 +108,12 @@ private:
   Noise mtn_;
   Noise macro_;
   Noise warp_;
+  Noise relief_;
   GroundCover cover_;
   float rawHeight(float wx, float wy) const; // before the spawn pad
   float duneHeight(float wx, float wy) const;
+  float reliefHeight(float wx, float wy) const; // [0, reliefM]
+  float withRelief(float h, float relief) const;
   float padHeight_ = 0.0f; // raw elevation at the origin (spawn pad level)
   float duneDir_ = 0.0f;   // dune crest-normal heading [rad], from the seed
   float baseFreq_;  // 1 / featureM
