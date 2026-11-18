@@ -201,11 +201,13 @@ bool loadVegetationAssets(VegAssets &out, QString *error, const QString &root,
       const QJsonArray fp = vo.value("footprint").toArray();
       v.footprintX = float(fp.at(0).toDouble());
       v.footprintZ = float(fp.at(1).toDouble());
+      v.trunkRadius = float(vo.value("trunkRadius").toDouble());
       const QJsonArray lods = vo.value("lods").toArray();
       if (lods.size() != kVegLodCount)
         return fail(error, v.name + ": expected 3 LODs");
       for (int l = 0; l < kVegLodCount; ++l) {
         const QString file = lods.at(l).toObject().value("file").toString();
+        v.lods[l].tiers = lods.at(l).toObject().value("tiers").toInt(0);
         QByteArray bytes;
         QString why;
         if (!readFile(dir + file, bytes, error))

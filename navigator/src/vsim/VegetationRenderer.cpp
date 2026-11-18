@@ -29,9 +29,9 @@ namespace vsim {
 
 namespace {
 
-constexpr int kAtlasTiles = 8;     // tiles per atlas row and column
+constexpr int kAtlasTiles = kVegAtlasTiles;
 constexpr int kTuftSize = 7;      // grass pieces per grass instance
-constexpr int kAtlasAzimuths = 8;  // views baked per tree variant
+constexpr int kAtlasAzimuths = kVegAtlasAzimuths;
 constexpr int kTilePx = 128;
 constexpr float kPi = 3.14159265358979f;
 constexpr float kSinkM = 0.06f;    // instances stand this far into the surface
@@ -42,9 +42,10 @@ constexpr float kLodBand = 0.07f;  // cross-fade half width, fraction of the edg
 // distance otherwise). Fog is nearly opaque by ~500 m, so nothing goes farther.
 const VegSpeciesInfo kTable[] = {
     // id                       cat            size  span   lod ends         max   fb    sway  imp
-    {"fir_sapling",             procgen::kVegTree,  procgen::kVegTreeHeightM, false, {40, 90, 150}, 520, 250, 0.020f, true},
-    {"pine_sapling_small",      procgen::kVegTree,  procgen::kVegTreeHeightM, false, {40, 90, 150}, 520, 250, 0.020f, true},
-    {"island_tree_02",          procgen::kVegTree,  procgen::kVegTreeHeightM, false, {40, 90, 150}, 520, 250, 0.015f, true},
+    {"fir_tree_01",             procgen::kVegTree,  procgen::kVegTreeKinds[0].heightM, false, {30, 70, 130}, 560, 300, 0.012f, true},
+    {"pine_sapling_medium",     procgen::kVegTree,  procgen::kVegTreeKinds[1].heightM, false, {30, 70, 130}, 560, 300, 0.012f, true},
+    {"jacaranda_tree",          procgen::kVegTree,  procgen::kVegTreeKinds[2].heightM, false, {30, 70, 130}, 560, 300, 0.008f, true},
+    {"island_tree_01",          procgen::kVegTree,  procgen::kVegTreeKinds[3].heightM, false, {30, 70, 130}, 560, 300, 0.008f, true},
     {"shrub_03",                procgen::kVegBush,  1.0f, false, {25, 60, 110}, 170, 170, 0.030f, false},
     {"shrub_04",                procgen::kVegBush,  1.3f, true,  {25, 60, 110}, 170, 170, 0.030f, false},
     {"weed_plant_02",           procgen::kVegBush,  0.8f, true,  {20, 45, 80},  110, 110, 0.050f, false},
@@ -64,7 +65,23 @@ constexpr int kTableN = int(sizeof(kTable) / sizeof(kTable[0]));
 // n = -z, e = x, d = -y.
 const char *kCommonGLSL = R"GLSL(
 vec3 gltfToNed(vec3 g) { return vec3(-g.z, g.x, -g.y); }
+// Per-instance look from the base position alone (no data to ship, same for
+// every chunking): x = mirror, y = width, z = lean azimuth, w = lean amount.
+vec4 instVary(vec2 p) {
+  float a = fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+  float b = fract(a * 37.719 + 0.31);
+  float c = fract(b * 53.17 + 0.7);
+  float d = fract(c * 29.41 + 0.13);
+  return vec4(a > 0.5 ? -1.0 : 1.0, mix(0.80, 1.22, b), c * 6.2831853, d * 0.07);
+}
 vec3 tintMul(float t) { return mix(vec3(0.86, 0.90, 0.82), vec3(1.10, 1.06, 0.96), t); }
+// Crown colour per tree: value and hue vary independently (t is a hash of the
+// tree's cell, so a tree keeps its colour). Hue runs from a yellower green to a
+// bluer one; value from dim to bright.
+vec3 foliageTint(float t) {
+  float h = fract(t * 7.31 + 0.17);
+  return mix(vec3(1.10, 1.04, 0.78), vec3(0.86, 1.00, 1.14), h) * mix(0.76, 1.20, t);
+}
 vec3 srgbEnc(vec3 c) {
   vec3 hi = 1.055 * pow(max(c, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
   return mix(c * 12.92, hi, step(vec3(0.0031308), c));
@@ -77,7 +94,7 @@ layout(location = 0) in vec3 a_pos;
 layout(location = 1) in vec3 a_nrm;
 layout(location = 2) in vec2 a_uv;
 layout(location = 3) in vec4 i_posyaw;  // base (NED), yaw
-layout(location = 4) in vec4 i_misc;    // scale, tint, fade, -
+layout(location = 4) in vec4 i_misc;    // scale, tint, fade, grass paint (packed RGB hue)
 uniform mat4 u_vp;
 uniform float u_k;       // model unit -> metres at instance scale 1
 uniform float u_height;  // variant height, model units
@@ -88,6 +105,8 @@ out vec3 v_nrm;
 out vec2 v_uv;
 out float v_tint;
 out float v_fade;
+out float v_hm;          // metres above the instance base
+flat out float v_paint;
 )GLSL";
 
 const char *kVSMain = R"GLSL(
@@ -95,8 +114,17 @@ void main() {
   float s = i_misc.x * u_k;
   float cy = cos(i_posyaw.w), sy = sin(i_posyaw.w);
   mat2 R = mat2(cy, sy, -sy, cy);
-  vec3 p = gltfToNed(a_pos) * s;
-  vec3 n = gltfToNed(a_nrm);
+  vec3 g = a_pos, gn = a_nrm;
+  // Trees (the 0-0.02 sway band; shrubs, grass and rocks sway more or not at all)
+  // vary per instance: mirror, width and a slight lean break up the rows.
+  if (u_sway > 0.0 && u_sway < 0.02) {
+    vec4 vv = instVary(i_posyaw.xy);
+    g.x *= vv.x; gn.x *= vv.x;
+    g.xz *= vv.y;
+    g.xz += vec2(cos(vv.z), sin(vv.z)) * (g.y * vv.w);
+  }
+  vec3 p = gltfToNed(g) * s;
+  vec3 n = gltfToNed(gn);
   p.xy = R * p.xy;
   n.xy = R * n.xy;
   float h = clamp(a_pos.y / max(u_height, 1e-4), 0.0, 1.0);
@@ -108,6 +136,8 @@ void main() {
   v_uv = a_uv;
   v_tint = i_misc.y;
   v_fade = i_misc.z;
+  v_paint = i_misc.w;
+  v_hm = g.y * s;
   gl_Position = u_vp * vec4(v_world, 1.0);
 }
 )GLSL";
@@ -119,12 +149,16 @@ in vec3 v_nrm;
 in vec2 v_uv;
 in float v_tint;
 in float v_fade;
+in float v_hm;
+flat in float v_paint;
 out vec4 o_color;
 uniform sampler2D u_diffuse;  // sRGB colour, linear alpha coverage
 uniform sampler2D u_normal;   // linear, tangent space, +Y up
 uniform sampler2D u_arm;      // linear: R = ambient occlusion, G = roughness
 uniform float u_cutout;
 uniform float u_cutoff;
+uniform float u_a2c;      // 1: alpha-to-coverage (multisampled target)
+uniform float u_sway;
 )GLSL";
 
 const char *kFSMain = R"GLSL(
@@ -158,7 +192,17 @@ void main() {
   float sh = csmVisibility(v_world, N, sun, false) * droneShadow(v_world, sun);
   mat3 TBN = cotangentFrame(N, v_world, v_uv);
   vec4 d = texture(u_diffuse, v_uv);
-  if (u_cutout > 0.5 && d.a < u_cutoff) discard;
+  // Leaf edge: with a multisampled target the cut-out becomes coverage (no
+  // aliased speckle on crowns); otherwise a plain alpha test.
+  float cov = 1.0;
+  if (u_cutout > 0.5) {
+    if (u_a2c > 0.5) {
+      cov = clamp((d.a - u_cutoff) / max(fwidth(d.a), 1e-3) + 0.5, 0.0, 1.0);
+      if (cov <= 0.0) discard;
+    } else if (d.a < u_cutoff) {
+      discard;
+    }
+  }
   // Cross-fade between LODs by screen-door dither: fade in (0,1] keeps pixels
   // above the threshold, fade in [2,3] keeps those below it (the partner).
   float b = bayer4(gl_FragCoord.xy);
@@ -171,7 +215,15 @@ void main() {
   // Albedo is stored sRGB and sampled linear (correct mip filtering); the sim's
   // lighting works on display-referred colour, so encode back before applying
   // the same sun + ambient terms the terrain uses.
-  vec3 base = srgbEnc(d.rgb) * tintMul(v_tint);
+  vec3 base = srgbEnc(d.rgb) * (u_cutout > 0.5 && v_paint < 0.5 ? foliageTint(v_tint) : tintMul(v_tint));
+  if (v_paint > 0.5) {
+    // Grass: keep the blade's own brightness, move its hue to the ground's.
+    int pk = int(v_paint + 0.5);
+    vec3 hue = vec3(float((pk >> 16) & 255), float((pk >> 8) & 255), float(pk & 255)) / 255.0;
+    float bl = dot(base, vec3(0.299, 0.587, 0.114));
+    float hl = max(dot(hue, vec3(0.299, 0.587, 0.114)), 0.05);
+    base = mix(base, hue * (bl / hl), 0.75);
+  }
   vec3 L;
   if (u_cutout > 0.5) {
     // Foliage: shaded as a rounded crown (normals leaned toward the sky), with
@@ -183,8 +235,19 @@ void main() {
         sunLightColor() * (wrapDiffuse(Nf, sun) * 0.95 + thru * 0.45) * sh;
   } else {
     L = ambientLit(Nm) * ao * 1.25 + sunLightColor() * wrapDiffuse(Nm, sun) * 0.95 * sh;
+    // Poly Haven bark albedo averages 0.2-0.3 linear; with the AO term it read
+    // as black. Trunks (the swaying species) get a lift and an AO floor.
+    if (u_sway > 0.0) {
+      // The island tree's bark has grey lichen patches; under the blue sky
+      // ambient they went pale blue-white. Warm the bark and keep the AO floor.
+      base *= vec3(1.0, 0.90, 0.78);
+      // The root flare is textured with pale sand and lichen that does not
+      // match the ground it sits in: blend it into soil over the first 40 cm.
+      base = mix(vec3(0.10, 0.075, 0.05), base, smoothstep(0.0, 0.4, v_hm) * 0.6 + 0.4);
+      L = ambientLit(Nm) * (0.6 + 0.4 * ao) * 1.3 + sunLightColor() * wrapDiffuse(Nm, sun) * 1.0 * sh;
+    }
   }
-  o_color = vec4(applyAerialPerspective(base * L, toFrag, dist), 1.0);
+  o_color = vec4(applyAerialPerspective(base * L, toFrag, dist), cov);
 }
 )GLSL";
 
@@ -206,9 +269,18 @@ out float v_w;
 out float v_fade;
 out float v_tint;
 out vec3 v_world;
+// Per-instance look from the base position alone (no data to ship, same for
+// every chunking): x = mirror, y = width, z = lean azimuth, w = lean amount.
+vec4 instVary(vec2 p) {
+  float a = fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+  float b = fract(a * 37.719 + 0.31);
+  float c = fract(b * 53.17 + 0.7);
+  float d = fract(c * 29.41 + 0.13);
+  return vec4(a > 0.5 ? -1.0 : 1.0, mix(0.80, 1.22, b), c * 6.2831853, d * 0.07);
+}
 vec2 tileUv(float tile, vec2 q) {
-  float col = mod(tile, 8.0), row = floor(tile / 8.0);
-  return (vec2(col, row) + q) / 8.0;
+  float col = mod(tile, @ATLAS_TILES@), row = floor(tile / @ATLAS_TILES@);
+  return (vec2(col, row) + q) / @ATLAS_TILES@;
 }
 void main() {
   vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
@@ -217,16 +289,19 @@ void main() {
   float hlen = length(hv);
   vec2 h = hlen > 1e-4 ? hv / hlen : vec2(1.0, 0.0);
   vec2 rgt = vec2(h.y, -h.x);
+  vec4 vv = instVary(i_posyaw.xy);
   vec3 w = i_posyaw.xyz + vec3(0.0, 0.0, -u_cy * s) +
-           vec3(rgt * (c.x * u_half * s), -c.y * u_half * s);
+           vec3(rgt * (c.x * u_half * s * vv.y), -c.y * u_half * s);
   float cyw = cos(i_posyaw.w), syw = sin(i_posyaw.w);
   vec2 hl = vec2(cyw * h.x + syw * h.y, -syw * h.x + cyw * h.y); // into model frame
-  float f = atan(hl.y, -hl.x) / 6.28318530718 * 8.0;
-  f = f - 8.0 * floor(f / 8.0);
+  hl.y *= vv.x; // a mirrored tree seen from here is the baked one seen from the mirror azimuth
+  float f = atan(hl.y, -hl.x) / 6.28318530718 * @ATLAS_AZ@;
+  f = f - @ATLAS_AZ@ * floor(f / @ATLAS_AZ@);
   float i0 = floor(f);
   v_w = f - i0;
-  float i1 = mod(i0 + 1.0, 8.0);
+  float i1 = mod(i0 + 1.0, @ATLAS_AZ@);
   vec2 q = (c * 0.5 + 0.5) * 0.96 + 0.02;
+  if (vv.x < 0.0) q.x = 1.0 - q.x;
   v_uv0 = tileUv(u_tile + i0, q);
   v_uv1 = tileUv(u_tile + i1, q);
   v_fade = i_misc.z;
@@ -246,6 +321,7 @@ in float v_tint;
 in vec3 v_world;
 out vec4 o_color;
 uniform sampler2D u_atlas;   // display-referred colour, coverage in alpha
+uniform sampler2D u_atlasMask; // alpha: foliage share of the covered texels
 )GLSL";
 
 const char *kBillFSMain = R"GLSL(
@@ -258,11 +334,14 @@ float bayer4(vec2 p) {
 void main() {
   vec4 c0 = texture(u_atlas, v_uv0), c1 = texture(u_atlas, v_uv1);
   float a = mix(c0.a, c1.a, v_w);
-  if (a < 0.5) discard;
+  if (a < 0.35) discard; // mip levels thin the coverage, so keep a bit more than half
   float b = bayer4(gl_FragCoord.xy);
   bool keep = v_fade > 1.5 ? (v_fade - 2.0) < b : v_fade > b;
   if (!keep) discard;
   vec3 rgb = (c0.rgb * c0.a * (1.0 - v_w) + c1.rgb * c1.a * v_w) / max(a, 1e-3);
+  // Foliage takes the crown tint; bark keeps its colour, as on the meshes.
+  float fol = clamp(mix(texture(u_atlasMask, v_uv0).a, texture(u_atlasMask, v_uv1).a, v_w) / max(a, 1e-3), 0.0, 1.0);
+  vec3 tint = mix(tintMul(v_tint), foliageTint(v_tint), fol);
   vec3 toFrag = v_world - u_campos;
   float dist = length(toFrag);
   vec3 sun = normalize(u_sundir);
@@ -271,7 +350,7 @@ void main() {
   vec3 N = normalize(vec3(-hz * 0.45, -0.85));
   // Same foliage terms as the mesh shader (ambient floor, light through leaves).
   vec3 L = ambientLit(N) * 1.5 + sunLightColor() * (wrapDiffuse(N, sun) * 0.95 + 0.25);
-  o_color = vec4(applyAerialPerspective(rgb * tintMul(v_tint) * L, toFrag, dist), 1.0);
+  o_color = vec4(applyAerialPerspective(rgb * tint * L, toFrag, dist), 1.0);
 }
 )GLSL";
 
@@ -288,11 +367,13 @@ void main() { v_uv = a_uv; gl_Position = u_mvp * vec4(a_pos, 1.0); }
 const char *kBakeFS = R"GLSL(
 #version 330 core
 in vec2 v_uv;
-out vec4 o_color;
+layout(location = 0) out vec4 o_color;
+layout(location = 1) out vec4 o_mask; // alpha 1 on foliage (cut-out) texels, 0 on bark
 uniform sampler2D u_diffuse;
 uniform sampler2D u_arm;
 uniform float u_cutout;
 uniform float u_cutoff;
+uniform vec3 u_albedoMul; // colour multiplier (identity for trees)
 vec3 srgbEnc(vec3 c) {
   vec3 hi = 1.055 * pow(max(c, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
   return mix(c * 12.92, hi, step(vec3(0.0031308), c));
@@ -301,7 +382,8 @@ void main() {
   vec4 d = texture(u_diffuse, v_uv);
   if (u_cutout > 0.5 && d.a < u_cutoff) discard;
   float ao = texture(u_arm, v_uv).r;
-  o_color = vec4(srgbEnc(d.rgb) * mix(0.55, 1.0, ao), 1.0);
+  o_color = vec4(srgbEnc(d.rgb) * u_albedoMul * mix(0.55, 1.0, ao), 1.0);
+  o_mask = vec4(0.0, 0.0, 0.0, u_cutout > 0.5 ? 1.0 : 0.0);
 }
 )GLSL";
 
@@ -376,6 +458,15 @@ void restoreCoverage(QImage &img, int cutoff255, double target) {
 
 } // namespace
 
+// The tile and azimuth counts reach the shader from the same constants the
+// bake uses, so the two cannot drift apart.
+QByteArray vegBillboardVertexSource() {
+  QByteArray src(kBillVS);
+  src.replace("@ATLAS_TILES@", QByteArray::number(double(kAtlasTiles), 'f', 1));
+  src.replace("@ATLAS_AZ@", QByteArray::number(double(kAtlasAzimuths), 'f', 1));
+  return src;
+}
+
 const VegSpeciesInfo *vegSpeciesTable(int *count) {
   if (count)
     *count = kTableN;
@@ -385,6 +476,17 @@ const VegSpeciesInfo *vegSpeciesTable(int *count) {
 float vegUnitScale(const VegSpeciesInfo &info, const VegVariant &v) {
   const float basis = info.bySpan ? std::max(v.footprintX, v.footprintZ) : v.nominalHeight;
   return basis > 1e-5f ? info.targetSize / basis : 1.0f;
+}
+
+int vegPickVariant(const procgen::VegInstance &v, int poolSize) {
+  if (poolSize <= 1)
+    return 0;
+  uint32_t h = uint32_t(v.variant) * 2654435761u ^
+               uint32_t(std::lround(v.tint * 65535.0f)) * 40503u;
+  h ^= h >> 15;
+  h *= 2246822519u;
+  h ^= h >> 13;
+  return int(h % uint32_t(poolSize));
 }
 
 VegLodChoice vegChooseLod(const VegSpeciesInfo &s, float d, bool impostorReady) {
@@ -566,15 +668,13 @@ size_t VegetationRenderer::instanceCount() const {
 int VegetationRenderer::variantFor(const procgen::VegInstance &v, int *infoOut) const {
   if (v.species >= procgen::kVegSpeciesCount)
     return -1;
-  const std::vector<int> &pool = pool_[v.species];
+  const std::vector<int> &pool =
+      v.species == procgen::kVegTree
+          ? treePool_[std::min<int>(v.kind, procgen::kVegTreeKindCount - 1)]
+          : pool_[v.species];
   if (pool.empty())
     return -1;
-  uint32_t h = uint32_t(v.variant) * 2654435761u ^
-               uint32_t(std::lround(v.tint * 65535.0f)) * 40503u;
-  h ^= h >> 15;
-  h *= 2246822519u;
-  h ^= h >> 13;
-  const int flat = pool[h % pool.size()];
+  const int flat = pool[size_t(vegPickVariant(v, int(pool.size())))];
   *infoOut = var_[size_t(flat)].info;
   return flat;
 }
@@ -596,6 +696,7 @@ void VegetationRenderer::resolve(Chunk &c) {
     r.yaw = v.yaw;
     r.scale = v.scale;
     r.tint = std::clamp(v.tint, 0.0f, 1.0f);
+    r.paint = float(v.paint);
     r.variant = uint16_t(flat);
     r.info = uint8_t(info);
     c.recs.push_back(r);
@@ -643,7 +744,7 @@ bool VegetationRenderer::buildPrograms(const VegGlsl &g) {
     return false;
   progBillboard_ = std::make_unique<QOpenGLShaderProgram>();
   const bool billOk = linkProgram(
-      *progBillboard_, "vegetation billboard", QByteArray(kBillVS),
+      *progBillboard_, "vegetation billboard", vegBillboardVertexSource(),
       QByteArray(kBillFSHead) + g.atmosphere + g.lighting + kCommonGLSL + kBillFSMain);
   progBake_ = std::make_unique<QOpenGLShaderProgram>();
   const bool bakeOk = linkProgram(*progBake_, "vegetation bake", kBakeVS, kBakeFS);
@@ -656,6 +757,7 @@ bool VegetationRenderer::buildPrograms(const VegGlsl &g) {
   loc_.sway = prog_->uniformLocation("u_sway");
   loc_.cutout = prog_->uniformLocation("u_cutout");
   loc_.cutoff = prog_->uniformLocation("u_cutoff");
+  loc_.a2c = prog_->uniformLocation("u_a2c");
   if (progBillboard_) {
     loc_.cy = progBillboard_->uniformLocation("u_cy");
     loc_.half = progBillboard_->uniformLocation("u_half");
@@ -680,6 +782,16 @@ bool VegetationRenderer::buildAtlas() {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 3); // tiles stay >= 16 px
+  // Second target of the bake: which covered texels are foliage (see kBakeFS).
+  glGenTextures(1, &atlasMask_);
+  glBindTexture(GL_TEXTURE_2D, atlasMask_);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, px, px, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 3);
   glGenRenderbuffers(1, &atlasDepth_);
   glBindRenderbuffer(GL_RENDERBUFFER, atlasDepth_);
   glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, px, px);
@@ -689,6 +801,10 @@ bool VegetationRenderer::buildAtlas() {
   glBindFramebuffer(GL_FRAMEBUFFER, atlasFbo_);
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                          atlasTex_, 0);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D,
+                         atlasMask_, 0);
+  const GLenum bufs[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+  glDrawBuffers(2, bufs);
   glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER,
                             atlasDepth_);
   const bool ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
@@ -768,7 +884,9 @@ void VegetationRenderer::releaseGL() {
     glDeleteRenderbuffers(1, &atlasDepth_);
   if (atlasTex_)
     glDeleteTextures(1, &atlasTex_);
-  atlasFbo_ = atlasDepth_ = atlasTex_ = 0;
+  if (atlasMask_)
+    glDeleteTextures(1, &atlasMask_);
+  atlasFbo_ = atlasDepth_ = atlasTex_ = atlasMask_ = 0;
   atlasOk_ = false;
   atlasTried_ = false;
   prog_.reset();
@@ -778,7 +896,7 @@ void VegetationRenderer::releaseGL() {
 
 int VegetationRenderer::liveObjects() const {
   int n = (prog_ ? 1 : 0) + (progBillboard_ ? 1 : 0) + (progBake_ ? 1 : 0);
-  n += (atlasFbo_ ? 1 : 0) + (atlasDepth_ ? 1 : 0) + (atlasTex_ ? 1 : 0);
+  n += (atlasFbo_ ? 1 : 0) + (atlasDepth_ ? 1 : 0) + (atlasTex_ ? 1 : 0) + (atlasMask_ ? 1 : 0);
   for (const SpeciesGpu &s : sp_)
     for (const Mat &m : s.mats)
       for (unsigned t : m.tex)
@@ -934,6 +1052,40 @@ void VegetationRenderer::ensureMesh(VariantGpu &v, int lod) {
 }
 
 // Renders `v` from kAtlasAzimuths directions into its atlas tiles.
+// Reads this variant's baked tiles back (tests only): how many covered texels
+// are foliage and how many are bark, and where they sit vertically.
+void VegetationRenderer::collectBakeStats(const VariantGpu &v) {
+  GLint prevFbo = 0, prevRead = 0;
+  glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+  glGetIntegerv(GL_READ_BUFFER, &prevRead);
+  glBindFramebuffer(GL_FRAMEBUFFER, atlasFbo_);
+  std::vector<unsigned char> cov(size_t(kTilePx) * kTilePx * 4), msk(cov.size());
+  for (int a = 0; a < kAtlasAzimuths; ++a) {
+    const int tile = v.tile + a;
+    const int tx = (tile % kAtlasTiles) * kTilePx, ty = (tile / kAtlasTiles) * kTilePx;
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glReadPixels(tx, ty, kTilePx, kTilePx, GL_RGBA, GL_UNSIGNED_BYTE, cov.data());
+    glReadBuffer(GL_COLOR_ATTACHMENT1);
+    glReadPixels(tx, ty, kTilePx, kTilePx, GL_RGBA, GL_UNSIGNED_BYTE, msk.data());
+    for (int y = 0; y < kTilePx; ++y)
+      for (int x = 0; x < kTilePx; ++x) {
+        const size_t i = (size_t(y) * kTilePx + size_t(x)) * 4 + 3;
+        if (cov[i] < 128)
+          continue;
+        const double up = double(y) / double(kTilePx - 1); // 0 at the foot, 1 at the top
+        if (msk[i] >= 128) {
+          ++bakeStatsOut_.foliagePx;
+          bakeStatsOut_.foliageHeightSum += up;
+        } else {
+          ++bakeStatsOut_.barkPx;
+          bakeStatsOut_.barkHeightSum += up;
+        }
+      }
+  }
+  glBindFramebuffer(GL_FRAMEBUFFER, GLuint(prevFbo));
+  glReadBuffer(GLenum(prevRead)); // belongs to the framebuffer bound when it was read
+}
+
 void VegetationRenderer::bakeImpostors(VariantGpu &v) {
   ensureMesh(v, 1);
   const VegMesh &m =
@@ -978,6 +1130,7 @@ void VegetationRenderer::bakeImpostors(VariantGpu &v) {
       glActiveTexture(GL_TEXTURE4);
       glBindTexture(GL_TEXTURE_2D, mat.tex[2]);
       progBake_->setUniformValue("u_cutout", vm.cutout() ? 1.0f : 0.0f);
+      progBake_->setUniformValue("u_albedoMul", QVector3D(1.0f, 1.0f, 1.0f));
       progBake_->setUniformValue("u_cutoff", vm.alphaCutoff);
       glDrawElements(GL_TRIANGLES, GLsizei(sm.indexCount), GL_UNSIGNED_INT,
                      reinterpret_cast<void *>(uintptr_t(sm.firstIndex) * 4));
@@ -988,7 +1141,11 @@ void VegetationRenderer::bakeImpostors(VariantGpu &v) {
   glDisable(GL_SCISSOR_TEST);
   glBindFramebuffer(GL_FRAMEBUFFER, GLuint(prevFbo));
   glViewport(prevVp[0], prevVp[1], prevVp[2], prevVp[3]);
+  if (bakeStats_)
+    collectBakeStats(v);
   glBindTexture(GL_TEXTURE_2D, atlasTex_);
+  glGenerateMipmap(GL_TEXTURE_2D);
+  glBindTexture(GL_TEXTURE_2D, atlasMask_);
   glGenerateMipmap(GL_TEXTURE_2D);
   glBindTexture(GL_TEXTURE_2D, 0);
   glActiveTexture(GL_TEXTURE0);
@@ -1052,12 +1209,19 @@ void VegetationRenderer::drawBucket(VariantGpu &v, int lod,
     }
     prog_->setUniformValue(loc_.cutout, vm.cutout() ? 1.0f : 0.0f);
     prog_->setUniformValue(loc_.cutoff, vm.alphaCutoff);
+    prog_->setUniformValue(loc_.a2c, a2c_ ? 1.0f : 0.0f);
     glDrawElementsInstanced(GL_TRIANGLES, GLsizei(sm.indexCount), GL_UNSIGNED_INT,
                             reinterpret_cast<void *>(uintptr_t(sm.firstIndex) * 4), n);
     ++stats_.drawCalls;
     stats_.triangles += (long long)(sm.indexCount / 3) * n;
+    stats_.lodTriangles[lod] += (long long)(sm.indexCount / 3) * n;
   }
   stats_.instancesDrawn += int(n);
+  if (kTable[v.info].cat == procgen::kVegTree) {
+    const int kind = procgen::vegTreeKindIndex(kTable[v.info].id);
+    if (kind >= 0)
+      stats_.treeMeshes[kind] += int(n);
+  }
 }
 
 void VegetationRenderer::drawImpostors(VariantGpu &v, const std::vector<float> &data,
@@ -1089,6 +1253,11 @@ void VegetationRenderer::drawImpostors(VariantGpu &v, const std::vector<float> &
   stats_.impostors += int(n);
   stats_.instancesDrawn += int(n);
   stats_.triangles += 2LL * n;
+  if (kTable[v.info].cat == procgen::kVegTree) {
+    const int kind = procgen::vegTreeKindIndex(kTable[v.info].id);
+    if (kind >= 0)
+      stats_.treeImpostors[kind] += int(n);
+  }
 }
 
 void VegetationRenderer::draw(const VegFrame &f) {
@@ -1134,13 +1303,18 @@ void VegetationRenderer::draw(const VegFrame &f) {
             v.tile = nextTile;
             nextTile += kAtlasAzimuths;
           }
-          // A forest should be mostly the full broadleaf crown, not the thin
-          // saplings; grass tufts outnumber the single blades.
-          const int copies = av.name.contains("seedling") ? 3
-                             : (assets_.species[si].id == "pine_sapling_small") ? (av.name.endsWith("_a") ? 1 : 0)
-                             : (info.cat == procgen::kVegTree && assets_.species[si].id == "island_tree_02") ? 9 : 1;
-          for (int c = 0; c < copies; ++c)
-            pool_[size_t(info.cat)].push_back(int(var_.size()));
+          // Grass tufts outnumber the single blades; every tree variant of a
+          // kind is equally likely.
+          const int copies = av.name.contains("seedling") ? 3 : 1;
+          for (int c = 0; c < copies; ++c) {
+            if (info.cat == procgen::kVegTree) {
+              const int kind = procgen::vegTreeKindIndex(info.id);
+              if (kind >= 0)
+                treePool_[size_t(kind)].push_back(int(var_.size()));
+            } else {
+              pool_[size_t(info.cat)].push_back(int(var_.size()));
+            }
+          }
           var_.push_back(v);
         }
       }
@@ -1218,7 +1392,7 @@ void VegetationRenderer::draw(const VegFrame &f) {
       const VegLodChoice ch = vegChooseLod(info, d, billReady);
       for (int k = 0; k < ch.n; ++k) {
         std::vector<float> &b = buckets_[size_t(r.variant) * 4 + size_t(ch.lod[k])];
-        b.insert(b.end(), {r.x, r.y, r.z, r.yaw, r.scale, r.tint, ch.fade[k], 0.0f});
+        b.insert(b.end(), {r.x, r.y, r.z, r.yaw, r.scale, r.tint, ch.fade[k], r.paint});
       }
     }
   }
@@ -1233,7 +1407,9 @@ void VegetationRenderer::draw(const VegFrame &f) {
         glDeleteRenderbuffers(1, &atlasDepth_);
       if (atlasTex_)
         glDeleteTextures(1, &atlasTex_);
-      atlasFbo_ = atlasDepth_ = atlasTex_ = 0;
+      if (atlasMask_)
+        glDeleteTextures(1, &atlasMask_);
+      atlasFbo_ = atlasDepth_ = atlasTex_ = atlasMask_ = 0;
     }
   }
   // Bake what is needed (a few per frame): variants seen at LOD2 range.
@@ -1254,6 +1430,16 @@ void VegetationRenderer::draw(const VegFrame &f) {
   glDepthMask(GL_TRUE);
   glDisable(GL_CULL_FACE);
   glDisable(GL_BLEND);
+  // Alpha-to-coverage turns leaf edges into MSAA coverage. It only helps on a
+  // multisampled target, and it reads the fragment alpha, so keep that out of
+  // the framebuffer's own alpha channel.
+  GLint samples = 0;
+  glGetIntegerv(GL_SAMPLES, &samples);
+  a2c_ = samples > 1;
+  if (a2c_) {
+    glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+  }
   glActiveTexture(GL_TEXTURE1);
   glBindTexture(GL_TEXTURE_2D, f.shadowTex);
   prog_->bind();
@@ -1266,6 +1452,10 @@ void VegetationRenderer::draw(const VegFrame &f) {
       if (!buckets_[vi * 4 + size_t(l)].empty())
         drawBucket(var_[vi], l, buckets_[vi * 4 + size_t(l)], f);
   prog_->release();
+  if (a2c_) {
+    glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+  }
 
   if (progBillboard_ && atlasOk_) {
     progBillboard_->bind();
@@ -1273,6 +1463,9 @@ void VegetationRenderer::draw(const VegFrame &f) {
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, atlasTex_);
     progBillboard_->setUniformValue("u_atlas", 2);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, atlasMask_);
+    progBillboard_->setUniformValue("u_atlasMask", 3);
     for (size_t vi = 0; vi < var_.size(); ++vi)
       if (!buckets_[vi * 4 + 3].empty())
         drawImpostors(var_[vi], buckets_[vi * 4 + 3], f);

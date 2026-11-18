@@ -183,6 +183,9 @@ public:
   size_t vegetationInstanceCount() const { return veg_ ? veg_->instanceCount() : 0; }
   // What the last frame drew; and whether textures/impostors are still loading.
   const VegetationRenderer::Stats &vegetationStats() const;
+  // Tests: total the foliage/bark texels of every impostor baked from now on.
+  void setVegetationBakeStats(bool on) { if (veg_) veg_->setBakeStats(on); }
+  VegetationRenderer::BakeStats vegetationBakeStats() const { return veg_ ? veg_->bakeStats() : VegetationRenderer::BakeStats(); }
   bool vegetationBusy() const { return veg_ && veg_->busy(); }
 
   // Training course: glowing halo gates to fly through. setTrainingGates

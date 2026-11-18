@@ -326,7 +326,7 @@ set(GCS_RESOURCES
 # -------------------------------------------------------
 # Vegetation assets: the processed models and textures under assets/vegetation
 # are embedded as a Qt resource (prefix /vegetation) inside one small static
-# library, so the ~10 MB blob is compiled once and shared by Navigator and by
+# library, so the ~27 MB blob is compiled once and shared by Navigator and by
 # the tests that load it. The file list is globbed at configure time.
 # -------------------------------------------------------
 set(VEG_ASSET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/vegetation")

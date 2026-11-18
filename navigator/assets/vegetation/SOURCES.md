@@ -18,32 +18,41 @@ Read on 2026-11-18 at https://polyhaven.com/license (section "Asset License"). V
 
 Every entry: licence CC0, retrieved 2026-11-18, URL https://polyhaven.com/a/<id>. Authors are as given in the info record of the Poly Haven API (role in brackets).
 
-### fir_sapling
+### fir_tree_01
 
-- Name: Fir Sapling
+- Name: Fir Tree 01
 - Author(s): Rob Tuytel (photography), Rico Cilliers (modeling)
-- URL: https://polyhaven.com/a/fir_sapling
+- URL: https://polyhaven.com/a/fir_tree_01
 - Licence: CC0
 - Retrieved: 2026-11-18
-- Processing: 3 variants (a, b, c). Twig/needle cards thinned and scaled, bark decimated; alpha mask baked from source UV coverage.
+- Processing: not decimated. The shipped model is a card conifer built by the script (tapered trunk plus 8-10 tiers of downward-angled needle cards, 2 variants, about 16 m tall). Only this model's own textures are used: the bark map for the trunk and one needle sprig cut out of the twig map (alpha keyed from the needles, colour graded darker and bluer).
 
-### pine_sapling_small
+### pine_sapling_medium
 
-- Name: Pine Sapling Small
+- Name: Pine Sapling Medium
 - Author(s): Rob Tuytel (photography), Rico Cilliers (modeling)
-- URL: https://polyhaven.com/a/pine_sapling_small
+- URL: https://polyhaven.com/a/pine_sapling_medium
 - Licence: CC0
 - Retrieved: 2026-11-18
-- Processing: 3 variants (a, b, c). Needle/twig cards thinned and scaled, bark decimated; alpha mask baked from source UV coverage.
+- Processing: not decimated. Card conifer built by the script (tapered trunk plus 6-8 tiers of needle cards, 3 variants, about 12 m tall) from this model's bark map and one needle sprig of its twig map (black background keyed out, graded).
 
-### island_tree_02
+### jacaranda_tree
 
-- Name: Island Tree 02
+- Name: Jacaranda Tree
+- Author(s): Rob Tuytel (guidance), Rico Cilliers (all)
+- URL: https://polyhaven.com/a/jacaranda_tree
+- Licence: CC0
+- Retrieved: 2026-11-18
+- Processing: 2 variants: the model, and the same model turned and reproportioned (derived). About 18 m tall and 24 m wide natively. Trunk and branch meshes decimated, leaf cards thinned and scaled; alpha mask = UV coverage x black-background key.
+
+### island_tree_01
+
+- Name: Island Tree 01
 - Author(s): Rob Tuytel (scanning, processing), Rico Cilliers (cleanup, processing)
-- URL: https://polyhaven.com/a/island_tree_02
+- URL: https://polyhaven.com/a/island_tree_01
 - Licence: CC0
 - Retrieved: 2026-11-18
-- Processing: 1 variant. Trunk and branch meshes decimated, leaf cards thinned and scaled; alpha mask = UV coverage x black-background key. The KHR_texture_transform on the branch/bark material was baked into the UVs (tiling, wrap = repeat).
+- Processing: 2 variants: the model, and the same model turned and reproportioned (derived). About 5 m tall natively; the placement scales it up (about 1.9x) for broadleaf sizes. Leaf cards thinned and scaled; alpha mask = UV coverage x black-background key.
 
 ### shrub_03
 
@@ -118,4 +127,4 @@ Done by tools/vegetation/build_vegetation.py (numpy + Pillow only):
 - Cut-out materials carry a separate 8-bit linear alpha PNG (the sources have no opacity map); their colour background is flooded with edge colour.
 - No source file is shipped, only the processed output. To regenerate: download the 1K glTF of each id from Poly Haven into <raw>/<id>/ and run `python3 -I tools/vegetation/build_vegetation.py <raw> assets/vegetation`.
 
-Candidates fetched but not shipped: rock_face_01, quiver_tree_02, dead_quiver_trunk.
+Candidates fetched but not shipped: rock_face_01, quiver_tree_02, dead_quiver_trunk, fir_sapling_medium. The earlier small models fir_sapling, pine_sapling_small and island_tree_02 are no longer shipped; the full-size trees above replace them.

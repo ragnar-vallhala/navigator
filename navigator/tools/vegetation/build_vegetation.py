@@ -83,33 +83,64 @@ def grass_budget(orig, lod):
     return max(4, min(60, orig // 4))
 
 
-TREE = (6000, 1500, 300)
-# Conifer saplings are made of thousands of tiny needle cards; at the broadleaf
-# budget they decimate to bare twigs, so they keep about 2.5x as many triangles.
-CONIFER = (15000, 3000, 500)
 SMALL = (3000, 800, 150)
+# Full-size trees (8-20 m): the crown is the whole point, so LOD 0 keeps enough
+# cards to read as a dense crown from a drone at 20 m, and the far LODs stay
+# cheap because the billboard impostor takes over beyond them.
+# Broadleaf foliage: the scans are olive-yellow (hue about 70 deg); natural leaf
+# green sits near 90-100. (hue rotation in degrees, chroma and value factors)
+GRADE_LEAF = (-22.0, 0.95, 0.85)
+BIG_CONIFER = (32000, 7000, 1200)
+BIG_BROADLEAF = (36000, 7000, 1200)
 
 SPECIES = [
-    dict(id='fir_sapling', gltf='fir_sapling_1k.gltf', category='tree',
-         title='Fir sapling', variants=['fir_sapling_a', 'fir_sapling_b', 'fir_sapling_c'],
-         budget=lod_budgets(CONIFER), pivot='base',
-         mats={'fir_sapling_branches': dict(weight=0.08, cutout=False, cull=False, size=512),
-               'fir_sapling_twigs': dict(weight=0.92, cutout=True, cull=True, size=1024,
-                                         scale_cap=(3.0, 4.0, 6.0), tris_per_comp=4)}),
-    dict(id='pine_sapling_small', gltf='pine_sapling_small_1k.gltf', category='tree',
-         title='Pine sapling', variants=['pine_sapling_small_a', 'pine_sapling_small_b',
-                                         'pine_sapling_small_c'],
-         budget=lod_budgets(CONIFER), pivot='base',
-         mats={'pine_sapling_small_bark': dict(weight=0.08, cutout=False, cull=False, size=512),
-               'pine_sapling_small_twig': dict(weight=0.92, cutout=True, cull=True, size=1024,
-                                               scale_cap=(3.0, 4.0, 6.0), tris_per_comp=4)}),
-    dict(id='island_tree_02', gltf='island_tree_02_1k.gltf', category='tree',
-         title='Island tree (broadleaf)', variants=['island_tree_02_LOD0'], pivot='base',
-         budget=lod_budgets(TREE),
-         mats={'island_tree_02': dict(weight=0.35, cutout=False, cull=False, size=1024),
-               'island_tree_02_leaves': dict(weight=0.50, cutout=True, key_black=True, cull=True, size=1024,
-                                             scale_cap=(3.5, 4.5, 6.0), tris_per_comp=2),
-               'island_tree_02_branches': dict(weight=0.15, cutout=False, cull=True, size=1024,
+    # Conifers are built, not decimated: a tapered trunk plus tiers of needle
+    # cards cut from the model's own twig texture (see card_conifer_mesh).
+    dict(id='fir_tree_01', gltf='fir_tree_01_1k.gltf', category='tree',
+         title='Fir (card conifer, Poly Haven fir_tree_01 textures)',
+         cards=dict(bark='fir_tree_01_bark', twig='fir_tree_01_twig', key='hp', thick=2.6,
+                    crop=(335, 385, 655, 785), grade=(0.55, 0.80, 0.90),
+                    variants=[
+                        dict(H=16.0, tiers=(10, 7, 5), cards=(16, 12, 8), y0=0.10, R=3.4, len=1.25,
+                             wid=1.2, droop=(34, 20), r0=0.17, r1=0.03),
+                        dict(H=16.0, tiers=(8, 6, 4), cards=(16, 12, 8), y0=0.14, R=3.0, len=1.3,
+                             wid=1.25, droop=(38, 22), r0=0.17, r1=0.03)])),
+    dict(id='pine_sapling_medium', gltf='pine_sapling_medium_1k.gltf', category='tree',
+         title='Pine (card conifer, Poly Haven pine_sapling_medium textures)',
+         # whorls of a few long, upward-curving branches with sky between them
+         cards=dict(bark='pine_sapling_medium_bark', twig='pine_sapling_medium_twig', key='black',
+                    crop=(30, 40, 235, 455), grade=(0.85, 1.20, 1.35), thick=1.6, de_yellow=0.8,
+                    bark_tint=(0.50, 0.41, 0.34),
+                    variants=[
+                        dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.30, R=3.0, len=1.25,
+                             wid=1.5, droop=(10, 5), curve=0.32, r0=0.34, r1=0.08, trunk_top=0.9, jit=0.015, sag=0.06, az=0.38,
+                             lower=0.6, lowlen=0.15, bark_u=3.0, bark_v=1.2),
+                        dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.28, R=3.0, len=1.25,
+                             wid=1.5, droop=(12, 6), curve=0.34, r0=0.34, r1=0.08, trunk_top=0.9, jit=0.015, sag=0.06, az=0.38,
+                             lower=0.6, lowlen=0.15, bark_u=3.0, bark_v=1.2),
+                        dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.32, R=3.2, len=1.25,
+                             wid=1.5, droop=(8, 4), curve=0.30, r0=0.34, r1=0.08, trunk_top=0.9, jit=0.015, sag=0.06, az=0.38,
+                             lower=0.6, lowlen=0.15, bark_u=3.0, bark_v=1.2)])),
+    dict(id='jacaranda_tree', gltf='jacaranda_tree_1k.gltf', category='tree',
+         title='Jacaranda tree (broadleaf)', pivot='base',
+         variants=['jacaranda_tree_LOD0', 'jacaranda_tree_LOD0_wide'],
+         # the second variant is the same model turned and reproportioned
+         derive={'jacaranda_tree_LOD0_wide': dict(src='jacaranda_tree_LOD0', rot=2.4, sx=1.16, sy=0.86, sz=0.92)},
+         budget=lod_budgets(BIG_BROADLEAF),
+         mats={'jacaranda_tree_trunk': dict(weight=0.08, cutout=False, cull=False, size=512),
+               'jacaranda_tree_leaves': dict(weight=0.82, cutout=True, key_black=True, cull=True, grade=GRADE_LEAF,
+                                             size=1024, scale_cap=(3.5, 4.5, 6.0), tris_per_comp=2),
+               'jacaranda_tree_branches': dict(weight=0.10, cutout=False, cull=True, size=512,
+                                               scale_cap=(2.0, 2.5, 3.0), tris_per_comp=12)}),
+    dict(id='island_tree_01', gltf='island_tree_01_1k.gltf', category='tree',
+         title='Island tree 01 (broadleaf)', pivot='base',
+         variants=['island_tree_01_LOD0', 'island_tree_01_LOD0_slim'],
+         derive={'island_tree_01_LOD0_slim': dict(src='island_tree_01_LOD0', rot=1.9, sx=0.88, sy=1.1, sz=1.08)},
+         budget=lod_budgets(BIG_BROADLEAF),
+         mats={'island_tree_01': dict(weight=0.10, cutout=False, cull=False, size=512),
+               'island_tree_01_leaves': dict(weight=0.78, cutout=True, key_black=True, cull=True, grade=GRADE_LEAF,
+                                             size=1024, scale_cap=(3.5, 4.5, 6.0), tris_per_comp=2),
+               'island_tree_01_branches': dict(weight=0.12, cutout=False, cull=True, size=512,
                                                scale_cap=(2.0, 2.5, 3.0), tris_per_comp=12)}),
     dict(id='shrub_03', gltf='shrub_03_1k.gltf', category='shrub', title='Shrub 03',
          variants=['shrub_03_a', 'shrub_03_b', 'shrub_03_c', 'shrub_03_d'], pivot='bbox',
@@ -221,6 +252,8 @@ class Gltf:
         out = []
         for p in j['meshes'][node['mesh']]['primitives']:
             at = p['attributes']
+            if 'TEXCOORD_0' not in at:
+                continue   # no UVs (fir_tree_01 variant c trunk): cannot be textured
             P = self.accessor(at['POSITION']) + t
             N = self.accessor(at['NORMAL'])
             UV = self.accessor(at['TEXCOORD_0'])
@@ -400,7 +433,7 @@ def triangle_area(P, T):
     return 0.5 * np.linalg.norm(np.cross(P[T[:, 1]] - P[T[:, 0]], P[T[:, 2]] - P[T[:, 0]]), axis=1)
 
 
-def cull_components(P, N, UV, T, target, tris_per_comp, scale_cap, rng):
+def cull_components(P, N, UV, T, target, tris_per_comp, scale_cap, rng, struct_budget=3.0, uv_shrink=1.0, fill=1.0):
     """Keep a spatially stratified subset of connected pieces (leaf cards,
     needle tufts) and scale the survivors about their centroids to keep the
     foliage mass.  Returns (P, T) with only kept triangles."""
@@ -412,7 +445,7 @@ def cull_components(P, N, UV, T, target, tris_per_comp, scale_cap, rng):
     nc = len(ulab)
     K = max(1, target // tris_per_comp)
     if nc <= K:
-        return P, T
+        return P, T, UV
     cen = np.zeros((nc, 3))
     ar = triangle_area(P, T)
     for d in range(3):
@@ -436,7 +469,9 @@ def cull_components(P, N, UV, T, target, tris_per_comp, scale_cap, rng):
     struct = np.zeros(nc, bool)
     big = np.argsort(-tcount, kind='stable')
     big = big[tcount[big] >= 6 * np.median(tcount)]
-    budget_tris = 3 * target
+    # long twig stems are 91% of the triangles of the fir sources but little of
+    # the visible foliage: conifers cap what they may take (struct_budget)
+    budget_tris = int(struct_budget * target)
     cum = np.cumsum(tcount[big])
     struct[big[cum <= budget_tris]] = True
     keep_ids = np.lexsort((rng.random(nc), rk))
@@ -446,7 +481,7 @@ def cull_components(P, N, UV, T, target, tris_per_comp, scale_cap, rng):
     kt = keep[tinv]
     nonst = ~struct
     s = float(np.sqrt(carea[nonst].sum() / max(carea[keep & nonst].sum(), 1e-30)))
-    s = min(max(s, 1.0), scale_cap)
+    s = min(max(s * fill, 1.0), scale_cap)  # fill > 1: denser than the source
     P = P.copy()
     vt = np.zeros(len(P), np.int64) - 1
     for k in range(3):
@@ -454,7 +489,19 @@ def cull_components(P, N, UV, T, target, tris_per_comp, scale_cap, rng):
     used = vt >= 0
     sc = np.where(struct[vt[used]], 1.0, s)[:, None]
     P[used] = cen[vt[used]] + (P[used] - cen[vt[used]]) * sc
-    return P, T[kt]
+    if uv_shrink < 1.0:
+        # Needle blades map onto thin slivers of the twig texture (a dozen
+        # texels wide): a mip level or two later the alpha test drops the
+        # whole blade. Pull each kept blade's UVs to the middle of its sliver.
+        UV = UV.copy()
+        cuv = np.zeros((nc, 2))
+        cnt = np.bincount(tinv[kt], minlength=nc).astype(float)
+        for d in range(2):
+            cuv[:, d] = np.bincount(tinv[kt], UV[T[kt, 0], d], minlength=nc)
+        cuv /= np.maximum(cnt, 1.0)[:, None]
+        sel = used & ~struct[np.maximum(vt, 0)]
+        UV[sel] = cuv[vt[sel]] + (UV[sel] - cuv[vt[sel]]) * uv_shrink
+    return P, T[kt], UV
 
 
 def compact(P, N, UV, T):
@@ -470,7 +517,9 @@ def reduce_primitive(prim, target, cfg, lod, diag, seed):
     if len(T) > target:
         if cfg['cull']:
             cap = cfg.get('scale_cap', (1, 1, 1))[lod]
-            P, T = cull_components(P, N, UV, T, target, cfg.get('tris_per_comp', 4), cap, rng)
+            P, T, UV = cull_components(P, N, UV, T, target, cfg.get('tris_per_comp', 4), cap, rng,
+                                       cfg.get('struct_budget', 3.0), cfg.get('uv_shrink', 1.0),
+                                       cfg.get('fill', 1.0))
         if len(T) > target:
             T, P = qem_decimate(P, UV, T, target, diag)
     return compact(P, N, UV, T)
@@ -525,7 +574,17 @@ def save_jpg(arr01, path, subsampling):
         path, 'JPEG', quality=JPEG_QUALITY, optimize=True, subsampling=subsampling)
 
 
-def process_textures(raw_dir, info, out_prefix, size, mask):
+def grade_albedo(d, hue_deg, chroma, value):
+    """Rotate the hue (YIQ plane), scale chroma and value of sRGB colour d."""
+    M = np.array([[0.299, 0.587, 0.114], [0.596, -0.274, -0.322], [0.211, -0.523, 0.312]])
+    q = d @ M.T
+    c, s_ = np.cos(np.radians(hue_deg)), np.sin(np.radians(hue_deg))
+    i, qq = q[..., 1] * c - q[..., 2] * s_, q[..., 1] * s_ + q[..., 2] * c
+    out = np.stack([q[..., 0] * value, i * chroma * value, qq * chroma * value], -1)
+    return np.clip(out @ np.linalg.inv(M).T, 0, 1).astype(np.float32)
+
+
+def process_textures(raw_dir, info, out_prefix, size, mask, grade=None):
     """mask: bool (1024x1024-ish at source res) or None.  Returns file names."""
     def load(rel):
         im = Image.open(safe_join(raw_dir, rel)).convert('RGB')
@@ -545,6 +604,8 @@ def process_textures(raw_dir, info, out_prefix, size, mask):
     if mk is not None:
         d = flood_background(d, mk)
     d = lin_to_srgb(resize_box(srgb_to_lin(d), size)).astype(np.float32)
+    if grade:
+        d = grade_albedo(d, *grade)
     save_jpg(d, out_prefix + '_diff.jpg', 2)
     # normal: linear vector, renormalise after filtering
     n = load(info['normal'])
@@ -608,12 +669,277 @@ def write_vmesh(path, subs):
     return len(V), len(I) // 3, [float(x) for x in bb]
 
 
+# ---------------------------------------------------------------------------
+# Card conifers: a trunk plus tiers of needle-branch cards
+# ---------------------------------------------------------------------------
+
+def box_blur(x, r):
+    k = 2 * r + 1
+    pd = np.pad(x, r, mode='edge')
+    c = np.pad(np.cumsum(np.cumsum(pd, 0), 1), ((1, 0), (1, 0)))
+    return (c[k:, k:] - c[:-k, k:] - c[k:, :-k] + c[:-k, :-k]) / (k * k)
+
+
+def sprig_card_textures(raw_dir, info, cfg, out_prefix, size):
+    """Cut one needle sprig out of a Poly Haven twig atlas into a square card
+    texture (diffuse, normal, ARM, alpha) and grade it.  Returns file names,
+    coverage and the mean linear luminance of the covered pixels."""
+    def load(rel):
+        return np.asarray(Image.open(safe_join(raw_dir, rel)).convert('RGB'), np.float32) / 255.0
+    d, n, r = load(info['base']), load(info['normal']), load(info['arm'])
+    f = d.shape[0] / 1024.0
+    x0, y0, x1, y1 = [int(round(v * f)) for v in cfg['crop']]
+    d, n, r = d[y0:y1, x0:x1], n[y0:y1, x0:x1], r[y0:y1, x0:x1]
+    if cfg['key'] == 'black':
+        a = np.clip((d.max(2) * 255.0 - 12.0) / 24.0, 0, 1)
+    else:
+        lum = d @ np.array([0.2126, 0.7152, 0.0722], np.float32)
+        a = np.clip((box_blur(lum, int(round(12 * f))) - lum - cfg.get('hp', 0.015)) / 0.05, 0, 1)
+    # thicken the needles a little: at card size they are about a pixel wide
+    a = np.clip(box_blur(a, 1) * cfg.get('thick', 2.2), 0, 1)
+    # keep only the sprig that holds the stem (the atlas has neighbours and
+    # stretched fill around it): grow from the stem's foot through near pixels
+    cand = a > 0.3
+    rows = np.arange(a.shape[0] * 3 // 4, a.shape[0])
+    ys, xs = np.nonzero(a[rows[0]:] > 0.5)
+    k = np.argmin(np.abs(xs - a.shape[1] // 2) + 0.2 * np.abs(ys))
+    m = np.zeros(a.shape, bool)
+    m[rows[0] + ys[k], xs[k]] = True
+    while True:
+        g = m.copy()
+        for dy in (-3, 0, 3):
+            for dx in (-3, 0, 3):
+                g |= np.roll(m, (dy, dx), (0, 1))
+        g &= cand
+        if (g == m).all():
+            break
+        m = g
+    a = a * (box_blur(m.astype(np.float32), 3) > 0.02)
+    side = max(a.shape)
+    ph, pw = (side - a.shape[0]), (side - a.shape[1])
+    pad = ((ph // 2, ph - ph // 2), (pw // 2, pw - pw // 2))
+    a = np.pad(a, pad)
+    d = flood_background(np.pad(d, pad + ((0, 0),)), a > 0.5)
+    n = flood_background(np.pad(n, pad + ((0, 0),), constant_values=0.5), a > 0.5)
+    r = flood_background(np.pad(r, pad + ((0, 0),), constant_values=0.5), a > 0.5)
+    lin = srgb_to_lin(d)
+    if cfg.get('de_yellow'):
+        # dry, straw-coloured needles: pull red back toward green so they read as needles
+        dry = lin[..., 0] > cfg['de_yellow'] * lin[..., 1]
+        lin[..., 0] = np.where(dry, lin[..., 1] * cfg['de_yellow'] * 0.7, lin[..., 0])
+        lin[..., 1] = np.where(dry, lin[..., 1] * 0.9, lin[..., 1])
+    lin = lin * np.array(cfg['grade'], np.float32)
+    lin = resize_box(lin.astype(np.float32), size)
+    a8 = np.asarray(Image.fromarray(np.round(a * 255).astype(np.uint8), 'L').resize((size, size), Image.BOX))
+    cov = a8 > 127
+    lum = float((lin[cov] @ np.array([0.2126, 0.7152, 0.0722])).mean())
+    save_jpg(lin_to_srgb(lin), out_prefix + '_diff.jpg', 2)
+    v = resize_box(n * 2 - 1, size)
+    v /= np.maximum(np.linalg.norm(v, axis=2, keepdims=True), 1e-6)
+    save_jpg(v * 0.5 + 0.5, out_prefix + '_nor.jpg', 0)
+    rr = resize_box(r, size)
+    rr[..., 2] = 0
+    save_jpg(rr, out_prefix + '_arm.jpg', 0)
+    alpha_file = os.path.basename(out_prefix) + '_alpha.png'
+    Image.fromarray(a8, 'L').save(out_prefix + '_alpha.png', optimize=True)
+    return ([os.path.basename(out_prefix + s) for s in ('_diff.jpg', '_nor.jpg', '_arm.jpg')],
+            alpha_file, float(cov.mean()), lum)
+
+
+def furrowed_bark(prefix, tint, seed=5):
+    """Overwrite a bark material (<prefix>_diff/_nor/_arm.jpg, 512 px, repeat) with
+    a lighter, warm, vertically furrowed bark.  The colour is the CC0 source bark
+    lifted and warmed; the furrows are seeded periodic noise stretched along the
+    trunk (image y), so the texture tiles and every run is identical."""
+    n = 512
+    rng = np.random.default_rng(seed)
+    fx = np.fft.fftfreq(n)[None, :] * n
+    fy = np.fft.fftfreq(n)[:, None] * n
+
+    def band(wx, wy, k):
+        f = np.exp(-(fx / wx) ** 2 - (fy / wy) ** 2)
+        h = np.fft.ifft2(np.fft.fft2(rng.standard_normal((n, n))) * f).real
+        return (h - h.mean()) / h.std() * k
+    h = band(60.0, 4.0, 1.0) + band(24.0, 2.5, 0.8) + band(120.0, 24.0, 0.3)
+    rid = 1.0 / (1.0 + np.exp(-1.6 * h))                 # 0 in a furrow, 1 on a ridge
+    src = np.asarray(Image.open(prefix + '_diff.jpg').convert('RGB'), np.float32) / 255.0
+    lum = (src @ np.array([0.299, 0.587, 0.114], np.float32))[..., None]
+    col = (lum / max(float(lum.mean()), 1e-3)) ** 0.5 * np.array(tint, np.float32)
+    save_jpg(col * (0.72 + 0.38 * rid[..., None]), prefix + '_diff.jpg', 2)
+    gx = (np.roll(rid, -1, 1) - np.roll(rid, 1, 1)) * 0.5 * n / 70.0
+    gy = (np.roll(rid, -1, 0) - np.roll(rid, 1, 0)) * 0.5 * n / 70.0
+    nv = np.stack([-gx, gy, np.ones_like(gx)], -1)
+    nv /= np.linalg.norm(nv, axis=2, keepdims=True)
+    save_jpg(nv * 0.5 + 0.5, prefix + '_nor.jpg', 0)
+    arm = np.stack([0.55 + 0.45 * rid, 0.85 + 0 * rid, 0 * rid], -1)   # AO in furrows, rough
+    save_jpg(arm, prefix + '_arm.jpg', 0)
+
+
+def card_conifer_mesh(cv, lod, rng):
+    """One card conifer (glTF frame, y up, base at the origin).  Returns
+    ((trunk P, N, UV, T), (card P, N, UV, T), tier count)."""
+    H = cv['H']
+    ntier = cv['tiers'][lod]
+    ncard = cv['cards'][lod]
+    nalong = (2, 1, 1)[lod]
+    sides = (8, 6, 4)[lod]
+    y_lo, y_hi = cv['y0'] * H, 0.93 * H
+    r0, r1 = cv['r0'], cv['r1']
+
+    def trunk_r(y):
+        return r0 + (r1 - r0) * (y / H) ** 0.6
+
+    # trunk: tapered prism, v tiles every 2 m
+    rings = (5, 3, 2)[lod]
+    TP, TN, TU, TT = [], [], [], []
+    for i in range(rings + 1):
+        y = H * cv.get('trunk_top', 0.72) * i / rings
+        for k in range(sides + 1):
+            a = 2 * np.pi * k / sides
+            TP.append((trunk_r(y) * np.cos(a), y, trunk_r(y) * np.sin(a)))
+            TN.append((np.cos(a), 0.0, np.sin(a)))
+            TU.append((cv.get('bark_u', 2.0) * k / sides, 1.0 - y / cv.get('bark_v', 2.0)))
+    for i in range(rings):
+        for k in range(sides):
+            a = i * (sides + 1) + k
+            TT += [(a, a + 1, a + sides + 1), (a + 1, a + sides + 2, a + sides + 1)]
+    trunk = (np.array(TP, np.float64), np.array(TN, np.float64), np.array(TU, np.float64),
+             np.array(TT, np.int64))
+
+    P, N, UV, T = [], [], [], []
+
+    def add_card(root, out, up_n, L, W, droop, sag, nalong, curve=0.0):
+        # root: 3-vector; out: unit horizontal direction; the card hangs along
+        # `out`, drooping by `droop` (slope) and sagging `sag` toward its sides
+        perp = np.array([-out[2], 0.0, out[0]])
+        base = len(P)
+        for i in range(nalong + 1):
+            s = i / nalong
+            c = root + out * (s * L) + np.array([0.0, (-droop * s + curve * s * s) * L, 0.0])
+            for t in (-1.0, 0.0, 1.0):
+                q = c + perp * (t * 0.5 * W) + np.array([0.0, -sag * L * abs(t) * s, 0.0])
+                q[1] = max(q[1], 0.4)    # no card hangs into the ground
+                P.append(q)
+                N.append(up_n)
+                UV.append((0.5 + 0.5 * t, 1.0 - s))
+        for i in range(nalong):
+            for k in range(2):
+                a = base + i * 3 + k
+                T.append((a, a + 1, a + 4))
+                T.append((a, a + 4, a + 3))
+
+    for j in range(ntier):
+        t = j / max(ntier - 1, 1)
+        y = y_lo + (y_hi - y_lo) * t
+        R = cv["R"] * (1.0 - t * 0.9) ** cv.get("taper", 1.0) + 0.55
+        # coarser LODs have fewer, so larger, cards: the crown keeps its mass
+        fill = min((cv['cards'][0] / ncard) ** 0.5 * (cv['tiers'][0] / ntier) ** 0.3, 1.8)
+        L = R * cv['len'] * fill ** 0.5 * (1.0 + cv.get('lowlen', 0.0) * (1.0 - t))
+        ncj = max(3, int(round(ncard * (1.0 + cv.get('lower', 0.0) * (1.0 - 2.0 * t)))))
+        W = R * cv['len'] * cv['wid'] * fill * 1.1
+        droop = np.tan(np.radians(cv['droop'][0] + (cv['droop'][1] - cv['droop'][0]) * t))
+        off = rng.uniform(0, 2 * np.pi)
+        for k in range(ncj):
+            th = off + 2 * np.pi * (k + 0.5 * (j % 2) + rng.uniform(-1.0, 1.0) * cv.get('az', 0.18)) / ncj
+            out = np.array([np.cos(th), 0.0, np.sin(th)])
+            lj = L * rng.uniform(0.88, 1.12)
+            yj = y + rng.uniform(-1.0, 1.0) * cv.get('jit', 0.04) * H
+            root = out * (trunk_r(yj) * 0.6) + np.array([0.0, yj, 0.0])
+            un = out * 0.45 + np.array([0.0, 0.9, 0.0])
+            add_card(root, out, un / np.linalg.norm(un), lj, W * lj / L, droop, cv.get('sag', 0.14), nalong, cv.get('curve', 0.0))
+    # leader: two crossed upright cards
+    for ph in (0.0, np.pi / 2):
+        out = np.array([np.cos(ph), 0.0, np.sin(ph)])
+        perp = np.array([-out[2], 0.0, out[0]])
+        base = len(P)
+        Lh = 0.11 * H * cv['len'] / 1.1
+        for i, s in enumerate((0.0, 1.0)):
+            for t in (-1.0, 1.0):
+                P.append(np.array([0.0, y_hi - 0.02 * H + s * Lh, 0.0]) + perp * (t * 0.5 * Lh * 0.7))
+                N.append(np.array([out[0] * 0.5, 0.8, out[2] * 0.5]))
+                UV.append((0.5 + 0.5 * t, 1.0 - s))
+        T += [(base, base + 1, base + 2), (base + 1, base + 3, base + 2)]
+    cardm = (np.array(P, np.float64), np.array(N, np.float64) / np.linalg.norm(np.array(N), axis=1, keepdims=True),
+             np.array(UV, np.float64), np.array(T, np.int64))
+    return trunk, cardm, ntier
+
+
+def process_card_species(sp, raw_dir, out_dir, log):
+    sid = sp['id']
+    mdir = safe_join(raw_dir, sid)
+    g = Gltf(mdir, sp['gltf'])
+    odir = os.path.join(out_dir, sid)
+    os.makedirs(odir, exist_ok=True)
+    minfo = {}
+    for mi in range(len(g.j['materials'])):
+        inf = g.material_info(mi)
+        minfo[inf['name']] = inf
+    cfg = sp['cards']
+    # material 0: bark (the source model's, opaque); material 1: the needle card
+    bark = cfg['bark']
+    bfiles = process_textures(mdir, minfo[bark], os.path.join(odir, bark), 512, None)
+    if cfg.get('bark_tint'):
+        furrowed_bark(os.path.join(odir, bark), cfg['bark_tint'])
+    nfiles, alpha_file, cov, lum = sprig_card_textures(
+        mdir, minfo[cfg['twig']], cfg, os.path.join(odir, sid + '_needles'), 512)
+    log('  needle card: coverage %.3f, mean luminance %.4f' % (cov, lum))
+    materials = [
+        dict(name=bark, diffuse=bfiles[0], normal=bfiles[1], arm=bfiles[2], alpha=None,
+             alphaMode='OPAQUE', alphaCutoff=None, sourceAlphaMode='OPAQUE', doubleSided=True,
+             wrap='repeat', textureSize=512, alphaCoverage=None),
+        dict(name=sid + '_needles', diffuse=nfiles[0], normal=nfiles[1], arm=nfiles[2],
+             alpha=alpha_file, alphaMode='MASK', alphaCutoff=0.5, sourceAlphaMode='BLEND',
+             doubleSided=True, wrap='repeat', textureSize=512, alphaCoverage=cov,
+             meanLuminance=round(lum, 4))]
+    variants = []
+    for vi, cv in enumerate(cfg['variants']):
+        vname = '%s_card_%s' % (sid, 'abcdefgh'[vi])
+        lod_rows = []
+        for lod in range(LODS):
+            rng = np.random.default_rng(zlib.crc32(vname.encode()))   # same layout on every LOD
+            trunk, cardm, ntier = card_conifer_mesh(cv, lod, rng)
+            subs = [(0,) + tuple(trunk), (1,) + tuple(cardm)]
+            fn = '%s_lod%d.vmesh' % (vname, lod)
+            nv, nt, bb = write_vmesh(os.path.join(odir, fn), subs)
+            lod_rows.append(dict(file=fn, triangles=nt, vertices=nv, tiers=ntier,
+                                 bboxMin=bb[:3], bboxMax=bb[3:]))
+            log('  %s lod%d: %d tiers, %d tris' % (vname, lod, ntier, nt))
+        b0 = lod_rows[0]
+        variants.append(dict(
+            name=vname, sourceTriangles=0, lods=lod_rows,
+            bboxMin=b0['bboxMin'], bboxMax=b0['bboxMax'],
+            nominalHeight=round(b0['bboxMax'][1], 4),
+            trunkRadius=round(cv['r0'] + (cv['r1'] - cv['r0']) * (1.0 / cv['H']) ** 0.6, 4),
+            footprint=[round(b0['bboxMax'][0] - b0['bboxMin'][0], 4),
+                       round(b0['bboxMax'][2] - b0['bboxMin'][2], 4)]))
+    info = read_info(raw_dir, sid)
+    return dict(id=sid, title=sp['title'], category=sp['category'], directory=sid,
+                source='https://polyhaven.com/a/' + sid, license='CC0',
+                authors=info.get('authors'), materials=materials, variants=variants)
+
+
+def derive_prims(prims, d):
+    """A derived variant of a source mesh: yaw, anisotropic scale, same textures."""
+    c, s = np.cos(d['rot']), np.sin(d['rot'])
+    R = np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
+    S = np.array([d['sx'], d['sy'], d['sz']])
+    out = []
+    for pr in prims:
+        q = dict(pr)
+        q['P'] = (pr['P'] @ R.T) * S
+        q['N'] = pr['N'] @ R.T
+        out.append(q)
+    return out
+
+
 def read_info(raw_dir, sid):
     with open(safe_join(raw_dir, sid + '/info_api.json'), 'r', encoding='utf8') as f:
         return json.load(f)
 
 
 def process_species(sp, raw_dir, out_dir, log):
+    if 'cards' in sp:
+        return process_card_species(sp, raw_dir, out_dir, log)
     sid = sp['id']
     mdir = safe_join(raw_dir, sid)
     g = Gltf(mdir, sp['gltf'])
@@ -626,7 +952,10 @@ def process_species(sp, raw_dir, out_dir, log):
     for mi in range(len(g.j['materials'])):
         inf = g.material_info(mi)
         minfo[inf['name']] = inf
-    src = {v: g.node_prims(v) for v in sp['variants']}
+    derive = sp.get('derive', {})
+    src = {v: g.node_prims(v) for v in sp['variants'] if v not in derive}
+    for v, d in derive.items():
+        src[v] = derive_prims(src[d['src']], d)
     # texture coverage masks for cut-out materials
     materials = []
     for name in mat_names:
@@ -661,7 +990,7 @@ def process_species(sp, raw_dir, out_dir, log):
                 a.save(os.path.join(odir, alpha_file), optimize=True)
             else:
                 mask = None
-        files = process_textures(mdir, info, os.path.join(odir, name), cfg['size'], mask)
+        files = process_textures(mdir, info, os.path.join(odir, name), cfg['size'], mask, cfg.get('grade'))
         materials.append(dict(
             name=name, diffuse=files[0], normal=files[1], arm=files[2], alpha=alpha_file,
             alphaMode='MASK' if alpha_file else 'OPAQUE', alphaCutoff=0.5 if alpha_file else None,
@@ -681,6 +1010,23 @@ def process_species(sp, raw_dir, out_dir, log):
             cx, cz = (lo[0] + hi[0]) / 2, (lo[2] + hi[2]) / 2
         shift = np.array([cx, lo[1], cz])
         orig_tris = sum(len(p['T']) for p in prims)
+        # Trunk radius: median distance from the (median) axis of the solid, non
+        # cut-out, non thinned geometry between 0.5 and 1.5 m above the base.  A
+        # multi-stem tree or low branches at the base make it larger, which is
+        # what a drone would hit; the simulator's collider follows it.
+        slab = []
+        for pr in prims:
+            cfg = sp['mats'].get(pr['mat'])
+            if cfg is None or cfg['cutout'] or cfg['cull']:
+                continue
+            q = pr['P'][np.unique(pr['T'])] - shift
+            slab.append(q[(q[:, 1] >= 0.5) & (q[:, 1] <= 1.5)])
+        slab = np.concatenate(slab) if slab else np.zeros((0, 3))
+        if len(slab):
+            ax = np.median(slab[:, [0, 2]], axis=0)
+            trunk_radius = round(float(np.median(np.hypot(slab[:, 0] - ax[0], slab[:, 2] - ax[1]))), 4)
+        else:
+            trunk_radius = None
         lod_rows = []
         for lod in range(LODS):
             total = sp['budget'](orig_tris, lod)
@@ -703,7 +1049,7 @@ def process_species(sp, raw_dir, out_dir, log):
         variants.append(dict(
             name=vname, sourceTriangles=orig_tris, lods=lod_rows,
             bboxMin=b0['bboxMin'], bboxMax=b0['bboxMax'],
-            nominalHeight=round(b0['bboxMax'][1], 4),
+            nominalHeight=round(b0['bboxMax'][1], 4), trunkRadius=trunk_radius,
             footprint=[round(b0['bboxMax'][0] - b0['bboxMin'][0], 4),
                        round(b0['bboxMax'][2] - b0['bboxMin'][2], 4)]))
     info = read_info(raw_dir, sid)
@@ -739,7 +1085,7 @@ def main():
                         arm='linear; R=ambient occlusion, G=roughness, B=0',
                         alpha='linear 8-bit coverage, alpha test at alphaCutoff'),
         meshFormat='vmesh v1 little endian, see tools/vegetation/build_vegetation.py',
-        lodBudgetsTrees=list(TREE), lodBudgetsSmall=list(SMALL), species=species)
+        lodBudgetsConifers=list(BIG_CONIFER), lodBudgetsBroadleaf=list(BIG_BROADLEAF), lodBudgetsSmall=list(SMALL), species=species)
     with open(mpath, 'w', encoding='utf8') as f:
         json.dump(manifest, f, indent=1)
         f.write('\n')
