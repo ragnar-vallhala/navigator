@@ -254,21 +254,17 @@ in vec3 v_color; in vec3 v_world; in vec3 v_normal; in float v_hf; in float v_fl
 in float v_across;
 out vec4 o_color;
 uniform vec3 u_campos; uniform float u_fogdensity, u_fogstart;
-uniform sampler2D u_shadowtex; uniform mat4 u_lightvp; uniform float u_shadowon;
 // Live look knobs (procgen::GrassLook).
 uniform float u_sunint, u_ambstr, u_brightness, u_tipwarm, u_backlight, u_sheen,
               u_veinstr, u_rootao;
-// skyColor / fogColor / u_sundir come from Atmosphere.h, spliced in below.
+// skyColor / fogColor / u_sundir come from Atmosphere.h, spliced in below, then
+// the cascade shadow lookup (ShadowCascades.h).
 //@ATMOSPHERE@
-float shadowFactor(vec3 wpos){
-  if(u_shadowon<0.5) return 1.0;
-  vec4 lp=u_lightvp*vec4(wpos,1.0); vec3 p=lp.xyz/lp.w*0.5+0.5;
-  if(p.x<=0.0||p.x>=1.0||p.y<=0.0||p.y>=1.0||p.z>=1.0) return 1.0;
-  float bias=0.0030, texel=1.0/2048.0, s=0.0;
-  for(int dx=-1;dx<=1;++dx)for(int dy=-1;dy<=1;++dy){
-    float d=texture(u_shadowtex,p.xy+vec2(dx,dy)*texel).r;
-    s+=(p.z-bias>d)?0.0:1.0; }
-  return s/9.0;
+//@CASCADES@
+// Blades are thin: no receiver-plane bias, a flat per-texel one, and the lookup
+// is offset along world up (the blade sits on the ground it grows from).
+float shadowFactor(vec3 wpos, vec3 sunDir){
+  return csmVisibility(wpos, vec3(0.0,0.0,-1.0), normalize(sunDir), false);
 }
 void main(){
   // Hue shift along the blade: deep blue-green roots in shadow -> blade colour ->
@@ -302,8 +298,10 @@ void main(){
   // Steep vertical light gradient: the canopy heavily occludes its own base, so
   // the lower blade falls to near-black and the lit band sits high near the tips.
   float ao=mix(u_rootao,1.0,smoothstep(0.0,0.42,v_hf));
-  float sh=shadowFactor(v_world);   // 1 lit .. 0 in terrain shadow
-  vec3 col=albedo*(ambient + sunCol*wrap*0.95*sh)*ao;
+  float sh=shadowFactor(v_world,sun);   // 1 lit .. 0 in terrain shadow
+  // Shadowed blades get the same sky-tinted fill as the terrain, so a shadow does
+  // not go black where the grass meets the ground.
+  vec3 col=albedo*(ambient + shadowFill()*u_ambstr*(1.0-clamp(wrap*sh,0.0,1.0)) + sunCol*wrap*0.95*sh)*ao;
 
   vec3 toFrag=v_world-u_campos; float dist=length(toFrag);
   vec3 vdir=dist>1e-4?toFrag/dist:vec3(0.0,0.0,1.0);
@@ -338,6 +336,7 @@ void main(){
 QByteArray fragmentSource() {
   QByteArray src(kFrag);
   src.replace("//@ATMOSPHERE@", kAtmosphereGLSL);
+  src.replace("//@CASCADES@", kCascadeShadowGLSL);
   return src;
 }
 
@@ -581,6 +580,7 @@ void GpuGrass::release(QOpenGLExtraFunctions *gl) {
   fill_.reset();
   comp_.reset();
   draw_.reset();
+  csmLocs_ = CascadeUniforms();
   if (ssbo_[0])
     gl->glDeleteBuffers(kNumRings, ssbo_);
   if (indirect_[0])
@@ -727,7 +727,7 @@ void GpuGrass::buildBlade(QOpenGLExtraFunctions *gl, int ring, int segments) {
 void GpuGrass::render(QOpenGLExtraFunctions *gl, const QMatrix4x4 &proj,
                       const QMatrix4x4 &view, const QVector3D &camPos,
                       const QVector3D &sunDir, float time,
-                      const QMatrix4x4 &lightVP, unsigned int shadowTex,
+                      const ShadowCascadeSet &csm, unsigned int shadowTex,
                       bool shadowOn) {
   if (!ready_)
     return;
@@ -884,9 +884,9 @@ void GpuGrass::render(QOpenGLExtraFunctions *gl, const QMatrix4x4 &proj,
   });
   draw_->setUniformValue("u_fogdensity", 1.0f / 420.0f);
   draw_->setUniformValue("u_fogstart", 45.0f);
-  draw_->setUniformValue("u_lightvp", lightVP);
-  draw_->setUniformValue("u_shadowon", shadowOn ? 1.0f : 0.0f);
-  draw_->setUniformValue("u_shadowtex", 1); // sampler on texture unit 1
+  if (csmLocs_.vp < 0)
+    csmLocs_.resolve(draw_.get());
+  csmLocs_.upload(draw_.get(), csm, shadowOn);
   // Live look knobs (procgen::GrassLook).
   draw_->setUniformValue("u_sunint", params_.look.sunIntensity);
   draw_->setUniformValue("u_ambstr", params_.look.ambientStrength);

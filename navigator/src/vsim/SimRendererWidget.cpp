@@ -60,6 +60,7 @@ QMatrix4x4 helipadModel(const QVector3D &pad) {
   return m;
 }
 
+constexpr float kFovYDeg = 60.0f; // vertical field of view (also fits the shadow cascades)
 constexpr int kGridHalf = 10; // m, ground plane extends +/- this
 constexpr float kGridStep = 1.0f;
 constexpr float kBodyL = 0.40f; // body extents in X
@@ -195,7 +196,10 @@ void main() {
     float k = floor((v_local.z + 0.5) * u_bands);
     base = (mod(k, 2.0) < 0.5) ? vec3(0.80, 0.14, 0.08) : vec3(0.92, 0.92, 0.88);
   }
-  vec3 lit  = base * (ambient + sunCol * wrap * 0.95 * shadowFactor(v_world, n, sun));
+  float sunTerm = wrap * shadowFactor(v_world, n, sun);
+  // Shaded faces and cast shadows get a sky-tinted fill (never near-black).
+  vec3 lit  = base * (ambient + shadowFill() * u_ambstr * (1.0 - clamp(sunTerm, 0.0, 1.0)) +
+                      sunCol * 0.95 * sunTerm);
   if (u_bands > 0.5) {
     // A survey pole is a thin vertical marker seen against bright snow and
     // rock, often from its sun-shaded side or in a terrain shadow; with only
@@ -285,17 +289,15 @@ const char *kDepthFragmentShader = R"GLSL(
 void main() {}
 )GLSL";
 
-// Shadow-receive helper shared by the lit + (a copy in the) grass shader. Samples
-// the light-space depth map with a 3x3 PCF kernel; returns 1 = lit, 0 = shadow.
-// Guarded by u_shadowon so the scene is unchanged when the map is unavailable.
+// Shadow-receive helper for the lit program: the cascade lookup (see
+// ShadowCascades.h, spliced in before this) plus the facet-normal bias, the
+// low-sun fade and the analytic drone shadow. 1 = lit, 0 = shadow; guarded by
+// u_shadowon so the scene is unchanged when the map is unavailable.
 const char *kShadowGLSL = R"GLSL(
-uniform sampler2D u_shadowtex;
-uniform mat4 u_lightvp;
-uniform float u_shadowon;
 uniform vec3 u_drone;     // drone position (world, NED)
 uniform float u_droner;   // drone shadow radius [m]; 0 = off
 // Analytic soft shadow of the drone: a cylinder along the sun ray from the
-// drone, with the penumbra growing with distance. The 260 m shadow map cannot
+// drone, with the penumbra growing with distance. The shadow map cannot
 // resolve a 0.25 m quad, and this needs no ground height, so it lands on any
 // terrain and doubles as a height cue.
 float droneShadow(vec3 wpos, vec3 lightDir) {
@@ -310,48 +312,15 @@ float droneShadow(vec3 wpos, vec3 lightDir) {
   return 1.0 - 0.6 * cover / (1.0 + a / 150.0);
 }
 float shadowMapFactor(vec3 wpos, vec3 nrm, vec3 lightDir) {
-  if (u_shadowon < 0.5) return 1.0;
   vec3 n = normalize(nrm);
-  float ndl = clamp(dot(n, normalize(lightDir)), 0.0, 1.0);
-  // Normal-offset: push the receiver off its own surface — more at grazing sun
-  // angles where one shadow texel covers many fragments — so the depth compare
-  // samples clear of the caster.
+  vec3 L = normalize(lightDir);
   // The interpolated normal is smooth but the mesh is faceted: on a steep face
   // they differ enough that a smooth-normal offset can push the lookup INTO the
-  // facet. Offset along the true facet normal (screen derivatives) instead, by a
-  // few shadow texels (0.127 m = 260 m / 2048) scaled by sin(angle to the sun).
+  // facet. Offset along the true facet normal (screen derivatives) instead.
   vec3 ng = normalize(cross(dFdx(wpos), dFdy(wpos)));
   if (dot(ng, n) < 0.0) ng = -ng;
-  float ndg = clamp(dot(ng, normalize(lightDir)), 0.0, 1.0);
-  float sinG = sqrt(max(1.0 - ndg * ndg, 0.0));
-  vec3 wp = wpos + ng * (0.03 + 0.127 * sinG);
-  vec4 lp = u_lightvp * vec4(wp, 1.0);
-  vec3 p = lp.xyz / lp.w * 0.5 + 0.5;
-  // Receiver-plane depth: how the fragment's own light-space depth changes per
-  // shadow texel in u and v. Each PCF tap is compared against the depth the
-  // fragment's own surface has AT THAT TAP, not at the centre; a constant or
-  // normal-based bias cannot do that on a faceted slope at a grazing sun, and
-  // the leftover shows as hatched / terraced bands on steep faces (shadow acne).
-  // The derivatives are taken before any early return so they stay uniform.
-  vec3 dpx = dFdx(p), dpy = dFdy(p);
-  float det = dpx.x * dpy.y - dpx.y * dpy.x;
-  vec2 dz = vec2(0.0);
-  if (abs(det) > 1e-14)
-    dz = vec2(dpx.z * dpy.y - dpx.y * dpy.z, dpx.x * dpy.z - dpx.z * dpy.x) / det;
-  float texel = 1.0 / 2048.0;
-  dz = clamp(dz * texel, vec2(-0.02), vec2(0.02)); // depth change per texel step
-  if (p.x <= 0.0 || p.x >= 1.0 || p.y <= 0.0 || p.y >= 1.0 || p.z >= 1.0) return 1.0;
-  // Small constant on top of the plane term; grows toward grazing sun, where the
-  // plane estimate (2x2 pixel derivatives on a faceted surface) is least exact.
-  float bias = 0.0015 + 0.0035 * (1.0 - ndl);
-  float s = 0.0;
-  for (int dx = -1; dx <= 1; ++dx)
-    for (int dy = -1; dy <= 1; ++dy) {
-      float d = texture(u_shadowtex, p.xy + vec2(dx, dy) * texel).r;
-      float ref = p.z + dz.x * float(dx) + dz.y * float(dy);
-      s += (ref - bias > d) ? 0.0 : 1.0;
-    }
-  s /= 9.0;
+  float ndg = clamp(dot(ng, L), 0.0, 1.0);
+  float s = csmVisibility(wpos, ng, L, true);
   // A facet turned away from the sun is self-shadowed by definition; whether the
   // map calls it lit or dark flips triangle to triangle on a steep face (hatched
   // saw-tooth). Leave those to the wrapped diffuse term and fade the map in over
@@ -635,12 +604,14 @@ void SimRendererWidget::eraseChunk(qint64 key) {
     return;
   it->second->release();
   worldChunks_.erase(it);
+  ++shadowGeomVer_;
   chunkCpu_.erase(key);
 }
 
 void SimRendererWidget::eraseAllChunks() {
   for (auto &kv : worldChunks_)
     kv.second->release();
+  ++shadowGeomVer_;
   worldChunks_.clear();
   chunkCpu_.clear();
 }
@@ -1032,7 +1003,7 @@ void SimRendererWidget::initResources() {
 
   progLit_ = buildProgram("lit", kLitVertexShader,
                           QByteArray(kLitFragmentHead) + kAtmosphereGLSL + kFogGLSL +
-                              kShadowGLSL + kLitFragmentMain);
+                              kCascadeShadowGLSL + kShadowGLSL + kLitFragmentMain);
   ul_mvp_ = progLit_->uniformLocation("u_mvp");
   ul_model_ = progLit_->uniformLocation("u_model");
   ul_nmat_ = progLit_->uniformLocation("u_nmat");
@@ -1040,9 +1011,7 @@ void SimRendererWidget::initResources() {
   ul_campos_ = progLit_->uniformLocation("u_campos");
   ul_fogdensity_ = progLit_->uniformLocation("u_fogdensity");
   ul_fogstart_ = progLit_->uniformLocation("u_fogstart");
-  ul_lightvp_ = progLit_->uniformLocation("u_lightvp");
-  ul_shadowtex_ = progLit_->uniformLocation("u_shadowtex");
-  ul_shadowon_ = progLit_->uniformLocation("u_shadowon");
+  litCsm_.resolve(progLit_.get());
   ul_drone_ = progLit_->uniformLocation("u_drone");
   ul_droner_ = progLit_->uniformLocation("u_droner");
   ul_sunint_ = progLit_->uniformLocation("u_sunint");
@@ -1119,7 +1088,7 @@ void SimRendererWidget::updateProjection() {
     return;
   nearCur_ = nearM;
   proj_.setToIdentity();
-  proj_.perspective(60.0f, float(fbW_) / std::max(1, fbH_), nearM, kFarPlaneM);
+  proj_.perspective(kFovYDeg, float(fbW_) / std::max(1, fbH_), nearM, kFarPlaneM);
 }
 
 QVector3D SimRendererWidget::freeForward() const {
@@ -1264,7 +1233,7 @@ void SimRendererWidget::paintGL() {
 
   // Shadow map: render terrain depth from the sun's view into the FBO first, so
   // the lit terrain + grass can sample it. Restores the default FBO + viewport.
-  renderShadowPass(showWorld, showChunks);
+  renderShadowPass(showWorld, showChunks, view);
 
   // Analytic drone shadow: radius follows the drawn model (same distance boost
   // as drawDroneModel); off in the editor, where the drone is a fixed marker.
@@ -1347,7 +1316,7 @@ void SimRendererWidget::paintGL() {
     if (gpuGrassActive_ && gpuGrass_.ready()) {
       gpuGrass_.setAtmosphere(atmo_);
       gpuGrass_.render(this, proj_, view, camEye_, sunDir_, floraTime_,
-                       lightVP_, shadowTex_, shadowOn_);
+                       csm_, shadowTex_, shadowOn_);
     } else
       drawFlora(view);
   }
@@ -1507,14 +1476,22 @@ void SimRendererWidget::drawMesh(const Mesh &m, const QMatrix4x4 &mvp,
 #ifndef GL_DEPTH_COMPONENT32F
 #define GL_DEPTH_COMPONENT32F 0x8CAC
 #endif
+#ifndef GL_TEXTURE_COMPARE_MODE
+#define GL_TEXTURE_COMPARE_MODE 0x884C
+#define GL_TEXTURE_COMPARE_FUNC 0x884D
+#define GL_COMPARE_REF_TO_TEXTURE 0x884E
+#endif
+#ifndef GL_LEQUAL
+#define GL_LEQUAL 0x0203
+#endif
 #ifndef GL_CLAMP_TO_EDGE
 #define GL_CLAMP_TO_EDGE 0x812F
 #endif
 
 void SimRendererWidget::buildShadowMap() {
   // Depth clamp is core in desktop GL 3.2+, an extension elsewhere (not in GLES).
+  const QOpenGLContext *ctx = context();
   {
-    const QOpenGLContext *ctx = context();
     const QSurfaceFormat fmt = ctx->format();
     depthClamp_ =
         (ctx->isOpenGLES() == false &&
@@ -1523,16 +1500,40 @@ void SimRendererWidget::buildShadowMap() {
         ctx->hasExtension("GL_ARB_depth_clamp") ||
         ctx->hasExtension("GL_EXT_depth_clamp");
   }
-  // Depth-only FBO: a single 32F depth texture, no colour buffer.
+  if (shadowFbo_)
+    glDeleteFramebuffers(1, &shadowFbo_);
+  if (shadowTex_)
+    glDeleteTextures(1, &shadowTex_);
+  shadowFbo_ = shadowTex_ = 0;
+  shadowCache_ = ShadowCascadeSet(); // the new atlas holds nothing yet
+
+  // High needs a 3-tile atlas; fall back to Low on GLES (no cascades there:
+  // the shaders and the caster range assume the cheap path) or when the atlas
+  // would exceed the texture size limit.
+  GLint maxTex = 0;
+  glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTex);
+  shadowBuilt_ = shadowQuality_;
+  if (shadowBuilt_ == ShadowQuality::High &&
+      (ctx->isOpenGLES() || maxTex < kMaxCascades * kShadowSizeHigh))
+    shadowBuilt_ = ShadowQuality::Low;
+  const bool high = shadowBuilt_ == ShadowQuality::High;
+  const int tile = high ? kShadowSizeHigh : kShadowSizeLow;
+  const int w = tile * (high ? kMaxCascades : 1);
+
+  // Depth-only FBO: a single 32F depth atlas, no colour buffer. Hardware compare
+  // + linear filtering makes every shader tap a bilinear 2x2 PCF.
   glGenFramebuffers(1, &shadowFbo_);
   glGenTextures(1, &shadowTex_);
   glBindTexture(GL_TEXTURE_2D, shadowTex_);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, shadowSize_,
-               shadowSize_, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, w, tile, 0,
+               GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE,
+                  GL_COMPARE_REF_TO_TEXTURE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
   glBindFramebuffer(GL_FRAMEBUFFER, shadowFbo_);
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
                          shadowTex_, 0);
@@ -1543,69 +1544,130 @@ void SimRendererWidget::buildShadowMap() {
       glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
   glBindTexture(GL_TEXTURE_2D, 0);
   glBindFramebuffer(GL_FRAMEBUFFER, context()->defaultFramebufferObject());
+  shadowRebuild_ = false;
   if (!shadowReady_)
     qInfo("[SimRenderer] shadow FBO incomplete -> shadows disabled.");
 }
 
-void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks) {
+void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks,
+                                         const QMatrix4x4 &view) {
   shadowOn_ = false;
+  csm_.count = 0;
+  if (shadowRebuild_)
+    buildShadowMap();
   if (!shadowReady_ || (!showWorld && !showChunks))
     return;
 
-  // Orthographic light frustum aimed along -sun, centred on the ground under the
-  // camera so it follows the view. NED up is -Z; pick a safe up if sun is steep.
-  const QVector3D fwd = -sunDir_.normalized();            // light view forward
-  // The ground under the camera (fogBaseZ_), not z = 0: on high terrain a z = 0
-  // centre puts the visible ground outside the +-130 m window and behind the
-  // near plane, so the shadows vanish.
-  const QVector3D center(camEye_.x(), camEye_.y(), fogBaseZ_);
-  const QVector3D lpos = center - fwd * 200.0f;
-  const QVector3D up =
-      std::abs(fwd.z()) > 0.99f ? QVector3D(1, 0, 0) : QVector3D(0, 0, -1);
-  QMatrix4x4 lview;
-  lview.lookAt(lpos, center, up);
-  QMatrix4x4 lproj;
-  lproj.ortho(-130.0f, 130.0f, -130.0f, 130.0f, 1.0f, 400.0f);
-  lightVP_ = lproj * lview;
+  const bool high = shadowBuilt_ == ShadowQuality::High;
+  const int tile = high ? kShadowSizeHigh : kShadowSizeLow;
+  // Cascades fitted to the camera frustum (ShadowCascades.h). The ground is the
+  // far-plane-independent slice of the view, so high terrain needs no special
+  // centring; casters toward the sun come from the caster margin.
+  csm_ = fitShadowCascades(sunDir_, view.inverted(), kFovYDeg,
+                           float(fbW_) / std::max(1, fbH_),
+                           high ? kMaxCascades : 1, tile, shadowSnap_);
+
+  // Which cascades need drawing: a cascade whose casters, sun, size and
+  // visibility are unchanged and whose window moved by < kReuseTexels keeps its
+  // tile (and the matrices that tile was rendered with).
+  const int show = (showWorld ? 1 : 0) | (showChunks ? 2 : 0);
+  const bool tilesValid = shadowReuse_ && shadowCache_.count == csm_.count &&
+                          shadowCache_.tileSize == tile && shadowCacheShow_ == show &&
+                          (shadowCacheSun_ - sunDir_).lengthSquared() < 1e-12f;
+  const QVector3D eye = view.inverted().map(QVector3D(0, 0, 0));
+  bool redraw[kMaxCascades] = {true, true, true};
+  constexpr float kReuseTexels = 3.0f;
+  for (int ci = 0; ci < csm_.count; ++ci) {
+    if (tilesValid && shadowCacheVer_[ci] == shadowGeomVer_ &&
+        std::abs(shadowCache_.info[ci].x() - csm_.info[ci].x()) < 1e-6f) {
+      const QVector4D a = csm_.vp[ci] * QVector4D(eye, 1.0f);
+      const QVector4D b = shadowCache_.vp[ci] * QVector4D(eye, 1.0f);
+      const float texel = csm_.info[ci].x();
+      // xy in tile texels (clip spans 2 over the tile), z in metres.
+      const float dx = (a.x() - b.x()) * 0.5f * float(tile);
+      const float dy = (a.y() - b.y()) * 0.5f * float(tile);
+      const float dz = (a.z() - b.z()) * 0.5f * csm_.info[ci].y() / texel;
+      if (std::abs(dx) < kReuseTexels && std::abs(dy) < kReuseTexels &&
+          std::abs(dz) < kReuseTexels) {
+        redraw[ci] = false;
+        csm_.vp[ci] = shadowCache_.vp[ci];
+        csm_.info[ci] = shadowCache_.info[ci];
+      }
+    }
+    if (redraw[ci]) {
+      shadowCache_.vp[ci] = csm_.vp[ci];
+      shadowCache_.info[ci] = csm_.info[ci];
+      shadowCacheVer_[ci] = shadowGeomVer_;
+    }
+  }
+  shadowCache_.count = csm_.count;
+  shadowCache_.tileSize = tile;
+  shadowCacheShow_ = show;
+  shadowCacheSun_ = sunDir_;
 
   glBindFramebuffer(GL_FRAMEBUFFER, shadowFbo_);
-  glViewport(0, 0, shadowSize_, shadowSize_);
-  glClear(GL_DEPTH_BUFFER_BIT);
+  glViewport(0, 0, csm_.atlasW(), csm_.atlasH());
   glEnable(GL_DEPTH_TEST);
-  // Casters nearer the sun than the near plane (a ridge >200 m up-sun at a low
+  glEnable(GL_SCISSOR_TEST);
+  glDepthMask(GL_TRUE);
+  // Casters nearer the sun than the near plane (a ridge far up-sun at a low
   // sun) are clamped to depth 0 instead of clipped away, so they still shadow.
 #ifdef GL_DEPTH_CLAMP
   if (depthClamp_)
     glEnable(GL_DEPTH_CLAMP);
 #endif
   progDepth_->bind();
-  auto drawDepth = [&](const Mesh &m) {
-    if (m.vertex_count == 0)
-      return;
-    progDepth_->setUniformValue(ud_lightmvp_,
-                               lightVP_); // model = identity (world)
-    QOpenGLVertexArrayObject::Binder b(
-        const_cast<QOpenGLVertexArrayObject *>(&m.vao));
-    glDrawArrays(GL_TRIANGLES, 0, m.vertex_count);
-  };
-  if (showWorld)
-    drawDepth(worldMesh_);
-  if (showChunks)
-    for (auto &kv : worldChunks_)
-      if (kv.second->vertex_count)
-        drawDepth(*kv.second);
-  // Helipad platforms cast shadows too (each has its own model transform).
-  if (helipadDisk_.vertex_count)
-    for (const QVector3D &pad : helipads_) {
-      progDepth_->setUniformValue(ud_lightmvp_, lightVP_ * helipadModel(pad));
-      QOpenGLVertexArrayObject::Binder b(&helipadDisk_.vao);
-      glDrawArrays(GL_TRIANGLES, 0, helipadDisk_.vertex_count);
-    }
+  for (int ci = 0; ci < csm_.count; ++ci) {
+    if (!redraw[ci])
+      continue;
+    glViewport(ci * tile, 0, tile, tile);
+    glScissor(ci * tile, 0, tile, tile);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    const QMatrix4x4 &lightVP = csm_.vp[ci];
+    // A mesh whose bounding box lies wholly outside this cascade's window
+    // (sideways in light space) cannot cast into it.
+    auto outside = [&](const Mesh &m) {
+      int out[4] = {0, 0, 0, 0};
+      for (int c = 0; c < 8; ++c) {
+        const QVector3D q = lightVP.map(QVector3D(
+            (c & 1) ? m.bmax.x() : m.bmin.x(), (c & 2) ? m.bmax.y() : m.bmin.y(),
+            (c & 4) ? m.bmax.z() : m.bmin.z()));
+        out[0] += q.x() < -1.0f;
+        out[1] += q.x() > 1.0f;
+        out[2] += q.y() < -1.0f;
+        out[3] += q.y() > 1.0f;
+      }
+      return out[0] == 8 || out[1] == 8 || out[2] == 8 || out[3] == 8;
+    };
+    auto drawDepth = [&](const Mesh &m) {
+      if (m.vertex_count == 0 || outside(m))
+        return;
+      progDepth_->setUniformValue(ud_lightmvp_,
+                                 lightVP); // model = identity (world)
+      QOpenGLVertexArrayObject::Binder b(
+          const_cast<QOpenGLVertexArrayObject *>(&m.vao));
+      glDrawArrays(GL_TRIANGLES, 0, m.vertex_count);
+    };
+    if (showWorld)
+      drawDepth(worldMesh_);
+    if (showChunks)
+      for (auto &kv : worldChunks_)
+        if (kv.second->vertex_count)
+          drawDepth(*kv.second);
+    // Helipad platforms cast shadows too (each has its own model transform).
+    if (helipadDisk_.vertex_count)
+      for (const QVector3D &pad : helipads_) {
+        progDepth_->setUniformValue(ud_lightmvp_, lightVP * helipadModel(pad));
+        QOpenGLVertexArrayObject::Binder b(&helipadDisk_.vao);
+        glDrawArrays(GL_TRIANGLES, 0, helipadDisk_.vertex_count);
+      }
+  }
   progDepth_->release();
 #ifdef GL_DEPTH_CLAMP
   if (depthClamp_)
     glDisable(GL_DEPTH_CLAMP);
 #endif
+  glDisable(GL_SCISSOR_TEST);
 
   glBindFramebuffer(GL_FRAMEBUFFER, context()->defaultFramebufferObject());
   glViewport(0, 0, fbW_, fbH_);
@@ -1643,11 +1705,9 @@ void SimRendererWidget::drawLit(const Mesh &m, const QMatrix4x4 &view,
   progLit_->setUniformValue("u_fogbase", fogBaseZ_);
   progLit_->setUniformValue("u_fogheight", atmo_.fogHeightM);
   progLit_->setUniformValue("u_ringclip", drawingFarRing_ ? QVector4D(farTerrain_.clipRect()[0], farTerrain_.clipRect()[1], farTerrain_.clipRect()[2], farTerrain_.clipRect()[3]) : QVector4D());
-  progLit_->setUniformValue(ul_lightvp_, lightVP_);
-  progLit_->setUniformValue(ul_shadowon_, shadowOn_ ? 1.0f : 0.0f);
+  litCsm_.upload(progLit_.get(), csm_, shadowOn_);
   progLit_->setUniformValue(ul_drone_, droneShadowPos_);
   progLit_->setUniformValue(ul_droner_, droneShadowR_);
-  progLit_->setUniformValue(ul_shadowtex_, 1); // sampler on texture unit 1
   progLit_->setUniformValue(ul_sunint_, litSunInt_);
   progLit_->setUniformValue(ul_ambstr_, litAmbStr_);
   progLit_->setUniformValue(ul_terrain_, terrain ? 1.0f : 0.0f);
@@ -1763,6 +1823,7 @@ void SimRendererWidget::uploadWorldMesh() {
   horizonZ_ = lowestZ + 0.5f; // well clear of depth resolution at distance
   horizonCol_ = colSum / float(pendingWorldPos_.size());
   uploadColoredMesh(worldMesh_, data);
+  ++shadowGeomVer_;
   // pendingWorld* stay as the CPU copy for re-upload into a new context.
 }
 
@@ -1809,6 +1870,16 @@ void SimRendererWidget::uploadColoredMesh(Mesh &m,
   m.vao.release();
   m.vertex_count = int(data.size() / 9);
   m.primitive = GL_TRIANGLES;
+  m.bmin = m.bmax = QVector3D();
+  for (size_t i = 0; i + 8 < data.size(); i += 9) {
+    const QVector3D p(data[i], data[i + 1], data[i + 2]);
+    if (i == 0)
+      m.bmin = m.bmax = p;
+    for (int k = 0; k < 3; ++k) {
+      m.bmin[k] = std::min(m.bmin[k], p[k]);
+      m.bmax[k] = std::max(m.bmax[k], p[k]);
+    }
+  }
 }
 
 void SimRendererWidget::buildObstacleMeshes() {
@@ -1958,6 +2029,7 @@ void SimRendererWidget::buildHelipadMeshes() {
 
 void SimRendererWidget::setHelipads(const std::vector<QVector3D> &pads) {
   helipads_ = pads;
+  ++shadowGeomVer_;
   update();
 }
 
@@ -2073,6 +2145,7 @@ void SimRendererWidget::flushChunkUpdates() {
       chunkCpu_[pc.key] = std::move(pc.data);
   }
   pendingChunkUploads_.clear();
+  ++shadowGeomVer_;
 }
 
 #ifdef VAYU_SIM_GRASS

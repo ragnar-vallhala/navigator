@@ -275,6 +275,10 @@ navigator_test(tst_dronemodel
     ${SRC}/vsim/DroneModel.cpp)
 target_include_directories(tst_dronemodel PRIVATE ${SRC}/vsim)
 
+# ---- Cascaded shadow-map fitting (pure maths, headless) --------------------
+navigator_test(tst_shadow_cascades tst_shadow_cascades.cpp)
+target_include_directories(tst_shadow_cascades PRIVATE ${SRC}/vsim)
+
 # ---- 3D sim view survives its GL context being recreated ------------------
 # Needs a real GL platform (xcb on an Xvfb, LIBGL_ALWAYS_SOFTWARE=1): it skips on
 # the offscreen platform ctest uses, which crashes QOpenGLWidget/QOpenGLWindow.

@@ -42,6 +42,7 @@
 #include <QVector3D>
 
 #include "Atmosphere.h"
+#include "ShadowCascades.h"
 #include "procgen/Flora.h" // procgen::GrassLook
 
 #include <cstdint>
@@ -115,7 +116,7 @@ public:
   void render(QOpenGLExtraFunctions *gl, const QMatrix4x4 &proj,
               const QMatrix4x4 &view, const QVector3D &camPos,
               const QVector3D &sunDir, float time,
-              const QMatrix4x4 &lightVP = QMatrix4x4(),
+              const ShadowCascadeSet &csm = ShadowCascadeSet(),
               unsigned int shadowTex = 0, bool shadowOn = false);
 
 public:
@@ -154,6 +155,7 @@ private:
   std::unique_ptr<QOpenGLShaderProgram> fill_; // fill the height texture
   std::unique_ptr<QOpenGLShaderProgram> comp_; // generation (samples it)
   std::unique_ptr<QOpenGLShaderProgram> draw_; // render
+  CascadeUniforms csmLocs_;                    // shadow uniforms of draw_
   unsigned int heightTex_ = 0; // R32F terrain-height image around the camera
   int texSize_ = 512;
   int maskSize_ = 512; // texels per mask tile side
