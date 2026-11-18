@@ -161,6 +161,7 @@ struct Atmosphere {
 //   vec3 sunDisc(vec3 dir)    additive sun disc core (sky shader only); the
 //                             halo/bloom is part of skyColor
 //   vec3 ambientLight(vec3 n) hemispheric ambient for a world normal
+//   vec3 shadowFill()         sky-tinted fill that keeps shadows off black
 // Fog distance constants (kFogStartM, kFogDensity, kFogHeightScaleM) are C++
 // side; the programs keep their existing u_fogstart / u_fogdensity uniforms.
 inline constexpr const char *kAtmosphereGLSL = R"GLSL(
@@ -214,6 +215,15 @@ vec3 sunDisc(vec3 dir) {
 vec3 ambientLight(vec3 n) {
   float hemi = clamp(0.5 + 0.5 * (-n.z), 0.0, 1.0);     // 0 down .. 1 up
   return mix(u_ambgnd, u_ambsky, hemi);
+}
+// Fill light for surfaces the sun does not reach (cast shadow or turned away).
+// The caller scales it by (1 - sun term), so lit surfaces are unchanged. Tuned
+// so ambient + fill is about half of a fully sunlit up-facing surface (default
+// sun: ambient ~0.25 + fill ~0.24 against ~0.95); the 0.5 below is the knob
+// (0.35-0.5 of lit reads as shade, lower goes back toward black). It follows the
+// ambient sky and the sun colour, so it dims and warms with the low-sun tint.
+vec3 shadowFill() {
+  return (u_ambsky + 0.25 * u_suncol) * 0.5;
 }
 )GLSL";
 
