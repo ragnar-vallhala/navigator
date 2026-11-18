@@ -255,8 +255,30 @@ jobs:
           if [ "$n" -lt "$expect_min" ]; then
             echo "RESULT: expected at least $expect_min cases, found $n"; exit 1
           fi
+          # Functions whose data rows are each slow get one process (and one
+          # 240 s budget) per row: 12 far-from-origin rows take about 225 s
+          # together on a runner (4-14 s of world change per row), so they
+          # cannot share one cap. The row names come from the binary too.
+          split_rows="farFromOriginStreamsAndCollides"
+          cases=()
+          for f in $fns; do
+            case " $split_rows " in
+              *" $f "*)
+                nrows=0
+                while IFS= read -r line; do
+                  cases+=("$f:${line#* $f }")
+                  nrows=$((nrows + 1))
+                done < <(QT_QPA_PLATFORM=offscreen "$bin" -datatags \
+                           | grep -E "^[A-Za-z0-9_]+ $f ")
+                if [ "$nrows" -lt 1 ]; then
+                  echo "RESULT: no data rows found for $f"; exit 1
+                fi ;;
+              *) cases+=("$f") ;;
+            esac
+          done
+          echo "tst_world_change_floor: ${#cases[@]} runs"
           i=0
-          for fn in $fns; do
+          for fn in "${cases[@]}"; do
             i=$((i + 1))
             echo "::group::tst_world_change_floor $fn"
             start=$SECONDS
