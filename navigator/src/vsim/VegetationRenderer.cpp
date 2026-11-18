@@ -29,7 +29,7 @@ namespace vsim {
 
 namespace {
 
-constexpr int kAtlasTiles = 8;     // tiles per atlas row and column
+constexpr int kAtlasTiles = 10;   // tiles per atlas row and column
 constexpr int kTuftSize = 7;      // grass pieces per grass instance
 constexpr int kAtlasAzimuths = 8;  // views baked per tree variant
 constexpr int kTilePx = 128;
@@ -87,7 +87,7 @@ layout(location = 0) in vec3 a_pos;
 layout(location = 1) in vec3 a_nrm;
 layout(location = 2) in vec2 a_uv;
 layout(location = 3) in vec4 i_posyaw;  // base (NED), yaw
-layout(location = 4) in vec4 i_misc;    // scale, tint, fade, -
+layout(location = 4) in vec4 i_misc;    // scale, tint, fade, grass paint (packed RGB hue)
 uniform mat4 u_vp;
 uniform float u_k;       // model unit -> metres at instance scale 1
 uniform float u_height;  // variant height, model units
@@ -99,6 +99,7 @@ out vec2 v_uv;
 out float v_tint;
 out float v_fade;
 out float v_hm;          // metres above the instance base
+flat out float v_paint;
 )GLSL";
 
 const char *kVSMain = R"GLSL(
@@ -128,6 +129,7 @@ void main() {
   v_uv = a_uv;
   v_tint = i_misc.y;
   v_fade = i_misc.z;
+  v_paint = i_misc.w;
   v_hm = g.y * s;
   gl_Position = u_vp * vec4(v_world, 1.0);
 }
@@ -141,6 +143,7 @@ in vec2 v_uv;
 in float v_tint;
 in float v_fade;
 in float v_hm;
+flat in float v_paint;
 out vec4 o_color;
 uniform sampler2D u_diffuse;  // sRGB colour, linear alpha coverage
 uniform sampler2D u_normal;   // linear, tangent space, +Y up
@@ -195,14 +198,19 @@ void main() {
   // lighting works on display-referred colour, so encode back before applying
   // the same sun + ambient terms the terrain uses.
   vec3 base = srgbEnc(d.rgb) * tintMul(v_tint);
+  if (v_paint > 0.5) {
+    // Grass: keep the blade's own brightness, move its hue to the ground's.
+    int pk = int(v_paint + 0.5);
+    vec3 hue = vec3(float((pk >> 16) & 255), float((pk >> 8) & 255), float(pk & 255)) / 255.0;
+    float bl = dot(base, vec3(0.299, 0.587, 0.114));
+    float hl = max(dot(hue, vec3(0.299, 0.587, 0.114)), 0.05);
+    base = mix(base, hue * (bl / hl), 0.75);
+  }
   vec3 L;
   if (u_cutout > 0.5) {
     // Foliage: shaded as a rounded crown (normals leaned toward the sky), with
     // a floor of ambient light and the sun shining through thin leaves, so a
     // tree seen from its shaded side is dark green, not black.
-    // Conifer needle textures average 0.24-0.32 and olive-brown (broadleaf
-    // leaves are greener and lighter): lift and green them (conifers sway 0.012).
-    if (u_sway > 0.01) base *= vec3(1.1, 1.25, 0.95);
     vec3 Nf = normalize(mix(Nm, vec3(0.0, 0.0, -1.0), 0.45));
     float thru = clamp(-dot(N, sun), 0.0, 1.0);
     L = ambientLit(Nf) * (0.55 + 0.45 * ao) * 1.5 +
@@ -342,7 +350,7 @@ uniform sampler2D u_diffuse;
 uniform sampler2D u_arm;
 uniform float u_cutout;
 uniform float u_cutoff;
-uniform vec3 u_albedoMul; // the conifer lift of the mesh shader
+uniform vec3 u_albedoMul; // colour multiplier (identity for trees)
 vec3 srgbEnc(vec3 c) {
   vec3 hi = 1.055 * pow(max(c, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
   return mix(c * 12.92, hi, step(vec3(0.0031308), c));
@@ -435,6 +443,17 @@ const VegSpeciesInfo *vegSpeciesTable(int *count) {
 float vegUnitScale(const VegSpeciesInfo &info, const VegVariant &v) {
   const float basis = info.bySpan ? std::max(v.footprintX, v.footprintZ) : v.nominalHeight;
   return basis > 1e-5f ? info.targetSize / basis : 1.0f;
+}
+
+int vegPickVariant(const procgen::VegInstance &v, int poolSize) {
+  if (poolSize <= 1)
+    return 0;
+  uint32_t h = uint32_t(v.variant) * 2654435761u ^
+               uint32_t(std::lround(v.tint * 65535.0f)) * 40503u;
+  h ^= h >> 15;
+  h *= 2246822519u;
+  h ^= h >> 13;
+  return int(h % uint32_t(poolSize));
 }
 
 VegLodChoice vegChooseLod(const VegSpeciesInfo &s, float d, bool impostorReady) {
@@ -622,12 +641,7 @@ int VegetationRenderer::variantFor(const procgen::VegInstance &v, int *infoOut) 
           : pool_[v.species];
   if (pool.empty())
     return -1;
-  uint32_t h = uint32_t(v.variant) * 2654435761u ^
-               uint32_t(std::lround(v.tint * 65535.0f)) * 40503u;
-  h ^= h >> 15;
-  h *= 2246822519u;
-  h ^= h >> 13;
-  const int flat = pool[h % pool.size()];
+  const int flat = pool[size_t(vegPickVariant(v, int(pool.size())))];
   *infoOut = var_[size_t(flat)].info;
   return flat;
 }
@@ -649,6 +663,7 @@ void VegetationRenderer::resolve(Chunk &c) {
     r.yaw = v.yaw;
     r.scale = v.scale;
     r.tint = std::clamp(v.tint, 0.0f, 1.0f);
+    r.paint = float(v.paint);
     r.variant = uint16_t(flat);
     r.info = uint8_t(info);
     c.recs.push_back(r);
@@ -1031,7 +1046,7 @@ void VegetationRenderer::bakeImpostors(VariantGpu &v) {
       glActiveTexture(GL_TEXTURE4);
       glBindTexture(GL_TEXTURE_2D, mat.tex[2]);
       progBake_->setUniformValue("u_cutout", vm.cutout() ? 1.0f : 0.0f);
-      progBake_->setUniformValue("u_albedoMul", kTable[v.info].sway > 0.01f ? QVector3D(1.1f, 1.25f, 0.95f) : QVector3D(1.0f, 1.0f, 1.0f));
+      progBake_->setUniformValue("u_albedoMul", QVector3D(1.0f, 1.0f, 1.0f));
       progBake_->setUniformValue("u_cutoff", vm.alphaCutoff);
       glDrawElements(GL_TRIANGLES, GLsizei(sm.indexCount), GL_UNSIGNED_INT,
                      reinterpret_cast<void *>(uintptr_t(sm.firstIndex) * 4));
@@ -1288,7 +1303,7 @@ void VegetationRenderer::draw(const VegFrame &f) {
       const VegLodChoice ch = vegChooseLod(info, d, billReady);
       for (int k = 0; k < ch.n; ++k) {
         std::vector<float> &b = buckets_[size_t(r.variant) * 4 + size_t(ch.lod[k])];
-        b.insert(b.end(), {r.x, r.y, r.z, r.yaw, r.scale, r.tint, ch.fade[k], 0.0f});
+        b.insert(b.end(), {r.x, r.y, r.z, r.yaw, r.scale, r.tint, ch.fade[k], r.paint});
       }
     }
   }

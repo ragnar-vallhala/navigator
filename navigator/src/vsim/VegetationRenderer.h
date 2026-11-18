@@ -104,6 +104,9 @@ struct VegSpeciesInfo {
 const VegSpeciesInfo *vegSpeciesTable(int *count);
 // Model units to metres at instance scale 1 for one variant of a species.
 float vegUnitScale(const VegSpeciesInfo &info, const VegVariant &v);
+// Which of `poolSize` variants an instance draws: a hash of its own scatter
+// values (position-derived), so it is the same on every chunking and run.
+int vegPickVariant(const procgen::VegInstance &v, int poolSize);
 
 // What to draw at distance d: up to two entries (a cross-fade), lod 0..2 = mesh
 // LOD, 3 = impostor. fade encodes the dither test (see the shader): in (0,1]
@@ -175,7 +178,7 @@ public:
 
 private:
   struct Rec { // one resolved instance
-    float x, y, z, yaw, scale, tint;
+    float x, y, z, yaw, scale, tint, paint;
     uint16_t variant; // flat variant id
     uint8_t info;     // species table row
   };

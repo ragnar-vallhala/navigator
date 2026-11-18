@@ -106,6 +106,7 @@ private slots:
   void collidersFollowTheDrawnSize();
   void paletteSpeciesShares();
   void forestHasTwoConifersAndTwoBroadleafs();
+  void grassIsTintedPerPalette();
   void emptyForNoChunk();
 };
 
@@ -441,6 +442,37 @@ void TstVegetation::forestHasTwoConifersAndTwoBroadleafs() {
   }
   const double share = double(conifers) / total;
   QVERIFY2(share > 0.15 && share < 0.85, qPrintable(QString("conifer share %1").arg(share)));
+}
+
+// Grass tufts carry the palette's own ground hue to tint toward; it differs
+// between palettes and matches TerrainField's ground colour; other species
+// carry none.
+void TstVegetation::grassIsTintedPerPalette() {
+  uint32_t seen[3] = {0, 0, 0};
+  int idx = 0;
+  for (int pal : {int(kPalForest), int(kPalDesert), int(kPalPasture)}) {
+    const TerrainField f = makeField(pal);
+    const VegParams p = vegParamsForPalette(pal);
+    FieldParams fp;
+    fp.palette = pal;
+    const PgVec3 ground = TerrainField(fp).color(0.0f, 1.0f);
+    QCOMPARE(p.groundColor.x, ground.x);
+    QCOMPARE(p.groundColor.z, ground.z);
+    int grass = 0;
+    for (int j = -1; j <= 0; ++j)
+      for (int i = -1; i <= 0; ++i)
+        for (const VegInstance &v : scatterVegetation(f, i, j, 256.0f, p)) {
+          if (v.species == kVegGrassClump) {
+            QCOMPARE(v.paint, vegPackHue(ground));
+            ++grass;
+          } else {
+            QCOMPARE(v.paint, 0u);
+          }
+        }
+    QVERIFY2(grass > 20, qPrintable(QString("palette %1: %2 grass").arg(pal).arg(grass)));
+    seen[idx++] = vegPackHue(ground);
+  }
+  QVERIFY(seen[0] != seen[1] && seen[1] != seen[2] && seen[0] != seen[2]);
 }
 
 void TstVegetation::emptyForNoChunk() {

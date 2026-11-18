@@ -5,6 +5,7 @@
 // radius half its rendered span.
 #include "VegetationAssets.h"
 #include "VegetationRenderer.h"
+#include "procgen/TerrainField.h"
 #include "procgen/Vegetation.h"
 
 #include <QtTest>
@@ -63,6 +64,48 @@ private slots:
     for (bool b : kindSeen)
       QVERIFY(b);
     QVERIFY(trees >= 7);
+  }
+
+  // Every broadleaf species has at least two variants and the placement picks
+  // each of them for a real share of its instances, from the position alone.
+  void broadleafVariantsAreBothPlaced() {
+    VegAssets assets;
+    QString err;
+    QVERIFY2(loadVegetationAssets(assets, &err, ":/vegetation", false), qPrintable(err));
+    FieldParams fp;
+    fp.palette = kPalForest;
+    const TerrainField f(fp);
+    const VegParams p = vegParamsForPalette(kPalForest);
+    std::vector<VegInstance> trees;
+    for (int j = -2; j <= 1; ++j)
+      for (int i = -2; i <= 1; ++i)
+        for (const VegInstance &v : scatterVegetation(f, i, j, 256.0f, p))
+          if (v.species == kVegTree)
+            trees.push_back(v);
+    int checked = 0;
+    for (int kind = 0; kind < kVegTreeKindCount; ++kind) {
+      if (vegTreeKind(kind).conifer)
+        continue;
+      const VegSpeciesAssets *sp = assets.find(QString::fromLatin1(vegTreeKind(kind).id));
+      QVERIFY(sp);
+      const int pool = int(sp->variants.size());
+      QVERIFY2(pool >= 2, vegTreeKind(kind).id);
+      std::vector<int> hit(size_t(pool), 0);
+      int total = 0;
+      for (const VegInstance &v : trees)
+        if (v.kind == kind) {
+          const int pick = vegPickVariant(v, pool);
+          QVERIFY(pick >= 0 && pick < pool);
+          QCOMPARE(pick, vegPickVariant(v, pool)); // deterministic
+          ++hit[size_t(pick)];
+          ++total;
+        }
+      QVERIFY2(total > 40, vegTreeKind(kind).id);
+      for (int h : hit)
+        QVERIFY2(h > total / (pool * 3), qPrintable(QString("%1: %2 of %3").arg(vegTreeKind(kind).id).arg(h).arg(total)));
+      ++checked;
+    }
+    QVERIFY(checked >= 2);
   }
 
   void rockColliderRadiusIsHalfTheRenderedSpan() {

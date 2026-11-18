@@ -17,6 +17,7 @@
 #include "Vegetation.h"
 
 #include "GroundCover.h"
+#include "TerrainField.h"
 
 #include <algorithm>
 #include <cmath>
@@ -129,8 +130,21 @@ bool VegExclusion::reaches(float px, float py, float pad) const {
   return dx * dx + dy * dy <= r * r;
 }
 
+uint32_t vegPackHue(const PgVec3 &c) {
+  const float m = std::max(std::max(c.x, c.y), std::max(c.z, 1e-4f));
+  auto ch = [m](float v) {
+    return static_cast<uint32_t>(std::lround(std::clamp(v / m, 0.0f, 1.0f) * 255.0f));
+  };
+  return (ch(c.x) << 16) | (ch(c.y) << 8) | ch(c.z);
+}
+
 VegParams vegParamsForPalette(int palette) {
   VegParams p;
+  {
+    FieldParams fp;
+    fp.palette = palette;
+    p.groundColor = TerrainField(fp).color(0.0f, 1.0f);
+  }
   auto &T = p.species[kVegTree];
   auto &B = p.species[kVegBush];
   auto &G = p.species[kVegGrassClump];
@@ -414,6 +428,8 @@ std::vector<VegInstance> scatterVegetation(const TerrainField &f, int cx, int cy
         v.variant = static_cast<uint8_t>(hcell(gx, gy, p.seed, salt + 5) %
                                          static_cast<uint32_t>(kVegVariants));
         v.tint = u01(hcell(gx, gy, p.seed, salt + 6));
+        if (s == kVegGrassClump)
+          v.paint = vegPackHue(p.groundColor);
         out.push_back(v);
       }
     }

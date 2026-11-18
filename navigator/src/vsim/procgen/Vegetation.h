@@ -74,7 +74,7 @@ inline constexpr int kVegTreeKindCount = 4;
 inline constexpr VegTreeKind kVegTreeKinds[kVegTreeKindCount] = {
     // id                   conifer height  scale range   trunk  crown
     {"fir_tree_01",         true,   16.0f,  0.70f, 1.25f, 0.15f, 2.8f},
-    {"pine_sapling_medium", true,   12.0f,  0.75f, 1.30f, 0.48f, 2.8f},
+    {"pine_sapling_medium", true,   12.0f,  0.75f, 1.30f, 0.22f, 2.8f},
     {"jacaranda_tree",      false,  13.0f,  0.62f, 1.45f, 0.45f, 8.2f},
     {"island_tree_01",      false,   9.5f,  0.85f, 1.30f, 0.50f, 4.6f},
 };
@@ -93,7 +93,13 @@ struct VegInstance {
                        // kind's variant count; others 0 .. kVegVariants-1
   uint8_t kind = 0;    // trees: index into vegTreeKind()
   float tint = 0.0f;   // small colour variation, 0..1
+  // Grass tufts: the palette's ground hue to tint toward, packed 0xRRGGBB with
+  // the brightest channel at 255 (see vegPackHue); 0 = leave the colour alone.
+  uint32_t paint = 0;
 };
+
+// Packs the hue of a colour (brightest channel scaled to 255) as 0xRRGGBB.
+uint32_t vegPackHue(const PgVec3 &c);
 
 // Rocks are scaled by their longest footprint side (their height differs per
 // model, kVegRockHeightM is the typical one).
@@ -154,6 +160,9 @@ struct VegParams {
   float treeMinSpacingM = 2.5f; // closest two trunks may stand [m]
   std::vector<VegExclusion> exclusions;
   float clearAroundSpawnM = 8.0f; // nothing within this of the origin
+  // The palette's own ground colour (TerrainField::color on level low ground);
+  // grass tufts are tinted toward it so they sit in the ground they stand on.
+  PgVec3 groundColor{0.06f, 0.15f, 0.09f};
 
   VegSpeciesParams &of(VegSpecies s) { return species[s]; }
   const VegSpeciesParams &of(VegSpecies s) const { return species[s]; }
