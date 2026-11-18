@@ -30,6 +30,7 @@ namespace vsim {
 namespace {
 
 constexpr int kAtlasTiles = 8;     // tiles per atlas row and column
+constexpr int kTuftSize = 7;      // grass pieces per grass instance
 constexpr int kAtlasAzimuths = 8;  // views baked per tree variant
 constexpr int kTilePx = 128;
 constexpr float kPi = 3.14159265358979f;
@@ -561,6 +562,36 @@ void VegetationRenderer::resolve(Chunk &c) {
     r.variant = uint16_t(flat);
     r.info = uint8_t(info);
     c.recs.push_back(r);
+    // One grass instance stands for a tuft: the asset pieces are single blades
+    // and seedlings a few centimetres across, which vanish alone, so a tuft is
+    // several of them a hand's breadth apart (deterministic from the instance).
+    if (kTable[info].cat == procgen::kVegGrassClump) {
+      uint32_t h = uint32_t(std::lround(v.pos.x * 64.0f)) * 73856093u ^
+                   uint32_t(std::lround(v.pos.y * 64.0f)) * 19349663u;
+      auto rnd = [&h]() {
+        h ^= h << 13; h ^= h >> 17; h ^= h << 5;
+        return float(h & 0xffffffu) / 16777216.0f;
+      };
+      for (int k = 1; k < kTuftSize; ++k) {
+        procgen::VegInstance w = v;
+        w.variant = uint8_t(v.variant + 31 * k);
+        w.tint = rnd();
+        int info2 = -1;
+        const int f2 = variantFor(w, &info2);
+        if (f2 < 0)
+          continue;
+        const float a = rnd() * 6.2831853f, d = 0.08f + 0.40f * std::sqrt(rnd());
+        Rec q = r;
+        q.x += std::cos(a) * d;
+        q.y += std::sin(a) * d;
+        q.yaw = rnd() * 6.2831853f;
+        q.scale = v.scale * (0.65f + 0.7f * rnd());
+        q.tint = w.tint;
+        q.variant = uint16_t(f2);
+        q.info = uint8_t(info2);
+        c.recs.push_back(q);
+      }
+    }
   }
   c.resolved = true;
 }
@@ -1065,6 +1096,7 @@ void VegetationRenderer::draw(const VegFrame &f) {
           // A forest should be mostly the full broadleaf crown, not the thin
           // saplings; grass tufts outnumber the single blades.
           const int copies = av.name.contains("seedling") ? 3
+                             : (assets_.species[si].id == "pine_sapling_small") ? (av.name.endsWith("_a") ? 1 : 0)
                              : (info.cat == procgen::kVegTree && assets_.species[si].id == "island_tree_02") ? 9 : 1;
           for (int c = 0; c < copies; ++c)
             pool_[size_t(info.cat)].push_back(int(var_.size()));
