@@ -157,12 +157,111 @@ private slots:
   }
 
   void cutoutMaterialsExist() {
-    const VegSpeciesAssets *fir = assets_.find("fir_sapling");
+    const VegSpeciesAssets *fir = assets_.find("fir_tree_01");
     QVERIFY(fir);
     bool anyCut = false;
     for (const VegMaterial &m : fir->materials)
       anyCut = anyCut || m.cutout();
     QVERIFY(anyCut);
+  }
+
+  // Full-size trees: at least two conifers and two broadleaf species, each with
+  // a modelled height of 8 m or more and a measured trunk.
+  void fullSizeTreesShipped() {
+    const QJsonArray sp = manifest_.value("species").toArray();
+    const QStringList conifers = {"fir_tree_01", "pine_sapling_medium"};
+    const QStringList broadleaf = {"jacaranda_tree", "island_tree_01"};
+    for (const QStringList &group : {conifers, broadleaf})
+      for (const QString &id : group) {
+        const VegSpeciesAssets *s = assets_.find(id);
+        QVERIFY2(s, qPrintable(id));
+        QCOMPARE(s->category, QStringLiteral("tree"));
+        bool inManifest = false;
+        for (const QJsonValue &v : sp)
+          if (v.toObject().value("id").toString() == id) {
+            inManifest = true;
+            QVERIFY(v.toObject().value("license").toString() == "CC0");
+          }
+        QVERIFY2(inManifest, qPrintable(id));
+        for (const VegVariant &v : s->variants) {
+          QVERIFY2(v.nominalHeight >= 5.0f, qPrintable(v.name));
+          QVERIFY2(v.trunkRadius > 0.05f && v.trunkRadius < 2.0f, qPrintable(v.name));
+          // a crown worth the name at LOD 0 (broadleaf: a real model; conifers
+          // are built from cards, see cardConifersHaveTiers)
+          if (group == broadleaf)
+            QVERIFY2(v.lods[0].triangleCount() >= 15000, qPrintable(v.name));
+        }
+      }
+  }
+
+  // Card conifers: 6-10 needle-branch tiers at LOD 0, fewer at each coarser LOD
+  // and a cheaper mesh each time.
+  void cardConifersHaveTiers() {
+    for (const char *id : {"fir_tree_01", "pine_sapling_medium"}) {
+      const VegSpeciesAssets *s = assets_.find(id);
+      QVERIFY2(s, id);
+      QVERIFY2(s->variants.size() >= 2, id);
+      for (const VegVariant &v : s->variants) {
+        QVERIFY2(v.lods[0].tiers >= 6 && v.lods[0].tiers <= 10, qPrintable(v.name));
+        QVERIFY2(v.lods[1].tiers >= 3 && v.lods[1].tiers < v.lods[0].tiers, qPrintable(v.name));
+        QVERIFY2(v.lods[2].tiers >= 1 && v.lods[2].tiers <= v.lods[1].tiers, qPrintable(v.name));
+        QVERIFY2(v.lods[1].triangleCount() < v.lods[0].triangleCount(), qPrintable(v.name));
+        QVERIFY2(v.lods[2].triangleCount() < v.lods[1].triangleCount(), qPrintable(v.name));
+        // a trunk plus cards: bark and a cut-out needle material
+        QCOMPARE(int(v.lods[0].submeshes.size()), 2);
+        QVERIFY(!s->materials[size_t(v.lods[0].submeshes[0].material)].cutout());
+        QVERIFY(s->materials[size_t(v.lods[0].submeshes[1].material)].cutout());
+      }
+    }
+  }
+
+  // The conifer needle albedo must not be brighter than the broadleaf leaves
+  // (mean linear luminance over the covered texels).
+  void coniferIsNotBrighterThanBroadleaf() {
+    auto meanLum = [](const VegMaterial &m) {
+      const QImage d = m.diffuse.convertToFormat(QImage::Format_RGBA8888);
+      const QImage a = m.alpha.scaled(d.size()).convertToFormat(QImage::Format_Grayscale8);
+      auto lin = [](int c) {
+        const double x = c / 255.0;
+        return x <= 0.04045 ? x / 12.92 : std::pow((x + 0.055) / 1.055, 2.4);
+      };
+      double sum = 0;
+      long n = 0;
+      for (int y = 0; y < d.height(); ++y)
+        for (int x = 0; x < d.width(); ++x) {
+          if (qGray(a.pixel(x, y)) < 128)
+            continue;
+          const QRgb c = d.pixel(x, y);
+          sum += 0.2126 * lin(qRed(c)) + 0.7152 * lin(qGreen(c)) + 0.0722 * lin(qBlue(c));
+          ++n;
+        }
+      return n ? sum / double(n) : 0.0;
+    };
+    auto cutoutLum = [&](const char *id) {
+      double best = 0;
+      for (const VegMaterial &m : assets_.find(id)->materials)
+        if (m.cutout())
+          best = std::max(best, meanLum(m));
+      return best;
+    };
+    const double broad = std::min(cutoutLum("jacaranda_tree"), cutoutLum("island_tree_01"));
+    QVERIFY(broad > 0.01);
+    for (const char *id : {"fir_tree_01", "pine_sapling_medium"}) {
+      const double c = cutoutLum(id);
+      qInfo("%s needle luminance %.4f, broadleaf %.4f", id, c, broad);
+      QVERIFY2(c > 0.005 && c <= broad, id);
+    }
+  }
+
+  void broadleafSpeciesHaveTwoDistinctVariants() {
+    for (const char *id : {"jacaranda_tree", "island_tree_01"}) {
+      const VegSpeciesAssets *s = assets_.find(id);
+      QVERIFY2(s && s->variants.size() >= 2, id);
+      const VegVariant &a = s->variants[0], &b = s->variants[1];
+      QVERIFY2(std::fabs(a.nominalHeight - b.nominalHeight) > 0.05f * a.nominalHeight ||
+                   std::fabs(a.footprintX - b.footprintX) > 0.05f * a.footprintX,
+               id);
+    }
   }
 
   void embeddedSizeIsBounded() {

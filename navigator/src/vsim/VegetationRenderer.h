@@ -104,6 +104,9 @@ struct VegSpeciesInfo {
 const VegSpeciesInfo *vegSpeciesTable(int *count);
 // Model units to metres at instance scale 1 for one variant of a species.
 float vegUnitScale(const VegSpeciesInfo &info, const VegVariant &v);
+// Which of `poolSize` variants an instance draws: a hash of its own scatter
+// values (position-derived), so it is the same on every chunking and run.
+int vegPickVariant(const procgen::VegInstance &v, int poolSize);
 
 // What to draw at distance d: up to two entries (a cross-fade), lod 0..2 = mesh
 // LOD, 3 = impostor. fade encodes the dither test (see the shader): in (0,1]
@@ -114,6 +117,15 @@ struct VegLodChoice {
   float fade[2] = {1.0f, 1.0f};
 };
 VegLodChoice vegChooseLod(const VegSpeciesInfo &s, float dist, bool impostorReady);
+
+// Impostor atlas layout: kVegAtlasTiles x kVegAtlasTiles tiles, each tree
+// variant baked from kVegAtlasAzimuths directions.
+constexpr int kVegAtlasTiles = 10;
+constexpr int kVegAtlasAzimuths = 8;
+
+// Vertex shader source of the billboard program, with the atlas layout filled
+// in from the constants above (exposed so a test can check it).
+QByteArray vegBillboardVertexSource();
 
 // Keep-clear discs for the helipads (pad footprint plus a margin) and the
 // world's obstacles (their footprint plus a margin), NED world metres.
@@ -164,13 +176,18 @@ public:
     int instancesDrawn = 0, drawCalls = 0, impostors = 0, chunksDrawn = 0;
     long long triangles = 0;
     int speciesReady = 0, impostorVariants = 0;
+    // Trees drawn this frame per kind (procgen::kVegTreeKinds order), as meshes
+    // and as impostors, and the triangles the meshes cost.
+    int treeMeshes[procgen::kVegTreeKindCount] = {};
+    int treeImpostors[procgen::kVegTreeKindCount] = {};
+    long long lodTriangles[3] = {}; // all species, by mesh LOD
   };
   const Stats &stats() const { return stats_; }
   bool impostorsAvailable() const { return atlasOk_; }
 
 private:
   struct Rec { // one resolved instance
-    float x, y, z, yaw, scale, tint;
+    float x, y, z, yaw, scale, tint, paint;
     uint16_t variant; // flat variant id
     uint8_t info;     // species table row
   };
@@ -229,6 +246,8 @@ private:
   std::vector<VariantGpu> var_;
   std::vector<int> infoOfSpecies_; // species table row per asset species, -1 none
   std::array<std::vector<int>, procgen::kVegSpeciesCount> pool_; // flat variants
+  // Tree variants per tree kind (procgen::VegInstance::kind).
+  std::array<std::vector<int>, procgen::kVegTreeKindCount> treePool_;
   bool resolvedAssets_ = false;
 
   std::unique_ptr<QOpenGLShaderProgram> prog_, progBillboard_, progBake_;
