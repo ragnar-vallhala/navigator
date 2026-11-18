@@ -33,6 +33,7 @@
 
 #include <array>
 #include <atomic>
+#include <climits>
 #include <cmath>
 #include <vector>
 
@@ -101,9 +102,12 @@ vec3 skyColor(vec3 dir) {
   vec3 ground  = vec3(0.34, 0.38, 0.38); // below-horizon haze seen from height, not black
   vec3 col = (up >= 0.0)
       ? mix(horizon, zenith, pow(clamp(up, 0.0, 1.0), 0.55))
-      : mix(horizon, ground, clamp(-up * 1.5, 0.0, 1.0));
+      : mix(horizon, ground, smoothstep(0.0, 1.0, clamp(-up * 1.5, 0.0, 1.0)));
   float s = max(dot(normalize(dir), normalize(u_sundir)), 0.0);
-  float aboveHorizon = step(0.0, up);
+  // Soft, not a step: the glow must not cut off at up == 0, or the sky just
+  // below the horizon is darker than the horizon colour the fog fades to (a
+  // visible seam where the far terrain ends).
+  float aboveHorizon = smoothstep(-0.10, 0.0, up);
   // Sun is diffused behind cloud: a soft bright bloom, no hard disc.
   col += vec3(0.30, 0.30, 0.26) * pow(s, 5.0) * aboveHorizon;
   return col;
@@ -148,6 +152,7 @@ uniform float u_bands;       // >0: pole painted in this many 1 m red/white band
 uniform vec3 u_campos;       // camera world position (NED)
 uniform float u_fogdensity;  // aerial-perspective strength
 uniform float u_fogstart;    // metres before fog begins
+uniform vec4 u_ringclip;     // far ring: discard inside this xy rect (x0,y0,x1,y1)
 uniform float u_sunint;      // sun-intensity look knob (matches grass)
 uniform float u_ambstr;      // ambient-strength look knob (matches grass)
 )GLSL";
@@ -175,6 +180,10 @@ float gridLine(vec2 p, float cell, float w) {
   return max(l.x, l.y) * (1.0 - smoothstep(0.12, 0.35, max(fw.x, fw.y)));
 }
 void main() {
+  if (u_ringclip.z > u_ringclip.x && v_world.x > u_ringclip.x &&
+      v_world.x < u_ringclip.z && v_world.y > u_ringclip.y &&
+      v_world.y < u_ringclip.w)
+    discard;
   vec3 n = normalize(v_normal);
   vec3 toFrag = v_world - u_campos;
   float dist = length(toFrag);
@@ -225,13 +234,9 @@ void main() {
   // Aerial perspective: fade toward the sky behind the surface with distance,
   // so the streamed-terrain edge dissolves into haze.
   vec3 vdir = dist > 1e-4 ? toFrag / dist : vec3(0.0, 0.0, 1.0);
-  // Haze is a layer near the ground: measure the path mostly horizontally, so
-  // looking down from altitude shows the ground instead of fog, while the
-  // horizon still hazes out. Fog colour is the horizon's, never the dark
-  // below-horizon sky (that read as a black void from height).
-  float fdist = length(vec3(toFrag.xy, toFrag.z * 0.12));
-  float fd = max(fdist - u_fogstart, 0.0) * u_fogdensity;
-  float fog = 1.0 - exp(-fd * fd);
+  // Haze: true distance, thinned with altitude (see kFogGLSL). Fog colour is
+  // the horizon's, never the dark below-horizon sky.
+  float fog = fogAmount(u_campos, v_world, u_fogstart, u_fogdensity);
   float hl = length(vdir.xy);
   vec3 fdir = hl > 1e-4 ? vec3(vdir.xy / hl, 0.0) : vec3(1.0, 0.0, 0.0);
   o_color = vec4(mix(lit, skyColor(fdir), clamp(fog, 0.0, 1.0)), 1.0);
@@ -471,9 +476,7 @@ void main() {
   // through them), strongest near the thin tip — the soft GoT meadow look.
   float trans = pow(max(dot(vdir, normalize(u_sundir)), 0.0), 4.0);
   col += albedo * trans * (0.25 + 0.75 * v_hf) * 0.8;
-  float fdist = length(vec3(toFrag.xy, toFrag.z * 0.12)); // see the lit shader
-  float fd = max(fdist - u_fogstart, 0.0) * u_fogdensity;
-  float fog = 1.0 - exp(-fd * fd);
+  float fog = fogAmount(u_campos, v_world, u_fogstart, u_fogdensity);
   float hl = length(vdir.xy);
   vec3 fdir = hl > 1e-4 ? vec3(vdir.xy / hl, 0.0) : vec3(1.0, 0.0, 0.0);
   o_color = vec4(mix(col, skyColor(fdir), clamp(fog, 0.0, 1.0)), 1.0);
@@ -675,7 +678,7 @@ template <class F> void SimRendererWidget::forEachMesh(F &&f) {
         &helipadDisk_, &helipadMark_, &axes_,       &body_,        &modelBody_,
         &rotor_,     &thrustLine_,  &comMarker_,   &gizmoArrow_,  &gizmoRing_,
         &locator_,   &northArrow_,  &glyphN_,      &ring_,        &guideArrow_,
-        &droneMesh_, &worldMesh_})
+        &droneMesh_, &worldMesh_, &farMesh_})
     f(*m);
   for (Mesh &m : modelProp_)
     f(m);
@@ -1055,7 +1058,7 @@ void SimRendererWidget::initResources() {
   u_color_ = prog_->uniformLocation("u_color");
 
   progLit_ = buildProgram("lit", kLitVertexShader,
-                          QByteArray(kLitFragmentHead) + kAtmosphereGLSL +
+                          QByteArray(kLitFragmentHead) + kAtmosphereGLSL + kFogGLSL +
                               kShadowGLSL + kLitFragmentMain);
   ul_mvp_ = progLit_->uniformLocation("u_mvp");
   ul_model_ = progLit_->uniformLocation("u_model");
@@ -1089,7 +1092,7 @@ void SimRendererWidget::initResources() {
 
 #ifdef VAYU_SIM_GRASS
   progFlora_ = buildProgram("flora", kFloraVertexShader,
-                            QByteArray(kFloraFragmentHead) + kAtmosphereGLSL +
+                            QByteArray(kFloraFragmentHead) + kAtmosphereGLSL + kFogGLSL +
                                 kFloraFragmentMain);
   uf_vp_ = progFlora_->uniformLocation("u_vp");
   uf_campos_ = progFlora_->uniformLocation("u_campos");
@@ -1287,6 +1290,7 @@ void SimRendererWidget::paintGL() {
   const bool training = !gates_.isEmpty();
   const bool showWorld = worldVisible_ && hasWorldMesh_ && !training;
   const bool showChunks = worldVisible_ && !training && !worldChunks_.empty();
+  updateFarTerrain(showChunks); // far ring + fog reference height
 
   // Shadow map: render terrain depth from the sun's view into the FBO first, so
   // the lit terrain + grass can sample it. Restores the default FBO + viewport.
@@ -1343,6 +1347,11 @@ void SimRendererWidget::paintGL() {
       if (kv.second->vertex_count)
         drawLit(*kv.second, view, QMatrix4x4(), QVector3D(1.0f, 1.0f, 1.0f),
                 true);
+  if (showChunks && farMesh_.vertex_count) { // coarse ring beyond the window
+    drawingFarRing_ = true;
+    drawLit(farMesh_, view, QMatrix4x4(), QVector3D(1.0f, 1.0f, 1.0f), true);
+    drawingFarRing_ = false;
+  }
 
   // With no terrain mesh in World mode, and around a finite procedural arena,
   // draw a detailed ground out to the horizon instead of the old +/-10 m line
@@ -1619,6 +1628,9 @@ void SimRendererWidget::drawLit(const Mesh &m, const QMatrix4x4 &view,
   // Aerial perspective: gentle haze that fully veils the streamed-terrain edge.
   progLit_->setUniformValue(ul_fogdensity_, 1.0f / 420.0f);
   progLit_->setUniformValue(ul_fogstart_, 45.0f);
+  progLit_->setUniformValue("u_fogbase", fogBaseZ_);
+  progLit_->setUniformValue("u_fogheight", kFogHeightM);
+  progLit_->setUniformValue("u_ringclip", drawingFarRing_ ? QVector4D(farTerrain_.clipRect()[0], farTerrain_.clipRect()[1], farTerrain_.clipRect()[2], farTerrain_.clipRect()[3]) : QVector4D());
   progLit_->setUniformValue(ul_lightvp_, lightVP_);
   progLit_->setUniformValue(ul_shadowon_, shadowOn_ ? 1.0f : 0.0f);
   progLit_->setUniformValue(ul_drone_, droneShadowPos_);
@@ -1997,6 +2009,36 @@ void SimRendererWidget::clearWorldChunks() {
   update();
 }
 
+void SimRendererWidget::setTerrainField(
+    std::shared_ptr<const procgen::TerrainField> f) {
+  farTerrain_.setField(std::move(f));
+  farMesh_.vertex_count = 0; // re-upload (the GL objects are reused)
+  update();
+}
+
+// Keeps the far ring on the loaded chunk window and sets the fog's ground
+// reference. Called from paintGL (GL context current).
+void SimRendererWidget::updateFarTerrain(bool showChunks) {
+  fogBaseZ_ = farTerrain_.groundZ(camEye_.x(), camEye_.y(),
+                                  hasWorldMesh_ ? horizonZ_ : 0.0f);
+  if (!showChunks || !farTerrain_.active())
+    return;
+  FarTerrain::Window w;
+  w.chunkM = procgen::kStreamChunkM;
+  w.minCx = w.minCy = INT_MAX;
+  w.maxCx = w.maxCy = INT_MIN;
+  for (const auto &kv : worldChunks_) {
+    const int cx = int(kv.first >> 32), cy = int(uint32_t(kv.first));
+    w.minCx = std::min(w.minCx, cx);
+    w.maxCx = std::max(w.maxCx, cx);
+    w.minCy = std::min(w.minCy, cy);
+    w.maxCy = std::max(w.maxCy, cy);
+  }
+  if (farTerrain_.update(w) || (!farMesh_.vertex_count && farTerrain_.vertexCount())) {
+    uploadColoredMesh(farMesh_, farTerrain_.vertices());
+  }
+}
+
 void SimRendererWidget::flushChunkUpdates() {
   chunksDirty_ = false;
   if (clearAllChunks_) {
@@ -2166,6 +2208,8 @@ void SimRendererWidget::drawFlora(const QMatrix4x4 &view) {
   progFlora_->setUniformValue(uf_sundir_, sunDir_);
   progFlora_->setUniformValue(uf_fogdensity_, 1.0f / 420.0f);
   progFlora_->setUniformValue(uf_fogstart_, 45.0f);
+  progFlora_->setUniformValue("u_fogbase", fogBaseZ_);
+  progFlora_->setUniformValue("u_fogheight", kFogHeightM);
   floraVao_.bind();
   for (auto &kv : floraChunks_) {
     FloraChunk *fc = kv.second.get();
