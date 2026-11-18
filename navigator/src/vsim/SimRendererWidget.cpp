@@ -183,6 +183,7 @@ void main() {
       v_world.y < u_ringclip.w)
     discard;
   vec3 n = normalize(v_normal);
+  vec3 nSmooth = n;  // shadow gating wants the mesh normal, not the material's detail normal
   vec3 toFrag = v_world - u_campos;
   float dist = length(toFrag);
   vec3 sun = normalize(u_sundir);
@@ -224,7 +225,7 @@ void main() {
     float k = floor((v_local.z + 0.5) * u_bands);
     base = (mod(k, 2.0) < 0.5) ? vec3(0.80, 0.14, 0.08) : vec3(0.92, 0.92, 0.88);
   }
-  float sunTerm = wrap * shadowFactor(v_world, n, sun);
+  float sunTerm = wrap * shadowFactor(v_world, nSmooth, sun);
   // Shaded faces and cast shadows get a sky-tinted fill (never near-black).
   vec3 lit  = base * (ambient + shadowFill() * u_ambstr * (1.0 - clamp(sunTerm, 0.0, 1.0)) +
                       sunCol * 0.95 * sunTerm);
@@ -234,7 +235,7 @@ void main() {
     // ambient light its red/white bands both read as black. Light it from a
     // floor so the bands stay legible, and let the terrain shadow darken it
     // only partly.
-    float sf = mix(1.0, shadowFactor(v_world, n, sun), 0.3);
+    float sf = mix(1.0, shadowFactor(v_world, nSmooth, sun), 0.3);
     lit = base * (max(ambient, vec3(0.45)) + sunCol * wrap * 0.55 * sf);
   }
   // Aerial perspective: fade toward the sky behind the surface with distance,
@@ -347,13 +348,26 @@ float shadowMapFactor(vec3 wpos, vec3 nrm, vec3 lightDir) {
   // facet. Offset along the true facet normal (screen derivatives) instead.
   vec3 ng = normalize(cross(dFdx(wpos), dFdy(wpos)));
   if (dot(ng, n) < 0.0) ng = -ng;
-  float ndg = clamp(dot(ng, L), 0.0, 1.0);
   float s = csmVisibility(wpos, ng, L, true);
-  // A facet turned away from the sun is self-shadowed by definition; whether the
-  // map calls it lit or dark flips triangle to triangle on a steep face (hatched
-  // saw-tooth). Leave those to the wrapped diffuse term and fade the map in over
-  // the first few percent of facet N.L; cast shadows on sun-facing ground stay.
-  return mix(1.0, s, smoothstep(0.0, 0.10, ndg));
+  float ndg = dot(ng, L);   // facet N.L
+  float ndl = dot(n, L);    // smooth N.L
+  // A surface turned away from the sun is self-shadowed by definition; whether
+  // the map calls it lit or dark flips triangle to triangle on a steep face. Fade
+  // the map in over the first few percent of N.L, with the SMOOTH normal: the
+  // facet normal flips between adjacent triangles at low sun, which paints a
+  // per-triangle mosaic of lit and shadowed blocks on lee slopes. At a high sun
+  // the smooth normal alone leaves saw-tooth hatching on steep sun-facing
+  // slopes (facets turned away from the sun read dark between lit ones), so
+  // there the facet N.L joins the fade, blended in with the sun's height.
+  float ws = smoothstep(0.0, 0.10, ndl);
+  float wf = min(ws, smoothstep(0.0, 0.10, ndg));
+  float fade = mix(1.0, s, mix(ws, wf, smoothstep(0.55, 0.72, -L.z)));
+  // Terminator gate: below N.L ~ 0.15 the wrapped diffuse would still light a
+  // slope that faces away from or grazes the sun, brighter than the shadow fill
+  // of the cast shadows beside it. Let the shadow factor take over there (smooth
+  // normal, so it is uniform across a slope; 1 above 0.15). Only with a live map.
+  float gate = mix(1.0, smoothstep(0.0, 0.15, ndl), step(0.5, u_shadowon));
+  return fade * gate;
 }
 float shadowFactor(vec3 wpos, vec3 nrm, vec3 lightDir) {
   return shadowMapFactor(wpos, nrm, lightDir) * droneShadow(wpos, lightDir);
