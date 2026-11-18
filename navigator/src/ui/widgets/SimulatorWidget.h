@@ -25,6 +25,7 @@
 #include "vsim/SimRendererWidget.h"
 #include "vsim/ChunkStreamer.h"
 #include "vsim/procgen/Flora.h"
+#include "vsim/procgen/Vegetation.h"
 #include "vsim/RcBridge.h"
 #include "vsim/FlightEventLog.h"
 #include "GeometryEditorWidget.h"
@@ -104,6 +105,7 @@ struct LoadedMesh;
 struct BuiltChunk {
   vsim::procgen::ProcMesh mesh;     // fine, for rendering
   vsim::procgen::ProcMesh collMesh; // coarse, for the collision BVH
+  std::vector<vsim::procgen::VegInstance> veg; // trees, shrubs, rocks, grass
 };
 
 class SimulatorWidget : public QWidget {

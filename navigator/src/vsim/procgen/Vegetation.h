@@ -55,11 +55,16 @@ struct VegInstance {
   float tint = 0.0f;   // small colour variation, 0..1
 };
 
-// Nominal sizes at scale 1 [m], shared by the renderer and the colliders.
-inline constexpr float kVegTreeHeightM = 7.0f;
-inline constexpr float kVegTreeTrunkRadiusM = 0.30f;
-inline constexpr float kVegRockRadiusM = 0.8f;
-inline constexpr float kVegRockHeightM = 0.7f;
+// Sizes at instance scale 1 [m]: the single source for the renderer's species
+// table and for the colliders, so what is drawn is what is solid. Every tree
+// species is scaled to the same height, so a tree's collider height is exact
+// whichever model is drawn; rocks are scaled by their longest footprint side
+// (their height differs per model, kVegRockHeightM is the typical one).
+inline constexpr float kVegTreeHeightM = 3.6f;
+inline constexpr float kVegTreeTrunkRadiusM = 0.15f;
+inline constexpr float kVegRockSpanM = 1.3f;
+inline constexpr float kVegRockRadiusM = 0.5f * kVegRockSpanM;
+inline constexpr float kVegRockHeightM = 0.5f;
 // Rocks smaller than this scale are decoration only (no collider).
 inline constexpr float kVegRockColliderMinScale = 1.4f;
 
