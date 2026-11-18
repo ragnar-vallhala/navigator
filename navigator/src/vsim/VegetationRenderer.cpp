@@ -177,10 +177,10 @@ void main() {
     // tree seen from its shaded side is dark green, not black.
     vec3 Nf = normalize(mix(Nm, vec3(0.0, 0.0, -1.0), 0.45));
     float thru = clamp(-dot(N, sun), 0.0, 1.0);
-    L = ambientLight(Nf) * (0.55 + 0.45 * ao) * 1.5 +
+    L = ambientLit(Nf) * (0.55 + 0.45 * ao) * 1.5 +
         sunLightColor() * (wrapDiffuse(Nf, sun) * 0.95 + thru * 0.45) * sh;
   } else {
-    L = ambientLight(Nm) * ao * 1.25 + sunLightColor() * wrapDiffuse(Nm, sun) * 0.95 * sh;
+    L = ambientLit(Nm) * ao * 1.25 + sunLightColor() * wrapDiffuse(Nm, sun) * 0.95 * sh;
   }
   o_color = vec4(applyAerialPerspective(base * L, toFrag, dist), 1.0);
 }
@@ -268,7 +268,7 @@ void main() {
   vec2 hz = toFrag.xy / max(length(toFrag.xy), 1e-3);
   vec3 N = normalize(vec3(-hz * 0.45, -0.85));
   // Same foliage terms as the mesh shader (ambient floor, light through leaves).
-  vec3 L = ambientLight(N) * 1.5 + sunLightColor() * (wrapDiffuse(N, sun) * 0.95 + 0.25);
+  vec3 L = ambientLit(N) * 1.5 + sunLightColor() * (wrapDiffuse(N, sun) * 0.95 + 0.25);
   o_color = vec4(applyAerialPerspective(rgb * tintMul(v_tint) * L, toFrag, dist), 1.0);
 }
 )GLSL";

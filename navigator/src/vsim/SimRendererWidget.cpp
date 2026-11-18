@@ -137,27 +137,20 @@ uniform float u_fogstart;    // metres before fog begins
 uniform vec4 u_ringclip;     // far ring: discard inside this xy rect (x0,y0,x1,y1)
 uniform float u_sunint;      // sun-intensity look knob (matches grass)
 uniform float u_ambstr;      // ambient-strength look knob (matches grass)
-vec3 sunLightColor() { return vec3(1.04, 0.93, 0.74) * u_sunint; }  // warm golden key
+vec3 sunLightColor() { return u_suncol * u_sunint; }  // Atmosphere.h sun, look knob
 // Wrapped diffuse for a soft terminator that still shows light direction.
 float wrapDiffuse(vec3 n, vec3 sun) {
   float w = clamp(dot(n, sun) * 0.45 + 0.55, 0.0, 1.0);
   return w * w;
 }
-// Hemispheric ambient: NED up is -Z, so up-facing (n.z<0) catches sky light.
-// Cool-but-warmed overcast ambient (shadows read soft teal, not cold).
-vec3 ambientLight(vec3 n) {
-  float hemi = 0.5 + 0.5 * (-n.z);                 // 0 down .. 1 up
-  return mix(vec3(0.07, 0.09, 0.09), vec3(0.22, 0.25, 0.26),
-             clamp(hemi, 0.0, 1.0)) * u_ambstr;
-}
-// Aerial perspective: fade toward the sky behind the surface with distance,
-// so the streamed-terrain edge dissolves into haze. Needs kFogGLSL (fogAmount).
+// Atmosphere.h hemispheric ambient (ambientLight) scaled by the look knob.
+vec3 ambientLit(vec3 n) { return ambientLight(n) * u_ambstr; }
+// Aerial perspective: fade toward the horizon colour with distance, so the
+// streamed-terrain edge dissolves into haze. Needs kFogGLSL (fogAmount).
 vec3 applyAerialPerspective(vec3 lit, vec3 toFrag, float dist) {
   vec3 vdir = dist > 1e-4 ? toFrag / dist : vec3(0.0, 0.0, 1.0);
   float fog = fogAmount(u_campos, u_campos + toFrag, u_fogstart, u_fogdensity);
-  float hl = length(vdir.xy);
-  vec3 fdir = hl > 1e-4 ? vec3(vdir.xy / hl, 0.0) : vec3(1.0, 0.0, 0.0);
-  return mix(lit, skyColor(fdir), clamp(fog, 0.0, 1.0));
+  return mix(lit, fogColor(vdir), clamp(fog, 0.0, 1.0));
 }
 )GLSL";
 
