@@ -141,9 +141,10 @@ public:
   // QSettings "sim/vegetation" (default true), overridden by the environment
   // variable NAV_VEGETATION=0/1.
   static bool enabledByConfig();
-  // QSettings "sim/vegetationTrees" (default false), overridden by the
-  // environment variable NAV_VEGETATION_TREES=0/1. Trees cost the most (impostor
-  // atlas, thousands of instances) so they are opt-in.
+  // QSettings "sim/vegetationTrees" (default true), overridden by the
+  // environment variable NAV_VEGETATION_TREES=0/1 ("0", "false" and "off"
+  // disable them). Trees cost the most (impostor atlas, thousands of
+  // instances); switch them off here on a slow GPU.
   static bool treesEnabledByConfig();
   void setTreesEnabled(bool on);
   bool treesEnabled() const { return treesOn_; }
