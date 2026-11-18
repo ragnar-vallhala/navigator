@@ -2115,6 +2115,11 @@ void SimRendererWidget::setVegetationEnabled(bool on) {
   vegEnabled_ = on;
   update();
 }
+void SimRendererWidget::setVegetationTreesEnabled(bool on) {
+  if (veg_)
+    veg_->setTreesEnabled(on);
+  update();
+}
 const VegetationRenderer::Stats &SimRendererWidget::vegetationStats() const {
   static const VegetationRenderer::Stats none;
   return veg_ && vegEnabled_ ? veg_->stats() : none;

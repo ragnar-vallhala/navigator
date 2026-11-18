@@ -33,6 +33,7 @@
 #include <QApplication>
 #include <QGuiApplication>
 #include <QOpenGLContext>
+#include <QStandardPaths>
 #include <QSurfaceFormat>
 #include <QVBoxLayout>
 #include <QtTest>
@@ -149,11 +150,12 @@ double changedFraction(const QImage &a, const QImage &b) {
 struct Rig {
   QWidget host;
   SimRendererWidget *r = nullptr;
-  Rig() {
+  explicit Rig(bool trees = false) {
     auto *lay = new QVBoxLayout(&host);
     lay->setContentsMargins(0, 0, 0, 0);
     r = new SimRendererWidget;
     r->setGlErrorCheck(true);
+    r->setVegetationTreesEnabled(trees); // opt-in, like the app's setting
     auto *box = QWidget::createWindowContainer(r, &host);
     box->setFixedSize(800, 500);
     lay->addWidget(box);
@@ -171,6 +173,8 @@ class TstVegetationRender : public QObject {
 private slots:
   void initTestCase() {
     qputenv("NAV_VEGETATION", "1");
+    qunsetenv("NAV_VEGETATION_TREES"); // the default: trees off
+    QStandardPaths::setTestModeEnabled(true); // no stored sim/vegetationTrees
     if (QGuiApplication::platformName() == "offscreen")
       QSKIP("the GL view needs a real platform: set QT_QPA_PLATFORM=xcb, DISPLAY "
             "to an Xvfb and LIBGL_ALWAYS_SOFTWARE=1");
@@ -228,7 +232,7 @@ private slots:
           totalInstances(yard));
     QVERIFY(totalInstances(forest) > 2000);
     QVERIFY(totalInstances(yard) * 20 < totalInstances(forest));
-    Rig rig;
+    Rig rig(true);
     loadVegetation(rig.r, forest);
     QCOMPARE(rig.r->vegetationInstanceCount(), totalInstances(forest));
     rig.r->removeWorldChunk(forest.keys[0]); // vegetation leaves with its chunk
@@ -238,18 +242,51 @@ private slots:
     QCOMPARE(rig.r->vegetationInstanceCount(), size_t(0));
   }
 
+  // The default: trees are off, so a forest palette still gets shrubs, ground
+  // plants, grass tufts and rocks, but no tree instances, impostors or atlas.
+  void defaultHasNoTreesButGroundCover() {
+    const World forest = buildWorld(kPalForest, -1, 0);
+    Rig rig; // trees off
+    QVERIFY(!rig.r->vegetationTreesEnabled());
+    loadTerrain(rig.r, forest);
+    loadVegetation(rig.r, forest);
+    QCOMPARE(rig.r->vegetationInstanceCount(int(kVegTree)), size_t(0));
+    QVERIFY(rig.r->vegetationInstanceCount(int(kVegBush)) > 100);
+    QVERIFY(rig.r->vegetationInstanceCount(int(kVegGrassClump)) > 1000);
+    QVERIFY(rig.r->vegetationInstanceCount(int(kVegRock)) > 0);
+    QVERIFY(rig.show());
+    aimCamera(rig.r, forest, -60.0f, -60.0f, 3.0f, 0.8f, 0.12f);
+    const QImage img = settledFrame(rig.r);
+    const VegetationRenderer::Stats st = rig.r->vegetationStats();
+    qInfo("default: %d instances drawn, %d billboards, %d baked variants", st.instancesDrawn,
+          st.impostors, st.impostorVariants);
+    QVERIFY(st.instancesDrawn > 50);
+    QCOMPARE(st.impostors, 0);
+    QCOMPARE(st.impostorVariants, 0);
+    QVERIFY(distinctColours(img) > 40);
+    QCOMPARE(rig.r->glErrorCount(), 0);
+    rig.r->setVegetationTreesEnabled(true); // switching them on adds the trees
+    QVERIFY(rig.r->vegetationInstanceCount(int(kVegTree)) > 100);
+  }
+
   void envOverridesSetting() {
     qputenv("NAV_VEGETATION", "0");
     QVERIFY(!VegetationRenderer::enabledByConfig());
     qputenv("NAV_VEGETATION", "1");
     QVERIFY(VegetationRenderer::enabledByConfig());
+    QVERIFY(!VegetationRenderer::treesEnabledByConfig());
+    qputenv("NAV_VEGETATION_TREES", "1");
+    QVERIFY(VegetationRenderer::treesEnabledByConfig());
+    qputenv("NAV_VEGETATION_TREES", "0");
+    QVERIFY(!VegetationRenderer::treesEnabledByConfig());
+    qunsetenv("NAV_VEGETATION_TREES");
   }
 
   // Forest scene near the ground: vegetation ON differs from OFF, neither is
   // blank, and what was drawn is accounted for.
   void forestOnDiffersFromOff() {
     const World forest = buildWorld(kPalForest, -1, 0);
-    Rig rig;
+    Rig rig(true);
     loadTerrain(rig.r, forest);
     loadVegetation(rig.r, forest);
     QVERIFY(rig.show());
@@ -277,7 +314,7 @@ private slots:
   // can bake the atlas), and the frame stays valid.
   void farTreesBecomeBillboards() {
     const World forest = buildWorld(kPalForest, -2, 1);
-    Rig rig;
+    Rig rig(true);
     loadTerrain(rig.r, forest);
     loadVegetation(rig.r, forest);
     QVERIFY(rig.show());
@@ -299,7 +336,7 @@ private slots:
   // instance lists, draws the same and leaks nothing.
   void teardownAndRebuild() {
     const World forest = buildWorld(kPalForest, -1, 0);
-    Rig rig;
+    Rig rig(true);
     loadTerrain(rig.r, forest);
     loadVegetation(rig.r, forest);
     QVERIFY(rig.show());

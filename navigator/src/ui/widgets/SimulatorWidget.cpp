@@ -1147,6 +1147,8 @@ void SimulatorWidget::onStreamTick() {
         vsim::procgen::vegParamsForPalette(
             m_chunkStreamer.config().field.palette));
     vp->seed = m_chunkStreamer.config().field.seed ^ 0x5bd1e995u;
+    if (!m_renderer->vegetationTreesEnabled())
+      vp->of(vsim::procgen::kVegTree).density = 0.0f; // trees are opt-in
     vp->exclusions = vsim::vegExclusionsFor(
         m_helipads, m_worldEditor->config().obstacles);
     vegParams = std::move(vp);

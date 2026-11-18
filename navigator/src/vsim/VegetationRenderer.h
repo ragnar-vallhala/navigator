@@ -97,6 +97,8 @@ struct VegSpeciesInfo {
   bool impostor;             // gets a baked billboard beyond LOD2
 };
 const VegSpeciesInfo *vegSpeciesTable(int *count);
+// Model units to metres at instance scale 1 for one variant of a species.
+float vegUnitScale(const VegSpeciesInfo &info, const VegVariant &v);
 
 // What to draw at distance d: up to two entries (a cross-fade), lod 0..2 = mesh
 // LOD, 3 = impostor. fade encodes the dither test (see the shader): in (0,1]
@@ -122,6 +124,12 @@ public:
   // QSettings "sim/vegetation" (default true), overridden by the environment
   // variable NAV_VEGETATION=0/1.
   static bool enabledByConfig();
+  // QSettings "sim/vegetationTrees" (default false), overridden by the
+  // environment variable NAV_VEGETATION_TREES=0/1. Trees cost the most (impostor
+  // atlas, thousands of instances) so they are opt-in.
+  static bool treesEnabledByConfig();
+  void setTreesEnabled(bool on);
+  bool treesEnabled() const { return treesOn_; }
 
   // Chunk instance lists. CPU only, no GL needed; call on the GUI thread.
   // (cx, cy) is the chunk centre and half its side, world metres.
@@ -132,7 +140,8 @@ public:
   // Drops the stored instances that fall inside any of `ex` (a pad or obstacle
   // that became known after a chunk was scattered).
   void exclude(const std::vector<procgen::VegExclusion> &ex);
-  size_t instanceCount() const; // stored, over every chunk
+  size_t instanceCount() const; // stored, over every chunk, trees only when on
+  size_t instanceCount(int species) const; // one procgen::VegSpecies
   size_t chunkCount() const { return chunks_.size(); }
 
   // The GL context is current for all of these.
@@ -224,7 +233,7 @@ private:
     int bakeMvp = -1;
   } loc_;
   unsigned atlasTex_ = 0, atlasFbo_ = 0, atlasDepth_ = 0;
-  bool atlasOk_ = false, glReady_ = false;
+  bool atlasOk_ = false, glReady_ = false, atlasTried_ = false, treesOn_ = false;
   float maxAniso_ = 1.0f;
   int speciesUploadBudget_ = 0;
   std::vector<std::vector<float>> buckets_; // variant*4 + lod

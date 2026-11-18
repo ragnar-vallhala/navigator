@@ -305,11 +305,21 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
       ${SRC}/vsim/procgen/TerrainField.cpp ${SRC}/vsim/procgen/GroundCover.cpp)
   target_link_libraries(tst_sim_gl_context PRIVATE navigator_vegetation)
 
+  # Colliders match the rendered size (no GL context needed).
+  navigator_test(tst_vegetation_scale
+      tst_vegetation_scale.cpp
+      ${SRC}/vsim/VegetationRenderer.cpp
+      ${SRC}/vsim/procgen/Vegetation.cpp ${SRC}/vsim/procgen/Noise.cpp
+      ${SRC}/vsim/procgen/TerrainField.cpp ${SRC}/vsim/procgen/GroundCover.cpp)
+  target_include_directories(tst_vegetation_scale PRIVATE ${SRC}/vsim)
+  target_link_libraries(tst_vegetation_scale PRIVATE Qt6::OpenGL navigator_vegetation)
+
   # ---- Vegetation renderer in the real 3D view (xvfb software GL) -----------
   # Forest scene with vegetation on vs off, instance counts per palette, LOD
   # selection, billboards, GL teardown. Skips on the offscreen platform.
   navigator_test(tst_vegetation_render
       tst_vegetation_render.cpp
+      ${SRC}/vsim/FarTerrain.cpp ${SRC}/vsim/FarTerrain.h
       ${SRC}/vsim/SimRendererWidget.cpp ${SRC}/vsim/SimRendererWidget.h
       ${SRC}/vsim/VegetationRenderer.cpp
       ${SRC}/ui/widgets/SimHudWidget.cpp ${SRC}/ui/widgets/SimHudWidget.h

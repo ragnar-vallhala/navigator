@@ -42,16 +42,16 @@ constexpr float kLodBand = 0.07f;  // cross-fade half width, fraction of the edg
 // distance otherwise). Fog is nearly opaque by ~500 m, so nothing goes farther.
 const VegSpeciesInfo kTable[] = {
     // id                       cat            size  span   lod ends         max   fb    sway  imp
-    {"fir_sapling",             procgen::kVegTree,  3.2f, false, {40, 90, 150}, 520, 250, 0.020f, true},
-    {"pine_sapling_small",      procgen::kVegTree,  3.0f, false, {40, 90, 150}, 520, 250, 0.020f, true},
-    {"island_tree_02",          procgen::kVegTree,  3.8f, false, {40, 90, 150}, 520, 250, 0.015f, true},
+    {"fir_sapling",             procgen::kVegTree,  procgen::kVegTreeHeightM, false, {40, 90, 150}, 520, 250, 0.020f, true},
+    {"pine_sapling_small",      procgen::kVegTree,  procgen::kVegTreeHeightM, false, {40, 90, 150}, 520, 250, 0.020f, true},
+    {"island_tree_02",          procgen::kVegTree,  procgen::kVegTreeHeightM, false, {40, 90, 150}, 520, 250, 0.015f, true},
     {"shrub_03",                procgen::kVegBush,  1.0f, false, {25, 60, 110}, 170, 170, 0.030f, false},
     {"shrub_04",                procgen::kVegBush,  1.3f, true,  {25, 60, 110}, 170, 170, 0.030f, false},
     {"weed_plant_02",           procgen::kVegBush,  0.8f, true,  {20, 45, 80},  110, 110, 0.050f, false},
     {"grass_bermuda_01",        procgen::kVegGrassClump, 0.40f, false, {15, 35, 60}, 85, 85, 0.120f, false},
-    {"rock_09",                 procgen::kVegRock,  1.3f, true,  {40, 90, 150}, 260, 260, 0.0f, false},
-    {"rock_07",                 procgen::kVegRock,  1.3f, true,  {40, 90, 150}, 260, 260, 0.0f, false},
-    {"namaqualand_boulders_01", procgen::kVegRock,  1.3f, true,  {40, 90, 150}, 260, 260, 0.0f, false},
+    {"rock_09",                 procgen::kVegRock,  procgen::kVegRockSpanM, true,  {40, 90, 150}, 260, 260, 0.0f, false},
+    {"rock_07",                 procgen::kVegRock,  procgen::kVegRockSpanM, true,  {40, 90, 150}, 260, 260, 0.0f, false},
+    {"namaqualand_boulders_01", procgen::kVegRock,  procgen::kVegRockSpanM, true,  {40, 90, 150}, 260, 260, 0.0f, false},
 };
 constexpr int kTableN = int(sizeof(kTable) / sizeof(kTable[0]));
 
@@ -379,6 +379,11 @@ const VegSpeciesInfo *vegSpeciesTable(int *count) {
   return kTable;
 }
 
+float vegUnitScale(const VegSpeciesInfo &info, const VegVariant &v) {
+  const float basis = info.bySpan ? std::max(v.footprintX, v.footprintZ) : v.nominalHeight;
+  return basis > 1e-5f ? info.targetSize / basis : 1.0f;
+}
+
 VegLodChoice vegChooseLod(const VegSpeciesInfo &s, float d, bool impostorReady) {
   VegLodChoice c;
   const bool bill = s.impostor && impostorReady;
@@ -439,7 +444,33 @@ bool VegetationRenderer::enabledByConfig() {
   return s.value("sim/vegetation", true).toBool();
 }
 
-VegetationRenderer::VegetationRenderer() = default;
+bool VegetationRenderer::treesEnabledByConfig() {
+  const QByteArray env = qgetenv("NAV_VEGETATION_TREES");
+  if (!env.isEmpty())
+    return env != "0" && env.toLower() != "false" && env.toLower() != "off";
+  QSettings s;
+  return s.value("sim/vegetationTrees", false).toBool();
+}
+
+VegetationRenderer::VegetationRenderer() : treesOn_(treesEnabledByConfig()) {}
+
+void VegetationRenderer::setTreesEnabled(bool on) {
+  if (on == treesOn_)
+    return;
+  treesOn_ = on;
+  for (auto &kv : chunks_) // re-resolve with / without the trees
+    kv.second.resolved = false;
+}
+
+size_t VegetationRenderer::instanceCount(int species) const {
+  size_t n = 0;
+  if (species == procgen::kVegTree && !treesOn_)
+    return 0;
+  for (const auto &kv : chunks_)
+    for (const procgen::VegInstance &v : kv.second.src)
+      n += v.species == species ? 1 : 0;
+  return n;
+}
 
 VegetationRenderer::~VegetationRenderer() {
   if (assetsLoad_.valid())
@@ -524,7 +555,8 @@ void VegetationRenderer::exclude(const std::vector<procgen::VegExclusion> &ex) {
 size_t VegetationRenderer::instanceCount() const {
   size_t n = 0;
   for (const auto &kv : chunks_)
-    n += kv.second.src.size();
+    for (const procgen::VegInstance &v : kv.second.src)
+      n += (treesOn_ || v.species != procgen::kVegTree) ? 1 : 0;
   return n;
 }
 
@@ -548,6 +580,8 @@ void VegetationRenderer::resolve(Chunk &c) {
   c.recs.clear();
   c.recs.reserve(c.src.size());
   for (const procgen::VegInstance &v : c.src) {
+    if (v.species == procgen::kVegTree && !treesOn_)
+      continue; // trees are off: no instance, impostor or atlas bake for them
     int info = -1;
     const int flat = variantFor(v, &info);
     if (flat < 0)
@@ -672,16 +706,7 @@ bool VegetationRenderer::initGL(const VegGlsl &glsl) {
   maxAniso_ = 1.0f;
   if (QOpenGLContext::currentContext()->hasExtension("GL_EXT_texture_filter_anisotropic"))
     glGetFloatv(0x84FF /* GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT */, &maxAniso_);
-  atlasOk_ = buildAtlas();
-  if (!atlasOk_) {
-    if (atlasFbo_)
-      glDeleteFramebuffers(1, &atlasFbo_);
-    if (atlasDepth_)
-      glDeleteRenderbuffers(1, &atlasDepth_);
-    if (atlasTex_)
-      glDeleteTextures(1, &atlasTex_);
-    atlasFbo_ = atlasDepth_ = atlasTex_ = 0;
-  }
+  atlasTried_ = false; // the impostor atlas is built when trees are first drawn
   glReady_ = true;
   return true;
 }
@@ -739,6 +764,7 @@ void VegetationRenderer::releaseGL() {
     glDeleteTextures(1, &atlasTex_);
   atlasFbo_ = atlasDepth_ = atlasTex_ = 0;
   atlasOk_ = false;
+  atlasTried_ = false;
   prog_.reset();
   progBillboard_.reset();
   progBake_.reset();
@@ -1079,9 +1105,7 @@ void VegetationRenderer::draw(const VegFrame &f) {
           v.species = int(si);
           v.variant = int(vi);
           v.info = row;
-          const float span = std::max(av.footprintX, av.footprintZ);
-          const float basis = info.bySpan ? span : av.nominalHeight;
-          v.k = basis > 1e-5f ? info.targetSize / basis : 1.0f;
+          v.k = vegUnitScale(info, av);
           v.height = std::max(av.nominalHeight, 1e-4f);
           const QVector3D ext = av.bboxMax - av.bboxMin;
           v.radius = 0.5f * ext.length();
@@ -1182,6 +1206,19 @@ void VegetationRenderer::draw(const VegFrame &f) {
     }
   }
 
+  if (treesOn_ && !atlasTried_) {
+    atlasTried_ = true;
+    atlasOk_ = buildAtlas();
+    if (!atlasOk_) {
+      if (atlasFbo_)
+        glDeleteFramebuffers(1, &atlasFbo_);
+      if (atlasDepth_)
+        glDeleteRenderbuffers(1, &atlasDepth_);
+      if (atlasTex_)
+        glDeleteTextures(1, &atlasTex_);
+      atlasFbo_ = atlasDepth_ = atlasTex_ = 0;
+    }
+  }
   // Bake what is needed (a few per frame): variants seen at LOD2 range.
   int bakes = 2;
   if (atlasOk_)

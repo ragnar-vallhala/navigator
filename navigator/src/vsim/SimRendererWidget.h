@@ -174,6 +174,10 @@ public:
   void clearChunkVegetation();
   void setVegetationEnabled(bool on);
   bool vegetationEnabled() const { return vegEnabled_; }
+  // Trees are a separate opt-in (QSettings sim/vegetationTrees, NAV_VEGETATION_TREES).
+  void setVegetationTreesEnabled(bool on);
+  bool vegetationTreesEnabled() const { return veg_ && veg_->treesEnabled(); }
+  size_t vegetationInstanceCount(int species) const { return veg_ ? veg_->instanceCount(species) : 0; }
   size_t vegetationInstanceCount() const { return veg_ ? veg_->instanceCount() : 0; }
   // What the last frame drew; and whether textures/impostors are still loading.
   const VegetationRenderer::Stats &vegetationStats() const;
