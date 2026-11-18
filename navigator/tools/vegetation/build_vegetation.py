@@ -91,27 +91,33 @@ BIG_CONIFER = (32000, 7000, 1200)
 BIG_BROADLEAF = (36000, 7000, 1200)
 
 SPECIES = [
+    # Conifers are built, not decimated: a tapered trunk plus tiers of needle
+    # cards cut from the model's own twig texture (see card_conifer_mesh).
     dict(id='fir_tree_01', gltf='fir_tree_01_1k.gltf', category='tree',
-         title='Fir tree 01 (conifer)',
-         # variant c is not shipped: its trunk mesh has no UV coordinates
-         variants=['fir_tree_01_a_LOD0', 'fir_tree_01_b_LOD0'],
-         budget=lod_budgets(BIG_CONIFER), pivot='base',
-         mats={'fir_tree_01_bark': dict(weight=0.05, cutout=False, cull=False, size=512),
-               'fir_tree_01_trunk_a': dict(weight=0.03, cutout=False, cull=False, size=512),
-               'fir_tree_01_trunk_b': dict(weight=0.03, cutout=False, cull=False, size=512),
-               'fir_tree_01_twig': dict(weight=0.86, cutout=True, cull=True, size=1024,
-                                        scale_cap=(8.0, 11.0, 16.0), tris_per_comp=4, struct_budget=0.1, uv_shrink=0.2)}),
+         title='Fir (card conifer, Poly Haven fir_tree_01 textures)',
+         cards=dict(bark='fir_tree_01_bark', twig='fir_tree_01_twig', key='hp', thick=2.6,
+                    crop=(335, 385, 655, 785), grade=(0.55, 0.80, 0.90),
+                    variants=[
+                        dict(H=16.0, tiers=(10, 7, 5), cards=(16, 12, 8), y0=0.10, R=3.4, len=1.25,
+                             wid=1.2, droop=(34, 20), r0=0.17, r1=0.03),
+                        dict(H=16.0, tiers=(8, 6, 4), cards=(16, 12, 8), y0=0.14, R=3.0, len=1.3,
+                             wid=1.25, droop=(38, 22), r0=0.17, r1=0.03)])),
     dict(id='pine_sapling_medium', gltf='pine_sapling_medium_1k.gltf', category='tree',
-         title='Pine (medium, conifer)',
-         variants=['pine_sapling_medium_a_LOD0', 'pine_sapling_medium_b_LOD0',
-                   'pine_sapling_medium_c_LOD0'],
-         budget=lod_budgets(BIG_CONIFER), pivot='base',
-         mats={'pine_sapling_medium_bark': dict(weight=0.08, cutout=False, cull=False, size=512),
-               'pine_sapling_medium_twig': dict(weight=0.92, cutout=True, cull=True, size=1024,
-                                                scale_cap=(10.0, 14.0, 20.0), tris_per_comp=4, struct_budget=0.1, uv_shrink=0.2,
-                                                fill=1.8)}),
+         title='Pine (card conifer, Poly Haven pine_sapling_medium textures)',
+         cards=dict(bark='pine_sapling_medium_bark', twig='pine_sapling_medium_twig', key='black',
+                    crop=(30, 40, 235, 455), grade=(0.55, 0.78, 0.86), thick=1.6,
+                    variants=[
+                        dict(H=12.0, tiers=(7, 5, 4), cards=(14, 10, 7), y0=0.30, R=3.5, len=1.3,
+                             wid=1.4, droop=(24, 12), r0=0.25, r1=0.05),
+                        dict(H=12.0, tiers=(6, 5, 3), cards=(14, 10, 7), y0=0.26, R=3.1, len=1.3,
+                             wid=1.4, droop=(28, 14), r0=0.25, r1=0.05),
+                        dict(H=12.0, tiers=(8, 6, 4), cards=(14, 10, 7), y0=0.36, R=3.8, len=1.3,
+                             wid=1.4, droop=(22, 10), r0=0.25, r1=0.05)])),
     dict(id='jacaranda_tree', gltf='jacaranda_tree_1k.gltf', category='tree',
-         title='Jacaranda tree (broadleaf)', variants=['jacaranda_tree_LOD0'], pivot='base',
+         title='Jacaranda tree (broadleaf)', pivot='base',
+         variants=['jacaranda_tree_LOD0', 'jacaranda_tree_LOD0_wide'],
+         # the second variant is the same model turned and reproportioned
+         derive={'jacaranda_tree_LOD0_wide': dict(src='jacaranda_tree_LOD0', rot=2.4, sx=1.16, sy=0.86, sz=0.92)},
          budget=lod_budgets(BIG_BROADLEAF),
          mats={'jacaranda_tree_trunk': dict(weight=0.08, cutout=False, cull=False, size=512),
                'jacaranda_tree_leaves': dict(weight=0.82, cutout=True, key_black=True, cull=True,
@@ -119,7 +125,9 @@ SPECIES = [
                'jacaranda_tree_branches': dict(weight=0.10, cutout=False, cull=True, size=512,
                                                scale_cap=(2.0, 2.5, 3.0), tris_per_comp=12)}),
     dict(id='island_tree_01', gltf='island_tree_01_1k.gltf', category='tree',
-         title='Island tree 01 (broadleaf)', variants=['island_tree_01_LOD0'], pivot='base',
+         title='Island tree 01 (broadleaf)', pivot='base',
+         variants=['island_tree_01_LOD0', 'island_tree_01_LOD0_slim'],
+         derive={'island_tree_01_LOD0_slim': dict(src='island_tree_01_LOD0', rot=1.9, sx=0.88, sy=1.1, sz=1.08)},
          budget=lod_budgets(BIG_BROADLEAF),
          mats={'island_tree_01': dict(weight=0.10, cutout=False, cull=False, size=512),
                'island_tree_01_leaves': dict(weight=0.78, cutout=True, key_black=True, cull=True,
@@ -641,12 +649,239 @@ def write_vmesh(path, subs):
     return len(V), len(I) // 3, [float(x) for x in bb]
 
 
+# ---------------------------------------------------------------------------
+# Card conifers: a trunk plus tiers of needle-branch cards
+# ---------------------------------------------------------------------------
+
+def box_blur(x, r):
+    k = 2 * r + 1
+    pd = np.pad(x, r, mode='edge')
+    c = np.pad(np.cumsum(np.cumsum(pd, 0), 1), ((1, 0), (1, 0)))
+    return (c[k:, k:] - c[:-k, k:] - c[k:, :-k] + c[:-k, :-k]) / (k * k)
+
+
+def sprig_card_textures(raw_dir, info, cfg, out_prefix, size):
+    """Cut one needle sprig out of a Poly Haven twig atlas into a square card
+    texture (diffuse, normal, ARM, alpha) and grade it.  Returns file names,
+    coverage and the mean linear luminance of the covered pixels."""
+    def load(rel):
+        return np.asarray(Image.open(safe_join(raw_dir, rel)).convert('RGB'), np.float32) / 255.0
+    d, n, r = load(info['base']), load(info['normal']), load(info['arm'])
+    f = d.shape[0] / 1024.0
+    x0, y0, x1, y1 = [int(round(v * f)) for v in cfg['crop']]
+    d, n, r = d[y0:y1, x0:x1], n[y0:y1, x0:x1], r[y0:y1, x0:x1]
+    if cfg['key'] == 'black':
+        a = np.clip((d.max(2) * 255.0 - 12.0) / 24.0, 0, 1)
+    else:
+        lum = d @ np.array([0.2126, 0.7152, 0.0722], np.float32)
+        a = np.clip((box_blur(lum, int(round(12 * f))) - lum - cfg.get('hp', 0.015)) / 0.05, 0, 1)
+    # thicken the needles a little: at card size they are about a pixel wide
+    a = np.clip(box_blur(a, 1) * cfg.get('thick', 2.2), 0, 1)
+    # keep only the sprig that holds the stem (the atlas has neighbours and
+    # stretched fill around it): grow from the stem's foot through near pixels
+    cand = a > 0.3
+    rows = np.arange(a.shape[0] * 3 // 4, a.shape[0])
+    ys, xs = np.nonzero(a[rows[0]:] > 0.5)
+    k = np.argmin(np.abs(xs - a.shape[1] // 2) + 0.2 * np.abs(ys))
+    m = np.zeros(a.shape, bool)
+    m[rows[0] + ys[k], xs[k]] = True
+    while True:
+        g = m.copy()
+        for dy in (-3, 0, 3):
+            for dx in (-3, 0, 3):
+                g |= np.roll(m, (dy, dx), (0, 1))
+        g &= cand
+        if (g == m).all():
+            break
+        m = g
+    a = a * (box_blur(m.astype(np.float32), 3) > 0.02)
+    side = max(a.shape)
+    ph, pw = (side - a.shape[0]), (side - a.shape[1])
+    pad = ((ph // 2, ph - ph // 2), (pw // 2, pw - pw // 2))
+    a = np.pad(a, pad)
+    d = flood_background(np.pad(d, pad + ((0, 0),)), a > 0.5)
+    n = flood_background(np.pad(n, pad + ((0, 0),), constant_values=0.5), a > 0.5)
+    r = flood_background(np.pad(r, pad + ((0, 0),), constant_values=0.5), a > 0.5)
+    lin = srgb_to_lin(d) * np.array(cfg['grade'], np.float32)
+    lin = resize_box(lin.astype(np.float32), size)
+    a8 = np.asarray(Image.fromarray(np.round(a * 255).astype(np.uint8), 'L').resize((size, size), Image.BOX))
+    cov = a8 > 127
+    lum = float((lin[cov] @ np.array([0.2126, 0.7152, 0.0722])).mean())
+    save_jpg(lin_to_srgb(lin), out_prefix + '_diff.jpg', 2)
+    v = resize_box(n * 2 - 1, size)
+    v /= np.maximum(np.linalg.norm(v, axis=2, keepdims=True), 1e-6)
+    save_jpg(v * 0.5 + 0.5, out_prefix + '_nor.jpg', 0)
+    rr = resize_box(r, size)
+    rr[..., 2] = 0
+    save_jpg(rr, out_prefix + '_arm.jpg', 0)
+    alpha_file = os.path.basename(out_prefix) + '_alpha.png'
+    Image.fromarray(a8, 'L').save(out_prefix + '_alpha.png', optimize=True)
+    return ([os.path.basename(out_prefix + s) for s in ('_diff.jpg', '_nor.jpg', '_arm.jpg')],
+            alpha_file, float(cov.mean()), lum)
+
+
+def card_conifer_mesh(cv, lod, rng):
+    """One card conifer (glTF frame, y up, base at the origin).  Returns
+    ((trunk P, N, UV, T), (card P, N, UV, T), tier count)."""
+    H = cv['H']
+    ntier = cv['tiers'][lod]
+    ncard = cv['cards'][lod]
+    nalong = (2, 1, 1)[lod]
+    sides = (8, 6, 4)[lod]
+    y_lo, y_hi = cv['y0'] * H, 0.93 * H
+    r0, r1 = cv['r0'], cv['r1']
+
+    def trunk_r(y):
+        return r0 + (r1 - r0) * (y / H) ** 0.6
+
+    # trunk: tapered prism, v tiles every 2 m
+    rings = (5, 3, 2)[lod]
+    TP, TN, TU, TT = [], [], [], []
+    for i in range(rings + 1):
+        y = H * 0.72 * i / rings
+        for k in range(sides + 1):
+            a = 2 * np.pi * k / sides
+            TP.append((trunk_r(y) * np.cos(a), y, trunk_r(y) * np.sin(a)))
+            TN.append((np.cos(a), 0.0, np.sin(a)))
+            TU.append((2.0 * k / sides, 1.0 - y / 2.0))
+    for i in range(rings):
+        for k in range(sides):
+            a = i * (sides + 1) + k
+            TT += [(a, a + 1, a + sides + 1), (a + 1, a + sides + 2, a + sides + 1)]
+    trunk = (np.array(TP, np.float64), np.array(TN, np.float64), np.array(TU, np.float64),
+             np.array(TT, np.int64))
+
+    P, N, UV, T = [], [], [], []
+
+    def add_card(root, out, up_n, L, W, droop, sag, nalong):
+        # root: 3-vector; out: unit horizontal direction; the card hangs along
+        # `out`, drooping by `droop` (slope) and sagging `sag` toward its sides
+        perp = np.array([-out[2], 0.0, out[0]])
+        base = len(P)
+        for i in range(nalong + 1):
+            s = i / nalong
+            c = root + out * (s * L) + np.array([0.0, -droop * s * L, 0.0])
+            for t in (-1.0, 0.0, 1.0):
+                q = c + perp * (t * 0.5 * W) + np.array([0.0, -sag * L * abs(t) * s, 0.0])
+                q[1] = max(q[1], 0.4)    # no card hangs into the ground
+                P.append(q)
+                N.append(up_n)
+                UV.append((0.5 + 0.5 * t, 1.0 - s))
+        for i in range(nalong):
+            for k in range(2):
+                a = base + i * 3 + k
+                T.append((a, a + 1, a + 4))
+                T.append((a + 1, a + 5, a + 4))
+
+    for j in range(ntier):
+        t = j / max(ntier - 1, 1)
+        y = y_lo + (y_hi - y_lo) * t
+        R = cv["R"] * (1.0 - t * 0.9) ** cv.get("taper", 1.0) + 0.55
+        # coarser LODs have fewer, so larger, cards: the crown keeps its mass
+        fill = min((cv['cards'][0] / ncard) ** 0.5 * (cv['tiers'][0] / ntier) ** 0.3, 1.8)
+        L = R * cv['len'] * fill ** 0.5
+        W = R * cv['len'] * cv['wid'] * fill * 1.1
+        droop = np.tan(np.radians(cv['droop'][0] + (cv['droop'][1] - cv['droop'][0]) * t))
+        off = rng.uniform(0, 2 * np.pi)
+        for k in range(ncard):
+            th = off + 2 * np.pi * (k + 0.5 * (j % 2) + rng.uniform(-0.18, 0.18)) / ncard
+            out = np.array([np.cos(th), 0.0, np.sin(th)])
+            lj = L * rng.uniform(0.88, 1.12)
+            yj = y + rng.uniform(-0.04, 0.04) * H
+            root = out * (trunk_r(yj) * 0.6) + np.array([0.0, yj, 0.0])
+            un = out * 0.45 + np.array([0.0, 0.9, 0.0])
+            add_card(root, out, un / np.linalg.norm(un), lj, W * lj / L, droop, 0.14, nalong)
+    # leader: two crossed upright cards
+    for ph in (0.0, np.pi / 2):
+        out = np.array([np.cos(ph), 0.0, np.sin(ph)])
+        perp = np.array([-out[2], 0.0, out[0]])
+        base = len(P)
+        Lh = 0.11 * H * cv['len'] / 1.1
+        for i, s in enumerate((0.0, 1.0)):
+            for t in (-1.0, 1.0):
+                P.append(np.array([0.0, y_hi - 0.02 * H + s * Lh, 0.0]) + perp * (t * 0.5 * Lh * 0.7))
+                N.append(np.array([out[0] * 0.5, 0.8, out[2] * 0.5]))
+                UV.append((0.5 + 0.5 * t, 1.0 - s))
+        T += [(base, base + 1, base + 2), (base + 1, base + 3, base + 2)]
+    cardm = (np.array(P, np.float64), np.array(N, np.float64) / np.linalg.norm(np.array(N), axis=1, keepdims=True),
+             np.array(UV, np.float64), np.array(T, np.int64))
+    return trunk, cardm, ntier
+
+
+def process_card_species(sp, raw_dir, out_dir, log):
+    sid = sp['id']
+    mdir = safe_join(raw_dir, sid)
+    g = Gltf(mdir, sp['gltf'])
+    odir = os.path.join(out_dir, sid)
+    os.makedirs(odir, exist_ok=True)
+    minfo = {}
+    for mi in range(len(g.j['materials'])):
+        inf = g.material_info(mi)
+        minfo[inf['name']] = inf
+    cfg = sp['cards']
+    # material 0: bark (the source model's, opaque); material 1: the needle card
+    bark = cfg['bark']
+    bfiles = process_textures(mdir, minfo[bark], os.path.join(odir, bark), 512, None)
+    nfiles, alpha_file, cov, lum = sprig_card_textures(
+        mdir, minfo[cfg['twig']], cfg, os.path.join(odir, sid + '_needles'), 512)
+    log('  needle card: coverage %.3f, mean luminance %.4f' % (cov, lum))
+    materials = [
+        dict(name=bark, diffuse=bfiles[0], normal=bfiles[1], arm=bfiles[2], alpha=None,
+             alphaMode='OPAQUE', alphaCutoff=None, sourceAlphaMode='OPAQUE', doubleSided=True,
+             wrap='repeat', textureSize=512, alphaCoverage=None),
+        dict(name=sid + '_needles', diffuse=nfiles[0], normal=nfiles[1], arm=nfiles[2],
+             alpha=alpha_file, alphaMode='MASK', alphaCutoff=0.5, sourceAlphaMode='BLEND',
+             doubleSided=True, wrap='repeat', textureSize=512, alphaCoverage=cov,
+             meanLuminance=round(lum, 4))]
+    variants = []
+    for vi, cv in enumerate(cfg['variants']):
+        vname = '%s_card_%s' % (sid, 'abcdefgh'[vi])
+        lod_rows = []
+        for lod in range(LODS):
+            rng = np.random.default_rng(zlib.crc32(vname.encode()))   # same layout on every LOD
+            trunk, cardm, ntier = card_conifer_mesh(cv, lod, rng)
+            subs = [(0,) + tuple(trunk), (1,) + tuple(cardm)]
+            fn = '%s_lod%d.vmesh' % (vname, lod)
+            nv, nt, bb = write_vmesh(os.path.join(odir, fn), subs)
+            lod_rows.append(dict(file=fn, triangles=nt, vertices=nv, tiers=ntier,
+                                 bboxMin=bb[:3], bboxMax=bb[3:]))
+            log('  %s lod%d: %d tiers, %d tris' % (vname, lod, ntier, nt))
+        b0 = lod_rows[0]
+        variants.append(dict(
+            name=vname, sourceTriangles=0, lods=lod_rows,
+            bboxMin=b0['bboxMin'], bboxMax=b0['bboxMax'],
+            nominalHeight=round(b0['bboxMax'][1], 4),
+            trunkRadius=round(cv['r0'] + (cv['r1'] - cv['r0']) * (1.0 / cv['H']) ** 0.6, 4),
+            footprint=[round(b0['bboxMax'][0] - b0['bboxMin'][0], 4),
+                       round(b0['bboxMax'][2] - b0['bboxMin'][2], 4)]))
+    info = read_info(raw_dir, sid)
+    return dict(id=sid, title=sp['title'], category=sp['category'], directory=sid,
+                source='https://polyhaven.com/a/' + sid, license='CC0',
+                authors=info.get('authors'), materials=materials, variants=variants)
+
+
+def derive_prims(prims, d):
+    """A derived variant of a source mesh: yaw, anisotropic scale, same textures."""
+    c, s = np.cos(d['rot']), np.sin(d['rot'])
+    R = np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
+    S = np.array([d['sx'], d['sy'], d['sz']])
+    out = []
+    for pr in prims:
+        q = dict(pr)
+        q['P'] = (pr['P'] @ R.T) * S
+        q['N'] = pr['N'] @ R.T
+        out.append(q)
+    return out
+
+
 def read_info(raw_dir, sid):
     with open(safe_join(raw_dir, sid + '/info_api.json'), 'r', encoding='utf8') as f:
         return json.load(f)
 
 
 def process_species(sp, raw_dir, out_dir, log):
+    if 'cards' in sp:
+        return process_card_species(sp, raw_dir, out_dir, log)
     sid = sp['id']
     mdir = safe_join(raw_dir, sid)
     g = Gltf(mdir, sp['gltf'])
@@ -659,7 +894,10 @@ def process_species(sp, raw_dir, out_dir, log):
     for mi in range(len(g.j['materials'])):
         inf = g.material_info(mi)
         minfo[inf['name']] = inf
-    src = {v: g.node_prims(v) for v in sp['variants']}
+    derive = sp.get('derive', {})
+    src = {v: g.node_prims(v) for v in sp['variants'] if v not in derive}
+    for v, d in derive.items():
+        src[v] = derive_prims(src[d['src']], d)
     # texture coverage masks for cut-out materials
     materials = []
     for name in mat_names:

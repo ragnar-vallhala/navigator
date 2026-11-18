@@ -66,6 +66,7 @@ struct VegMesh {
   std::vector<uint32_t> indices; // CCW triangles, absolute vertex ids
   std::vector<VegSubmesh> submeshes;
   QVector3D bboxMin, bboxMax;
+  int tiers = 0; // card conifers: needle-branch tiers in this LOD, else 0
   uint32_t vertexCount() const {
     return uint32_t(vertices.size() / kFloatsPerVertex);
   }

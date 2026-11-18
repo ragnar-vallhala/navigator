@@ -28,7 +28,7 @@
  "species": [
   {
    "id": "fir_tree_01",
-   "title": "Fir tree 01 (conifer)",
+   "title": "Fir (card conifer, Poly Haven fir_tree_01 textures)",
    "category": "tree",
    "directory": "fir_tree_01",
    "source": "https://polyhaven.com/a/fir_tree_01",
@@ -53,188 +53,167 @@
      "alphaCoverage": null
     },
     {
-     "name": "fir_tree_01_trunk_a",
-     "diffuse": "fir_tree_01_trunk_a_diff.jpg",
-     "normal": "fir_tree_01_trunk_a_nor.jpg",
-     "arm": "fir_tree_01_trunk_a_arm.jpg",
-     "alpha": null,
-     "alphaMode": "OPAQUE",
-     "alphaCutoff": null,
-     "sourceAlphaMode": "OPAQUE",
-     "doubleSided": true,
-     "wrap": "repeat",
-     "textureSize": 512,
-     "alphaCoverage": null
-    },
-    {
-     "name": "fir_tree_01_trunk_b",
-     "diffuse": "fir_tree_01_trunk_b_diff.jpg",
-     "normal": "fir_tree_01_trunk_b_nor.jpg",
-     "arm": "fir_tree_01_trunk_b_arm.jpg",
-     "alpha": null,
-     "alphaMode": "OPAQUE",
-     "alphaCutoff": null,
-     "sourceAlphaMode": "OPAQUE",
-     "doubleSided": true,
-     "wrap": "repeat",
-     "textureSize": 512,
-     "alphaCoverage": null
-    },
-    {
-     "name": "fir_tree_01_twig",
-     "diffuse": "fir_tree_01_twig_diff.jpg",
-     "normal": "fir_tree_01_twig_nor.jpg",
-     "arm": "fir_tree_01_twig_arm.jpg",
-     "alpha": "fir_tree_01_twig_alpha.png",
+     "name": "fir_tree_01_needles",
+     "diffuse": "fir_tree_01_needles_diff.jpg",
+     "normal": "fir_tree_01_needles_nor.jpg",
+     "arm": "fir_tree_01_needles_arm.jpg",
+     "alpha": "fir_tree_01_needles_alpha.png",
      "alphaMode": "MASK",
      "alphaCutoff": 0.5,
      "sourceAlphaMode": "BLEND",
      "doubleSided": true,
      "wrap": "repeat",
-     "textureSize": 1024,
-     "alphaCoverage": 0.11161994934082031
+     "textureSize": 512,
+     "alphaCoverage": 0.14583206176757812,
+     "meanLuminance": 0.0589
     }
    ],
    "variants": [
     {
-     "name": "fir_tree_01_a_LOD0",
-     "sourceTriangles": 4176819,
+     "name": "fir_tree_01_card_a",
+     "sourceTriangles": 0,
      "lods": [
       {
-       "file": "fir_tree_01_a_LOD0_lod0.vmesh",
-       "triangles": 30081,
-       "vertices": 42013,
+       "file": "fir_tree_01_card_a_lod0.vmesh",
+       "triangles": 1364,
+       "vertices": 1502,
+       "tiers": 10,
        "bboxMin": [
-        -4.240788459777832,
-        6.04093074798584e-05,
-        -5.007835865020752
+        -6.654618263244629,
+        0.0,
+        -6.11749792098999
        ],
        "bboxMax": [
-        5.191198825836182,
-        19.22185707092285,
-        5.344908714294434
+        5.9245381355285645,
+        16.559999465942383,
+        6.122647285461426
        ]
       },
       {
-       "file": "fir_tree_01_a_LOD0_lod1.vmesh",
-       "triangles": 7438,
-       "vertices": 9979,
+       "file": "fir_tree_01_card_a_lod1.vmesh",
+       "triangles": 376,
+       "vertices": 540,
+       "tiers": 7,
        "bboxMin": [
-        -3.3892409801483154,
-        6.04093074798584e-05,
-        -3.680379867553711
+        -7.7013092041015625,
+        0.0,
+        -7.688192367553711
        ],
        "bboxMax": [
-        3.8646512031555176,
-        19.273597717285156,
-        5.306084632873535
+        6.95197057723999,
+        16.559999465942383,
+        7.521350860595703
        ]
       },
       {
-       "file": "fir_tree_01_a_LOD0_lod2.vmesh",
-       "triangles": 2426,
-       "vertices": 2671,
+       "file": "fir_tree_01_card_a_lod2.vmesh",
+       "triangles": 180,
+       "vertices": 263,
+       "tiers": 5,
        "bboxMin": [
-        -3.473813056945801,
-        6.04093074798584e-05,
-        -3.6713671684265137
+        -8.433273315429688,
+        0.0,
+        -7.795983791351318
        ],
        "bboxMax": [
-        4.520088195800781,
-        19.03022003173828,
-        3.0214667320251465
+        8.567447662353516,
+        16.559999465942383,
+        8.669644355773926
        ]
       }
      ],
      "bboxMin": [
-      -4.240788459777832,
-      6.04093074798584e-05,
-      -5.007835865020752
+      -6.654618263244629,
+      0.0,
+      -6.11749792098999
      ],
      "bboxMax": [
-      5.191198825836182,
-      19.22185707092285,
-      5.344908714294434
+      5.9245381355285645,
+      16.559999465942383,
+      6.122647285461426
      ],
-     "nominalHeight": 19.2219,
-     "trunkRadius": 0.125,
+     "nominalHeight": 16.56,
+     "trunkRadius": 0.1435,
      "footprint": [
-      9.432,
-      10.3527
+      12.5792,
+      12.2401
      ]
     },
     {
-     "name": "fir_tree_01_b_LOD0",
-     "sourceTriangles": 2300624,
+     "name": "fir_tree_01_card_b",
+     "sourceTriangles": 0,
      "lods": [
       {
-       "file": "fir_tree_01_b_LOD0_lod0.vmesh",
-       "triangles": 30112,
-       "vertices": 41798,
+       "file": "fir_tree_01_card_b_lod0.vmesh",
+       "triangles": 1108,
+       "vertices": 1214,
+       "tiers": 8,
        "bboxMin": [
-        -5.295639514923096,
-        0.0016644001007080078,
-        -3.6533684730529785
+        -6.201624870300293,
+        0.0,
+        -5.9998345375061035
        ],
        "bboxMax": [
-        5.0964813232421875,
-        14.407365798950195,
-        3.172234535217285
+        5.777469635009766,
+        16.639999389648438,
+        6.059815406799316
        ]
       },
       {
-       "file": "fir_tree_01_b_LOD0_lod1.vmesh",
-       "triangles": 6985,
-       "vertices": 9740,
+       "file": "fir_tree_01_card_b_lod1.vmesh",
+       "triangles": 328,
+       "vertices": 468,
+       "tiers": 6,
        "bboxMin": [
-        -5.824362754821777,
-        0.0016644001007080078,
-        -3.978292226791382
+        -6.989765644073486,
+        0.0,
+        -7.0187764167785645
        ],
        "bboxMax": [
-        5.1164398193359375,
-        14.24742603302002,
-        3.8958001136779785
+        6.751403331756592,
+        16.639999389648438,
+        6.960773468017578
        ]
       },
       {
-       "file": "fir_tree_01_b_LOD0_lod2.vmesh",
-       "triangles": 2028,
-       "vertices": 2432,
+       "file": "fir_tree_01_card_b_lod2.vmesh",
+       "triangles": 148,
+       "vertices": 215,
+       "tiers": 4,
        "bboxMin": [
-        -5.357276439666748,
-        0.0016644001007080078,
-        -3.577821969985962
+        -7.852935791015625,
+        0.0,
+        -8.300410270690918
        ],
        "bboxMax": [
-        3.5805065631866455,
-        14.447284698486328,
-        3.8311595916748047
+        8.590649604797363,
+        16.639999389648438,
+        8.433316230773926
        ]
       }
      ],
      "bboxMin": [
-      -5.295639514923096,
-      0.0016644001007080078,
-      -3.6533684730529785
+      -6.201624870300293,
+      0.0,
+      -5.9998345375061035
      ],
      "bboxMax": [
-      5.0964813232421875,
-      14.407365798950195,
-      3.172234535217285
+      5.777469635009766,
+      16.639999389648438,
+      6.059815406799316
      ],
-     "nominalHeight": 14.4074,
-     "trunkRadius": 0.1304,
+     "nominalHeight": 16.64,
+     "trunkRadius": 0.1435,
      "footprint": [
-      10.3921,
-      6.8256
+      11.9791,
+      12.0596
      ]
     }
    ]
   },
   {
    "id": "pine_sapling_medium",
-   "title": "Pine (medium, conifer)",
+   "title": "Pine (card conifer, Poly Haven pine_sapling_medium textures)",
    "category": "tree",
    "directory": "pine_sapling_medium",
    "source": "https://polyhaven.com/a/pine_sapling_medium",
@@ -259,220 +238,230 @@
      "alphaCoverage": null
     },
     {
-     "name": "pine_sapling_medium_twig",
-     "diffuse": "pine_sapling_medium_twig_diff.jpg",
-     "normal": "pine_sapling_medium_twig_nor.jpg",
-     "arm": "pine_sapling_medium_twig_arm.jpg",
-     "alpha": "pine_sapling_medium_twig_alpha.png",
+     "name": "pine_sapling_medium_needles",
+     "diffuse": "pine_sapling_medium_needles_diff.jpg",
+     "normal": "pine_sapling_medium_needles_nor.jpg",
+     "arm": "pine_sapling_medium_needles_arm.jpg",
+     "alpha": "pine_sapling_medium_needles_alpha.png",
      "alphaMode": "MASK",
      "alphaCutoff": 0.5,
-     "sourceAlphaMode": "OPAQUE",
+     "sourceAlphaMode": "BLEND",
      "doubleSided": true,
      "wrap": "repeat",
-     "textureSize": 1024,
-     "alphaCoverage": 0.1392049789428711
+     "textureSize": 512,
+     "alphaCoverage": 0.14626693725585938,
+     "meanLuminance": 0.0527
     }
    ],
    "variants": [
     {
-     "name": "pine_sapling_medium_a_LOD0",
-     "sourceTriangles": 2662894,
+     "name": "pine_sapling_medium_card_a",
+     "sourceTriangles": 0,
      "lods": [
       {
-       "file": "pine_sapling_medium_a_LOD0_lod0.vmesh",
-       "triangles": 31771,
-       "vertices": 43699,
+       "file": "pine_sapling_medium_card_a_lod0.vmesh",
+       "triangles": 868,
+       "vertices": 944,
+       "tiers": 7,
        "bboxMin": [
-        -3.580112934112549,
-        0.20376278460025787,
-        -3.3283913135528564
+        -6.818907260894775,
+        0.0,
+        -7.072453022003174
        ],
        "bboxMax": [
-        4.262980937957764,
-        11.634374618530273,
-        3.685267448425293
+        7.465426921844482,
+        12.479999542236328,
+        7.009150505065918
        ]
       },
       {
-       "file": "pine_sapling_medium_a_LOD0_lod1.vmesh",
-       "triangles": 6733,
-       "vertices": 10863,
+       "file": "pine_sapling_medium_card_a_lod1.vmesh",
+       "triangles": 240,
+       "vertices": 336,
+       "tiers": 5,
        "bboxMin": [
-        -4.959685325622559,
-        0.20386764407157898,
-        -2.8613576889038086
+        -8.191998481750488,
+        0.0,
+        -8.736586570739746
        ],
        "bboxMax": [
-        2.8003618717193604,
-        12.298173904418945,
-        5.199848651885986
+        8.960851669311523,
+        12.479999542236328,
+        8.224345207214355
        ]
       },
       {
-       "file": "pine_sapling_medium_a_LOD0_lod2.vmesh",
-       "triangles": 1199,
-       "vertices": 1968,
+       "file": "pine_sapling_medium_card_a_lod2.vmesh",
+       "triangles": 132,
+       "vertices": 191,
+       "tiers": 4,
        "bboxMin": [
-        -2.9691247940063477,
-        0.20484240353107452,
-        -2.669208288192749
+        -9.817593574523926,
+        0.0,
+        -10.628881454467773
        ],
        "bboxMax": [
-        2.7546277046203613,
-        12.094653129577637,
-        4.445063591003418
+        10.656122207641602,
+        12.479999542236328,
+        9.668280601501465
        ]
       }
      ],
      "bboxMin": [
-      -3.580112934112549,
-      0.20376278460025787,
-      -3.3283913135528564
+      -6.818907260894775,
+      0.0,
+      -7.072453022003174
      ],
      "bboxMax": [
-      4.262980937957764,
-      11.634374618530273,
-      3.685267448425293
+      7.465426921844482,
+      12.479999542236328,
+      7.009150505065918
      ],
-     "nominalHeight": 11.6344,
-     "trunkRadius": 0.075,
+     "nominalHeight": 12.48,
+     "trunkRadius": 0.205,
      "footprint": [
-      7.8431,
-      7.0137
+      14.2843,
+      14.0816
      ]
     },
     {
-     "name": "pine_sapling_medium_b_LOD0",
-     "sourceTriangles": 1872357,
+     "name": "pine_sapling_medium_card_b",
+     "sourceTriangles": 0,
      "lods": [
       {
-       "file": "pine_sapling_medium_b_LOD0_lod0.vmesh",
-       "triangles": 31360,
-       "vertices": 42602,
+       "file": "pine_sapling_medium_card_b_lod0.vmesh",
+       "triangles": 756,
+       "vertices": 818,
+       "tiers": 6,
        "bboxMin": [
-        -2.882779598236084,
-        0.20883288979530334,
-        -3.222432851791382
+        -6.19077205657959,
+        0.0,
+        -6.610129356384277
        ],
        "bboxMax": [
-        2.7373523712158203,
-        10.597269058227539,
-        3.1115174293518066
+        6.514968395233154,
+        12.479999542236328,
+        6.275069236755371
        ]
       },
       {
-       "file": "pine_sapling_medium_b_LOD0_lod1.vmesh",
-       "triangles": 6762,
-       "vertices": 11146,
+       "file": "pine_sapling_medium_card_b_lod1.vmesh",
+       "triangles": 240,
+       "vertices": 336,
+       "tiers": 5,
        "bboxMin": [
-        -3.7641446590423584,
-        -0.17208772897720337,
-        -4.901864051818848
+        -7.0495781898498535,
+        0.0,
+        -7.836639881134033
        ],
        "bboxMax": [
-        2.866061210632324,
-        9.494752883911133,
-        3.43271541595459
+        7.860552787780762,
+        12.479999542236328,
+        6.939883708953857
        ]
       },
       {
-       "file": "pine_sapling_medium_b_LOD0_lod2.vmesh",
-       "triangles": 1202,
-       "vertices": 1995,
+       "file": "pine_sapling_medium_card_b_lod2.vmesh",
+       "triangles": 104,
+       "vertices": 149,
+       "tiers": 3,
        "bboxMin": [
-        -2.9805026054382324,
-        -0.03234883025288582,
-        -3.1283438205718994
+        -7.717718124389648,
+        0.0,
+        -8.682282447814941
        ],
        "bboxMax": [
-        2.938474416732788,
-        9.474946022033691,
-        3.823793649673462
+        9.59343433380127,
+        12.479999542236328,
+        9.589235305786133
        ]
       }
      ],
      "bboxMin": [
-      -2.882779598236084,
-      0.20883288979530334,
-      -3.222432851791382
+      -6.19077205657959,
+      0.0,
+      -6.610129356384277
      ],
      "bboxMax": [
-      2.7373523712158203,
-      10.597269058227539,
-      3.1115174293518066
+      6.514968395233154,
+      12.479999542236328,
+      6.275069236755371
      ],
-     "nominalHeight": 10.5973,
-     "trunkRadius": 0.6966,
+     "nominalHeight": 12.48,
+     "trunkRadius": 0.205,
      "footprint": [
-      5.6201,
-      6.334
+      12.7057,
+      12.8852
      ]
     },
     {
-     "name": "pine_sapling_medium_c_LOD0",
-     "sourceTriangles": 1502888,
+     "name": "pine_sapling_medium_card_c",
+     "sourceTriangles": 0,
      "lods": [
       {
-       "file": "pine_sapling_medium_c_LOD0_lod0.vmesh",
-       "triangles": 31421,
-       "vertices": 42861,
+       "file": "pine_sapling_medium_card_c_lod0.vmesh",
+       "triangles": 980,
+       "vertices": 1070,
+       "tiers": 8,
        "bboxMin": [
-        -2.7680041790008545,
-        0.21097709238529205,
-        -2.7425577640533447
+        -7.176583766937256,
+        0.0,
+        -7.564755439758301
        ],
        "bboxMax": [
-        2.453346014022827,
-        7.299407005310059,
-        2.4268367290496826
+        7.945775032043457,
+        12.479999542236328,
+        7.846848964691162
        ]
       },
       {
-       "file": "pine_sapling_medium_c_LOD0_lod1.vmesh",
-       "triangles": 6832,
-       "vertices": 10966,
+       "file": "pine_sapling_medium_card_c_lod1.vmesh",
+       "triangles": 280,
+       "vertices": 396,
+       "tiers": 6,
        "bboxMin": [
-        -2.8159196376800537,
-        0.21097709238529205,
-        -3.0270907878875732
+        -8.501797676086426,
+        0.0,
+        -8.316384315490723
        ],
        "bboxMax": [
-        3.832338333129883,
-        10.152365684509277,
-        4.696369171142578
+        9.475922584533691,
+        12.479999542236328,
+        9.298608779907227
        ]
       },
       {
-       "file": "pine_sapling_medium_c_LOD0_lod2.vmesh",
-       "triangles": 1200,
-       "vertices": 2013,
+       "file": "pine_sapling_medium_card_c_lod2.vmesh",
+       "triangles": 132,
+       "vertices": 191,
+       "tiers": 4,
        "bboxMin": [
-        -2.315401554107666,
-        0.18989917635917664,
-        -2.97617506980896
+        -10.401145935058594,
+        0.0,
+        -9.629605293273926
        ],
        "bboxMax": [
-        2.2737536430358887,
-        7.611830234527588,
-        2.3862709999084473
+        9.897364616394043,
+        12.479999542236328,
+        10.411199569702148
        ]
       }
      ],
      "bboxMin": [
-      -2.7680041790008545,
-      0.21097709238529205,
-      -2.7425577640533447
+      -7.176583766937256,
+      0.0,
+      -7.564755439758301
      ],
      "bboxMax": [
-      2.453346014022827,
-      7.299407005310059,
-      2.4268367290496826
+      7.945775032043457,
+      12.479999542236328,
+      7.846848964691162
      ],
-     "nominalHeight": 7.2994,
-     "trunkRadius": 0.3266,
+     "nominalHeight": 12.48,
+     "trunkRadius": 0.205,
      "footprint": [
-      5.2214,
-      5.1694
+      15.1224,
+      15.4116
      ]
     }
    ]
@@ -599,6 +588,73 @@
       24.6233,
       20.8424
      ]
+    },
+    {
+     "name": "jacaranda_tree_LOD0_wide",
+     "sourceTriangles": 3863832,
+     "lods": [
+      {
+       "file": "jacaranda_tree_LOD0_wide_lod0.vmesh",
+       "triangles": 34929,
+       "vertices": 92353,
+       "bboxMin": [
+        -13.435078620910645,
+        0.03913469985127449,
+        -12.022589683532715
+       ],
+       "bboxMax": [
+        12.019146919250488,
+        16.74110221862793,
+        8.553712844848633
+       ]
+      },
+      {
+       "file": "jacaranda_tree_LOD0_wide_lod1.vmesh",
+       "triangles": 9324,
+       "vertices": 18522,
+       "bboxMin": [
+        -13.185770988464355,
+        0.03913469985127449,
+        -11.868213653564453
+       ],
+       "bboxMax": [
+        12.368176460266113,
+        16.54930877685547,
+        8.63819408416748
+       ]
+      },
+      {
+       "file": "jacaranda_tree_LOD0_wide_lod2.vmesh",
+       "triangles": 4320,
+       "vertices": 5075,
+       "bboxMin": [
+        -14.27950668334961,
+        0.03913469985127449,
+        -10.890270233154297
+       ],
+       "bboxMax": [
+        10.15675163269043,
+        15.244647026062012,
+        9.02209758758545
+       ]
+      }
+     ],
+     "bboxMin": [
+      -13.435078620910645,
+      0.03913469985127449,
+      -12.022589683532715
+     ],
+     "bboxMax": [
+      12.019146919250488,
+      16.74110221862793,
+      8.553712844848633
+     ],
+     "nominalHeight": 16.7411,
+     "trunkRadius": 0.6537,
+     "footprint": [
+      25.4542,
+      20.5763
+     ]
     }
    ]
   },
@@ -723,6 +779,73 @@
      "footprint": [
       4.9928,
       4.9663
+     ]
+    },
+    {
+     "name": "island_tree_01_LOD0_slim",
+     "sourceTriangles": 1599403,
+     "lods": [
+      {
+       "file": "island_tree_01_LOD0_slim_lod0.vmesh",
+       "triangles": 35998,
+       "vertices": 70926,
+       "bboxMin": [
+        -2.4679160118103027,
+        0.004284852184355259,
+        -2.586557626724243
+       ],
+       "bboxMax": [
+        1.8545913696289062,
+        5.5551934242248535,
+        2.724008083343506
+       ]
+      },
+      {
+       "file": "island_tree_01_LOD0_slim_lod1.vmesh",
+       "triangles": 6998,
+       "vertices": 13972,
+       "bboxMin": [
+        -2.4469971656799316,
+        0.004284852184355259,
+        -2.528733491897583
+       ],
+       "bboxMax": [
+        1.882261872291565,
+        5.5336012840271,
+        2.742414712905884
+       ]
+      },
+      {
+       "file": "island_tree_01_LOD0_slim_lod2.vmesh",
+       "triangles": 1395,
+       "vertices": 2666,
+       "bboxMin": [
+        -2.3136863708496094,
+        0.004284852184355259,
+        -2.655738115310669
+       ],
+       "bboxMax": [
+        1.945135474205017,
+        5.587957859039307,
+        2.6982550621032715
+       ]
+      }
+     ],
+     "bboxMin": [
+      -2.4679160118103027,
+      0.004284852184355259,
+      -2.586557626724243
+     ],
+     "bboxMax": [
+      1.8545913696289062,
+      5.5551934242248535,
+      2.724008083343506
+     ],
+     "nominalHeight": 5.5552,
+     "trunkRadius": 0.2386,
+     "footprint": [
+      4.3225,
+      5.3106
      ]
     }
    ]

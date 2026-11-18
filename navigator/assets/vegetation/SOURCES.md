@@ -25,7 +25,7 @@ Every entry: licence CC0, retrieved 2026-11-18, URL https://polyhaven.com/a/<id>
 - URL: https://polyhaven.com/a/fir_tree_01
 - Licence: CC0
 - Retrieved: 2026-11-18
-- Processing: 2 of its 3 variants (a, b; the third has no UVs on its needle cards). About 20 m tall natively. The 437k needle clusters are reduced to a few thousand and scaled up; bark/trunk meshes decimated; alpha mask baked from source UV coverage.
+- Processing: not decimated. The shipped model is a card conifer built by the script (tapered trunk plus 8-10 tiers of downward-angled needle cards, 2 variants, about 16 m tall). Only this model's own textures are used: the bark map for the trunk and one needle sprig cut out of the twig map (alpha keyed from the needles, colour graded darker and bluer).
 
 ### pine_sapling_medium
 
@@ -34,7 +34,7 @@ Every entry: licence CC0, retrieved 2026-11-18, URL https://polyhaven.com/a/<id>
 - URL: https://polyhaven.com/a/pine_sapling_medium
 - Licence: CC0
 - Retrieved: 2026-11-18
-- Processing: 3 variants (a, b, c). About 11 m tall natively. Needle cards thinned and scaled, bark decimated; alpha mask baked from source UV coverage.
+- Processing: not decimated. Card conifer built by the script (tapered trunk plus 6-8 tiers of needle cards, 3 variants, about 12 m tall) from this model's bark map and one needle sprig of its twig map (black background keyed out, graded).
 
 ### jacaranda_tree
 
@@ -43,7 +43,7 @@ Every entry: licence CC0, retrieved 2026-11-18, URL https://polyhaven.com/a/<id>
 - URL: https://polyhaven.com/a/jacaranda_tree
 - Licence: CC0
 - Retrieved: 2026-11-18
-- Processing: 1 variant. About 18 m tall and 24 m wide natively. Trunk and branch meshes decimated, leaf cards thinned and scaled; alpha mask = UV coverage x black-background key.
+- Processing: 2 variants: the model, and the same model turned and reproportioned (derived). About 18 m tall and 24 m wide natively. Trunk and branch meshes decimated, leaf cards thinned and scaled; alpha mask = UV coverage x black-background key.
 
 ### island_tree_01
 
@@ -52,7 +52,7 @@ Every entry: licence CC0, retrieved 2026-11-18, URL https://polyhaven.com/a/<id>
 - URL: https://polyhaven.com/a/island_tree_01
 - Licence: CC0
 - Retrieved: 2026-11-18
-- Processing: 1 variant. About 5 m tall natively; the placement scales it up (about 1.9x) for broadleaf sizes. Leaf cards thinned and scaled; alpha mask = UV coverage x black-background key.
+- Processing: 2 variants: the model, and the same model turned and reproportioned (derived). About 5 m tall natively; the placement scales it up (about 1.9x) for broadleaf sizes. Leaf cards thinned and scaled; alpha mask = UV coverage x black-background key.
 
 ### shrub_03
 

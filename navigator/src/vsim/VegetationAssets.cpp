@@ -207,6 +207,7 @@ bool loadVegetationAssets(VegAssets &out, QString *error, const QString &root,
         return fail(error, v.name + ": expected 3 LODs");
       for (int l = 0; l < kVegLodCount; ++l) {
         const QString file = lods.at(l).toObject().value("file").toString();
+        v.lods[l].tiers = lods.at(l).toObject().value("tiers").toInt(0);
         QByteArray bytes;
         QString why;
         if (!readFile(dir + file, bytes, error))
