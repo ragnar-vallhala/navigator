@@ -125,12 +125,40 @@ out vec4 o_color;
 uniform vec3 u_color;
 uniform float u_terrain;     // 1 = ground: procedural albedo detail + grid
 uniform float u_bands;       // >0: pole painted in this many 1 m red/white bands
+)GLSL";
+
+// Sun colour, ambient and aerial perspective, shared by the lit/terrain shader
+// and the vegetation shader so both are lit and fogged by the same functions.
+// Declares their uniforms; appended after kAtmosphereGLSL (skyColor).
+const char *kLightingGLSL = R"GLSL(
 uniform vec3 u_campos;       // camera world position (NED)
 uniform float u_fogdensity;  // aerial-perspective strength
 uniform float u_fogstart;    // metres before fog begins
 uniform vec4 u_ringclip;     // far ring: discard inside this xy rect (x0,y0,x1,y1)
 uniform float u_sunint;      // sun-intensity look knob (matches grass)
 uniform float u_ambstr;      // ambient-strength look knob (matches grass)
+vec3 sunLightColor() { return vec3(1.04, 0.93, 0.74) * u_sunint; }  // warm golden key
+// Wrapped diffuse for a soft terminator that still shows light direction.
+float wrapDiffuse(vec3 n, vec3 sun) {
+  float w = clamp(dot(n, sun) * 0.45 + 0.55, 0.0, 1.0);
+  return w * w;
+}
+// Hemispheric ambient: NED up is -Z, so up-facing (n.z<0) catches sky light.
+// Cool-but-warmed overcast ambient (shadows read soft teal, not cold).
+vec3 ambientLight(vec3 n) {
+  float hemi = 0.5 + 0.5 * (-n.z);                 // 0 down .. 1 up
+  return mix(vec3(0.07, 0.09, 0.09), vec3(0.22, 0.25, 0.26),
+             clamp(hemi, 0.0, 1.0)) * u_ambstr;
+}
+// Aerial perspective: fade toward the sky behind the surface with distance,
+// so the streamed-terrain edge dissolves into haze. Needs kFogGLSL (fogAmount).
+vec3 applyAerialPerspective(vec3 lit, vec3 toFrag, float dist) {
+  vec3 vdir = dist > 1e-4 ? toFrag / dist : vec3(0.0, 0.0, 1.0);
+  float fog = fogAmount(u_campos, u_campos + toFrag, u_fogstart, u_fogdensity);
+  float hl = length(vdir.xy);
+  vec3 fdir = hl > 1e-4 ? vec3(vdir.xy / hl, 0.0) : vec3(1.0, 0.0, 0.0);
+  return mix(lit, skyColor(fdir), clamp(fog, 0.0, 1.0));
+}
 )GLSL";
 
 const char *kLitFragmentMain = R"GLSL(
@@ -469,6 +497,8 @@ SimRendererWidget::SimRendererWidget(QWindow *parent)
   f.setDepthBufferSize(24);
   f.setStencilBufferSize(8);
   setFormat(f);
+  veg_ = std::make_unique<VegetationRenderer>();
+  vegEnabled_ = VegetationRenderer::enabledByConfig();
 }
 
 void SimRendererWidget::setHudWidget(QWidget *w) {
@@ -669,6 +699,8 @@ int SimRendererWidget::liveGlObjects() const {
   n += (prog_ ? 1 : 0) + (progLit_ ? 1 : 0) + (progDepth_ ? 1 : 0) +
        (progSky_ ? 1 : 0);
   n += (shadowFbo_ ? 1 : 0) + (shadowTex_ ? 1 : 0);
+  if (veg_)
+    n += veg_->liveObjects();
 #ifdef VAYU_SIM_GRASS
   n += progFlora_ ? 1 : 0;
   for (const QOpenGLBuffer &b : grassVbo_)
@@ -781,6 +813,8 @@ void SimRendererWidget::releaseGLResources(bool readBack) {
   progFlora_.reset();
 #endif
 
+  if (veg_)
+    veg_->releaseGL(); // instance lists stay, GL objects rebuild on demand
   forEachMesh([](Mesh &m) { m.release(); });
   skyVao_.destroy();
   prog_.reset();
@@ -1032,7 +1066,7 @@ void SimRendererWidget::initResources() {
 
   progLit_ = buildProgram("lit", kLitVertexShader,
                           QByteArray(kLitFragmentHead) + kAtmosphereGLSL + kFogGLSL +
-                              kShadowGLSL + kLitFragmentMain);
+                              kShadowGLSL + kLightingGLSL + kLitFragmentMain);
   ul_mvp_ = progLit_->uniformLocation("u_mvp");
   ul_model_ = progLit_->uniformLocation("u_model");
   ul_nmat_ = progLit_->uniformLocation("u_nmat");
@@ -1352,6 +1386,9 @@ void SimRendererWidget::paintGL() {
       drawFlora(view);
   }
 #endif
+
+  if (vegEnabled_ && worldVisible_ && !training && veg_)
+    drawVegetation(view);
 
   // Static world obstacles (lit solids), each scaled/rotated/placed.
   for (int oi = 0; worldVisible_ && !training && oi < obstacles_.size(); ++oi) {
@@ -1958,11 +1995,15 @@ void SimRendererWidget::buildHelipadMeshes() {
 
 void SimRendererWidget::setHelipads(const std::vector<QVector3D> &pads) {
   helipads_ = pads;
+  if (veg_)
+    veg_->exclude(vegExclusionsFor(pads, {}));
   update();
 }
 
 void SimRendererWidget::setObstacles(const QVector<vsim::Obstacle> &obs) {
   obstacles_ = obs;
+  if (veg_)
+    veg_->exclude(vegExclusionsFor({}, obs));
   update();
 }
 
@@ -2010,12 +2051,14 @@ void SimRendererWidget::setWorldChunk(qint64 key,
 }
 
 void SimRendererWidget::removeWorldChunk(qint64 key) {
+  removeChunkVegetation(key); // vegetation loads and unloads with its chunk
   pendingChunkRemovals_.push_back(key);
   chunksDirty_ = true;
   update();
 }
 
 void SimRendererWidget::clearWorldChunks() {
+  clearChunkVegetation();
   clearAllChunks_ = true;
   chunksDirty_ = true;
   update();
@@ -2049,6 +2092,61 @@ void SimRendererWidget::updateFarTerrain(bool showChunks) {
   if (farTerrain_.update(w) || (!farMesh_.vertex_count && farTerrain_.vertexCount())) {
     uploadColoredMesh(farMesh_, farTerrain_.vertices());
   }
+}
+
+// ---- vegetation (logic lives in VegetationRenderer) -------------------------
+
+void SimRendererWidget::setChunkVegetation(
+    qint64 key, std::vector<vsim::procgen::VegInstance> instances, float cx,
+    float cy, float half) {
+  if (veg_)
+    veg_->setChunk(key, std::move(instances), cx, cy, half);
+  update();
+}
+void SimRendererWidget::removeChunkVegetation(qint64 key) {
+  if (veg_)
+    veg_->removeChunk(key);
+}
+void SimRendererWidget::clearChunkVegetation() {
+  if (veg_)
+    veg_->clearChunks();
+}
+void SimRendererWidget::setVegetationEnabled(bool on) {
+  vegEnabled_ = on;
+  update();
+}
+const VegetationRenderer::Stats &SimRendererWidget::vegetationStats() const {
+  static const VegetationRenderer::Stats none;
+  return veg_ && vegEnabled_ ? veg_->stats() : none;
+}
+
+void SimRendererWidget::drawVegetation(const QMatrix4x4 &view) {
+  if (!veg_->glReady() &&
+      !veg_->initGL({QByteArray(kAtmosphereGLSL) + kFogGLSL, kShadowGLSL, kLightingGLSL}))
+    return;
+  VegFrame f;
+  f.proj = proj_;
+  f.view = view;
+  f.lightVP = lightVP_;
+  f.camEye = camEye_;
+  f.sunDir = sunDir_;
+  f.dronePos = droneShadowPos_;
+  f.droneRadius = droneShadowR_;
+  f.time = floraTime_;
+  f.sunIntensity = litSunInt_;
+  f.ambientStrength = litAmbStr_;
+  f.fogDensity = 1.0f / 420.0f; // the lit shader's aerial perspective
+  f.fogStart = 45.0f;
+  f.fogBase = fogBaseZ_;
+  f.fogHeight = kFogHeightM;
+  f.shadowTex = shadowTex_;
+  f.shadowOn = shadowOn_;
+  f.defaultFbo = int(context()->defaultFramebufferObject());
+  f.viewportW = fbW_;
+  f.viewportH = fbH_;
+  veg_->draw(f);
+  if (veg_->busy())
+    update(); // textures / impostors still arriving: keep painting
 }
 
 void SimRendererWidget::flushChunkUpdates() {

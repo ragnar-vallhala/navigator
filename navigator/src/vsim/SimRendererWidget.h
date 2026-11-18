@@ -42,6 +42,8 @@
 #include <QPointer>
 #include <QPoint>
 
+#include "VegetationRenderer.h"
+
 #include <array>
 #include <map>
 #include <memory>
@@ -160,6 +162,22 @@ public:
     horizonOn_ = on;
     update();
   }
+
+  // Per-chunk vegetation (trees, shrubs, grass clumps, rocks) as scattered by
+  // procgen::scatterVegetation; drawn by VegetationRenderer after the terrain,
+  // independent of the procedural grass above. Keyed like the chunk meshes so it
+  // loads/unloads with its chunk. All no-ops while vegetation is disabled
+  // (QSettings sim/vegetation, NAV_VEGETATION; see setVegetationEnabled).
+  void setChunkVegetation(qint64 key, std::vector<vsim::procgen::VegInstance> instances,
+                          float centerX, float centerY, float halfExtent);
+  void removeChunkVegetation(qint64 key);
+  void clearChunkVegetation();
+  void setVegetationEnabled(bool on);
+  bool vegetationEnabled() const { return vegEnabled_; }
+  size_t vegetationInstanceCount() const { return veg_ ? veg_->instanceCount() : 0; }
+  // What the last frame drew; and whether textures/impostors are still loading.
+  const VegetationRenderer::Stats &vegetationStats() const;
+  bool vegetationBusy() const { return veg_ && veg_->busy(); }
 
   // Training course: glowing halo gates to fly through. setTrainingGates
   // replaces the gate layout; setTrainingActive updates which gate to aim for
@@ -322,6 +340,15 @@ public:
   // Test hook: pretend the cached size is stale (what a resize that never
   // reached resizeGL leaves behind); the next frame must repair it.
   void setCachedViewportForTest(QSize s) { fbW_ = s.width(); fbH_ = s.height(); }
+  // Test/tool hook: the free-roam camera at `pos` (NED) looking along compass
+  // `heading` [rad, 0 = north, clockwise] tilted `down` [rad] below the horizon.
+  void setCameraPoseForTest(const QVector3D &pos, float heading, float down) {
+    freeFly_ = true;
+    camPos_ = pos;
+    cam_yaw_ = heading + 3.14159265f;
+    cam_pitch_ = down;
+    update();
+  }
   int contextGoneCount() const { return goneCount_; } // aboutToBeDestroyed seen
   bool contextWasCurrentWhenGone() const { return goneCurrent_; }
   // Drops every GL object and builds them all again in the CURRENT context,
@@ -642,6 +669,9 @@ private:
   // Streaming terrain chunks. Heap-allocated Meshes so addresses stay stable in
   // the map (and GL handles aren't moved). Uploads/removals are queued from the
   // UI thread and flushed in paintGL where the GL context is current.
+  std::unique_ptr<VegetationRenderer> veg_;
+  bool vegEnabled_ = true;
+  void drawVegetation(const QMatrix4x4 &view);
   std::map<qint64, std::unique_ptr<Mesh>> worldChunks_;
   struct PendingChunk {
     qint64 key;
