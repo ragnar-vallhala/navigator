@@ -110,13 +110,17 @@ SPECIES = [
          # whorls of a few long, upward-curving branches with sky between them
          cards=dict(bark='pine_sapling_medium_bark', twig='pine_sapling_medium_twig', key='black',
                     crop=(30, 40, 235, 455), grade=(0.85, 1.20, 1.35), thick=1.6, de_yellow=0.8,
+                    bark_tint=(0.50, 0.41, 0.34),
                     variants=[
-                        dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.30, R=3.2, len=1.25,
-                             wid=1.5, droop=(10, 5), curve=0.32, r0=0.17, r1=0.04, trunk_top=0.9, jit=0.015, sag=0.06, az=0.38),
-                        dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.28, R=2.8, len=1.25,
-                             wid=1.5, droop=(12, 6), curve=0.34, r0=0.17, r1=0.04, trunk_top=0.9, jit=0.015, sag=0.06, az=0.38),
-                        dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.32, R=3.5, len=1.25,
-                             wid=1.5, droop=(8, 4), curve=0.30, r0=0.17, r1=0.04, trunk_top=0.9, jit=0.015, sag=0.06, az=0.38)])),
+                        dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.30, R=3.0, len=1.25,
+                             wid=1.5, droop=(10, 5), curve=0.32, r0=0.34, r1=0.08, trunk_top=0.9, jit=0.015, sag=0.06, az=0.38,
+                             lower=0.6, lowlen=0.15, bark_u=3.0, bark_v=1.2),
+                        dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.28, R=3.0, len=1.25,
+                             wid=1.5, droop=(12, 6), curve=0.34, r0=0.34, r1=0.08, trunk_top=0.9, jit=0.015, sag=0.06, az=0.38,
+                             lower=0.6, lowlen=0.15, bark_u=3.0, bark_v=1.2),
+                        dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.32, R=3.2, len=1.25,
+                             wid=1.5, droop=(8, 4), curve=0.30, r0=0.34, r1=0.08, trunk_top=0.9, jit=0.015, sag=0.06, az=0.38,
+                             lower=0.6, lowlen=0.15, bark_u=3.0, bark_v=1.2)])),
     dict(id='jacaranda_tree', gltf='jacaranda_tree_1k.gltf', category='tree',
          title='Jacaranda tree (broadleaf)', pivot='base',
          variants=['jacaranda_tree_LOD0', 'jacaranda_tree_LOD0_wide'],
@@ -742,6 +746,35 @@ def sprig_card_textures(raw_dir, info, cfg, out_prefix, size):
             alpha_file, float(cov.mean()), lum)
 
 
+def furrowed_bark(prefix, tint, seed=5):
+    """Overwrite a bark material (<prefix>_diff/_nor/_arm.jpg, 512 px, repeat) with
+    a lighter, warm, vertically furrowed bark.  The colour is the CC0 source bark
+    lifted and warmed; the furrows are seeded periodic noise stretched along the
+    trunk (image y), so the texture tiles and every run is identical."""
+    n = 512
+    rng = np.random.default_rng(seed)
+    fx = np.fft.fftfreq(n)[None, :] * n
+    fy = np.fft.fftfreq(n)[:, None] * n
+
+    def band(wx, wy, k):
+        f = np.exp(-(fx / wx) ** 2 - (fy / wy) ** 2)
+        h = np.fft.ifft2(np.fft.fft2(rng.standard_normal((n, n))) * f).real
+        return (h - h.mean()) / h.std() * k
+    h = band(60.0, 4.0, 1.0) + band(24.0, 2.5, 0.8) + band(120.0, 24.0, 0.3)
+    rid = 1.0 / (1.0 + np.exp(-1.6 * h))                 # 0 in a furrow, 1 on a ridge
+    src = np.asarray(Image.open(prefix + '_diff.jpg').convert('RGB'), np.float32) / 255.0
+    lum = (src @ np.array([0.299, 0.587, 0.114], np.float32))[..., None]
+    col = (lum / max(float(lum.mean()), 1e-3)) ** 0.5 * np.array(tint, np.float32)
+    save_jpg(col * (0.72 + 0.38 * rid[..., None]), prefix + '_diff.jpg', 2)
+    gx = (np.roll(rid, -1, 1) - np.roll(rid, 1, 1)) * 0.5 * n / 70.0
+    gy = (np.roll(rid, -1, 0) - np.roll(rid, 1, 0)) * 0.5 * n / 70.0
+    nv = np.stack([-gx, gy, np.ones_like(gx)], -1)
+    nv /= np.linalg.norm(nv, axis=2, keepdims=True)
+    save_jpg(nv * 0.5 + 0.5, prefix + '_nor.jpg', 0)
+    arm = np.stack([0.55 + 0.45 * rid, 0.85 + 0 * rid, 0 * rid], -1)   # AO in furrows, rough
+    save_jpg(arm, prefix + '_arm.jpg', 0)
+
+
 def card_conifer_mesh(cv, lod, rng):
     """One card conifer (glTF frame, y up, base at the origin).  Returns
     ((trunk P, N, UV, T), (card P, N, UV, T), tier count)."""
@@ -765,7 +798,7 @@ def card_conifer_mesh(cv, lod, rng):
             a = 2 * np.pi * k / sides
             TP.append((trunk_r(y) * np.cos(a), y, trunk_r(y) * np.sin(a)))
             TN.append((np.cos(a), 0.0, np.sin(a)))
-            TU.append((2.0 * k / sides, 1.0 - y / 2.0))
+            TU.append((cv.get('bark_u', 2.0) * k / sides, 1.0 - y / cv.get('bark_v', 2.0)))
     for i in range(rings):
         for k in range(sides):
             a = i * (sides + 1) + k
@@ -801,12 +834,13 @@ def card_conifer_mesh(cv, lod, rng):
         R = cv["R"] * (1.0 - t * 0.9) ** cv.get("taper", 1.0) + 0.55
         # coarser LODs have fewer, so larger, cards: the crown keeps its mass
         fill = min((cv['cards'][0] / ncard) ** 0.5 * (cv['tiers'][0] / ntier) ** 0.3, 1.8)
-        L = R * cv['len'] * fill ** 0.5
+        L = R * cv['len'] * fill ** 0.5 * (1.0 + cv.get('lowlen', 0.0) * (1.0 - t))
+        ncj = max(3, int(round(ncard * (1.0 + cv.get('lower', 0.0) * (1.0 - 2.0 * t)))))
         W = R * cv['len'] * cv['wid'] * fill * 1.1
         droop = np.tan(np.radians(cv['droop'][0] + (cv['droop'][1] - cv['droop'][0]) * t))
         off = rng.uniform(0, 2 * np.pi)
-        for k in range(ncard):
-            th = off + 2 * np.pi * (k + 0.5 * (j % 2) + rng.uniform(-1.0, 1.0) * cv.get('az', 0.18)) / ncard
+        for k in range(ncj):
+            th = off + 2 * np.pi * (k + 0.5 * (j % 2) + rng.uniform(-1.0, 1.0) * cv.get('az', 0.18)) / ncj
             out = np.array([np.cos(th), 0.0, np.sin(th)])
             lj = L * rng.uniform(0.88, 1.12)
             yj = y + rng.uniform(-1.0, 1.0) * cv.get('jit', 0.04) * H
@@ -844,6 +878,8 @@ def process_card_species(sp, raw_dir, out_dir, log):
     # material 0: bark (the source model's, opaque); material 1: the needle card
     bark = cfg['bark']
     bfiles = process_textures(mdir, minfo[bark], os.path.join(odir, bark), 512, None)
+    if cfg.get('bark_tint'):
+        furrowed_bark(os.path.join(odir, bark), cfg['bark_tint'])
     nfiles, alpha_file, cov, lum = sprig_card_textures(
         mdir, minfo[cfg['twig']], cfg, os.path.join(odir, sid + '_needles'), 512)
     log('  needle card: coverage %.3f, mean luminance %.4f' % (cov, lum))

@@ -353,6 +353,32 @@ private slots:
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
 
+  // The impostor bake records which covered texels are foliage: bark must be a
+  // small part of every tree and sit low, foliage the rest and higher. (The
+  // billboard shader uses that mask to tint foliage only; it has no test of
+  // its own, only this readback of what the bake wrote.)
+  void impostorBakeSeparatesBarkFromFoliage() {
+    const World forest = buildWorld(kPalForest, -2, 1);
+    Rig rig(true);
+    rig.r->setVegetationBakeStats(true);
+    loadTerrain(rig.r, forest);
+    loadVegetation(rig.r, forest);
+    QVERIFY(rig.show());
+    aimCamera(rig.r, forest, -200.0f, -150.0f, 12.0f, 0.75f, 0.06f);
+    settledFrame(rig.r);
+    if (rig.r->vegetationStats().impostorVariants == 0)
+      QSKIP("no impostor atlas on this context");
+    const VegetationRenderer::BakeStats b = rig.r->vegetationBakeStats();
+    qInfo("bake: %lld foliage px, %lld bark px", b.foliagePx, b.barkPx);
+    QVERIFY(b.foliagePx > 1000 && b.barkPx > 100);
+    QVERIFY(double(b.barkPx) < 0.4 * double(b.foliagePx));
+    const double fh = b.foliageHeightSum / double(b.foliagePx);
+    const double bh = b.barkHeightSum / double(b.barkPx);
+    qInfo("mean height: foliage %.2f, bark %.2f", fh, bh);
+    QVERIFY(bh < fh - 0.05);
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
   // Every tree kind must reach the screen, conifers included: a pool or table
   // that never picks a kind looks exactly like a forest without them.
   void everyTreeKindIsDrawn() {

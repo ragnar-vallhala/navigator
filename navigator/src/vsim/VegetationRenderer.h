@@ -184,6 +184,14 @@ public:
   };
   const Stats &stats() const { return stats_; }
   bool impostorsAvailable() const { return atlasOk_; }
+  // Tests: read every baked impostor tile back and total its foliage and bark
+  // texels (see BakeStats). Costs a readback per baked variant.
+  struct BakeStats {
+    long long foliagePx = 0, barkPx = 0;
+    double foliageHeightSum = 0, barkHeightSum = 0; // 0 foot .. 1 top, summed over texels
+  };
+  void setBakeStats(bool on) { bakeStats_ = on; bakeStatsOut_ = BakeStats(); }
+  const BakeStats &bakeStats() const { return bakeStatsOut_; }
 
 private:
   struct Rec { // one resolved instance
@@ -226,6 +234,7 @@ private:
   void uploadSpecies(int si);
   void ensureMesh(VariantGpu &v, int lod);
   void bakeImpostors(VariantGpu &v);
+  void collectBakeStats(const VariantGpu &v);
   bool buildPrograms(const VegGlsl &glsl);
   bool buildAtlas();
   void drawBucket(VariantGpu &v, int lod, const std::vector<float> &data,
@@ -257,7 +266,9 @@ private:
     int cy = -1, half = -1, tile = -1;
     int bakeMvp = -1;
   } loc_;
-  unsigned atlasTex_ = 0, atlasFbo_ = 0, atlasDepth_ = 0;
+  unsigned atlasTex_ = 0, atlasFbo_ = 0, atlasDepth_ = 0, atlasMask_ = 0;
+  bool bakeStats_ = false;
+  BakeStats bakeStatsOut_;
   bool atlasOk_ = false, glReady_ = false, atlasTried_ = false, treesOn_ = false;
   bool a2c_ = false; // alpha-to-coverage this frame (multisampled target)
   float maxAniso_ = 1.0f;
