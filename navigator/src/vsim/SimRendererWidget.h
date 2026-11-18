@@ -22,6 +22,7 @@
 // the SITL view renders terrain without grass. The code is retained in-tree for
 // later re-enable (cmake -DNAVIGATOR_SIM_GRASS=ON).
 #include "Atmosphere.h"
+#include "ShadowCascades.h"
 #ifdef VAYU_SIM_GRASS
 #include "GpuGrass.h"
 #endif
@@ -271,6 +272,17 @@ public:
     update();
   }
   const Atmosphere &atmosphere() const { return atmo_; }
+  // Shadow quality. High: three 2048 cascades (48 MiB depth). Low: one 1024 map
+  // over the nearest ~150 m with plain PCF (4 MiB) for slow machines; GLES
+  // contexts always run Low. Applied on the next frame.
+  void setShadowQuality(ShadowQuality q) {
+    if (q == shadowQuality_)
+      return;
+    shadowQuality_ = q;
+    shadowRebuild_ = true;
+    update();
+  }
+  ShadowQuality shadowQuality() const { return shadowQuality_; }
   // World-space XY the terrain streamer should centre on: the free-fly camera
   // when roaming (sim stopped), otherwise the drone. Lets endless terrain follow
   // both WASD navigation and actual flight.
@@ -401,6 +413,7 @@ private:
     QOpenGLBuffer vbo{QOpenGLBuffer::VertexBuffer};
     int vertex_count = 0;
     GLenum primitive = GL_TRIANGLES;
+    QVector3D bmin, bmax; // position bounds (uploadColoredMesh), for culling
     // Frees the GL objects (context must be current) and returns the mesh to
     // its never-uploaded state, so a later build/upload recreates them.
     void release() {
@@ -437,10 +450,9 @@ private:
 #ifdef VAYU_SIM_GRASS
   void buildGrassBlade(); // shared unit-blade geometry (crossed tapered quads)
 #endif
-  void
-  buildShadowMap(); // create the directional shadow-map FBO + depth texture
-  void renderShadowPass(bool showWorld,
-                        bool showChunks); // terrain depth from the sun
+  void buildShadowMap(); // (re)create the shadow-atlas FBO + depth texture
+  void renderShadowPass(bool showWorld, bool showChunks,
+                        const QMatrix4x4 &view); // terrain depth per cascade
 #ifdef VAYU_SIM_GRASS
   void
   flushFloraUpdates(); // applies queued flora uploads/removals (GL-current)
@@ -507,9 +519,7 @@ private:
   int ul_campos_ = -1;
   int ul_fogdensity_ = -1;
   int ul_fogstart_ = -1;
-  int ul_lightvp_ = -1;
-  int ul_shadowtex_ = -1;
-  int ul_shadowon_ = -1;
+  CascadeUniforms litCsm_;
   int ul_drone_ = -1;
   int ul_droner_ = -1;
   QVector3D droneShadowPos_;  // drone position for the analytic shadow
@@ -526,12 +536,25 @@ private:
   std::unique_ptr<QOpenGLShaderProgram> progDepth_; // depth-only, light-space
   int ud_lightmvp_ = -1;
   unsigned int shadowFbo_ = 0;
-  unsigned int shadowTex_ = 0;
-  int shadowSize_ = 2048;
+  unsigned int shadowTex_ = 0;   // atlas: cascades side by side (ShadowCascades.h)
+  ShadowQuality shadowQuality_ = ShadowQuality::High;
+  ShadowQuality shadowBuilt_ = ShadowQuality::High; // what the atlas was built as
+  bool shadowRebuild_ = false; // quality changed: rebuild before the next pass
+  bool shadowSnap_ = true;     // texel-snap the cascades (off only for tests)
+  // A cascade is re-rendered only when something it shows changed: the casters
+  // (geometry version), the sun, or its window moved by more than a few texels.
+  // Otherwise the depth already in the atlas tile is reused with the matrices it
+  // was rendered with, so the far cascades cost nothing on most frames.
+  bool shadowReuse_ = true;    // off only for tests / worst-case timing
+  quint64 shadowGeomVer_ = 1;  // bumped when any caster mesh changes
+  ShadowCascadeSet shadowCache_; // what each atlas tile was last rendered with
+  quint64 shadowCacheVer_[kMaxCascades] = {0, 0, 0};
+  int shadowCacheShow_ = -1;   // world/chunk visibility the tiles were drawn with
+  QVector3D shadowCacheSun_;
   bool depthClamp_ = false; // GL_DEPTH_CLAMP usable for the shadow pass
   bool shadowReady_ = false; // FBO built ok
   bool shadowOn_ = false;    // a shadow map was rendered this frame
-  QMatrix4x4 lightVP_;       // light view-projection (world -> light clip)
+  ShadowCascadeSet csm_;     // this frame's cascades (matrices, tiles, splits)
   int fbW_ = 1, fbH_ = 1;    // saved framebuffer size (viewport restore)
 
   // Sky shader: attribute-less fullscreen triangle, view-ray gradient + glow.

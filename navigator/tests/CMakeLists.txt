@@ -275,6 +275,10 @@ navigator_test(tst_dronemodel
     ${SRC}/vsim/DroneModel.cpp)
 target_include_directories(tst_dronemodel PRIVATE ${SRC}/vsim)
 
+# ---- Cascaded shadow-map fitting (pure maths, headless) --------------------
+navigator_test(tst_shadow_cascades tst_shadow_cascades.cpp)
+target_include_directories(tst_shadow_cascades PRIVATE ${SRC}/vsim)
+
 # ---- Vegetation assets load from the embedded resource (no GL) ----------------
 navigator_test(tst_vegetation_assets tst_vegetation_assets.cpp)
 target_include_directories(tst_vegetation_assets PRIVATE ${SRC}/vsim)

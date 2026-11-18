@@ -153,7 +153,9 @@ void main() {
   vec3 N = normalize(v_nrm);
   if (!gl_FrontFacing) N = -N;                 // leaves are two-sided
   // Terrain shadow first: it takes derivatives, which must not follow a discard.
-  float sh = shadowFactor(v_world, N, sun);
+  // Foliage is thin and two-sided: no receiver-plane bias (usePlane=false), the
+  // lookup is offset along the shading normal.
+  float sh = csmVisibility(v_world, N, sun, false) * droneShadow(v_world, sun);
   mat3 TBN = cotangentFrame(N, v_world, v_uv);
   vec4 d = texture(u_diffuse, v_uv);
   if (u_cutout > 0.5 && d.a < u_cutoff) discard;
@@ -318,7 +320,8 @@ bool linkProgram(QOpenGLShaderProgram &p, const char *name, const QByteArray &vs
 // GLSL lands before main.
 QByteArray joinFs(const char *head, const VegGlsl &g, const char *common,
                   const char *main) {
-  return QByteArray(head) + g.atmosphere + g.shadow + g.lighting + common + main;
+  // Lighting declares u_campos, which the cascade lookup needs, so it goes first.
+  return QByteArray(head) + g.atmosphere + g.lighting + g.shadow + common + main;
 }
 
 QImage downsample2x(const QImage &src) {
@@ -633,6 +636,7 @@ void VegetationRenderer::resolve(Chunk &c) {
 // ---- GL setup ---------------------------------------------------------------
 
 bool VegetationRenderer::buildPrograms(const VegGlsl &g) {
+  csmLocs_ = CascadeUniforms();
   prog_ = std::make_unique<QOpenGLShaderProgram>();
   if (!linkProgram(*prog_, "vegetation", QByteArray(kVS) + kCommonGLSL + kVSMain,
                    joinFs(kFSHead, g, kCommonGLSL, kFSMain)))
@@ -731,7 +735,9 @@ void VegetationRenderer::releaseGL() {
       s.decode.wait();
     freeSpeciesTextures(s);
     s.state = SpState::Idle;
-    if (i < assets_.species.size())
+    // assets_ is written by the loader thread until assetsReady_ is set (on
+    // this thread, after the future is collected); never touch it before.
+    if (assetsReady_ && i < assets_.species.size())
       for (VegMaterial &m : assets_.species[i].materials) {
         m.diffuse = m.normal = m.arm = m.alpha = QImage();
       }
@@ -992,6 +998,15 @@ void VegetationRenderer::bakeImpostors(VariantGpu &v) {
 // ---- drawing -----------------------------------------------------------------
 
 void VegetationRenderer::setCommonUniforms(QOpenGLShaderProgram &p, const VegFrame &f) {
+  // The Atmosphere.h uniforms (sun colour, sky, ambient) first: the explicit
+  // sets below, such as the caller's sun direction, win over them.
+  f.atmo.forEachUniform([&p](const char *name, auto... v) {
+    const float a[] = {static_cast<float>(v)...};
+    if constexpr (sizeof...(v) == 3)
+      p.setUniformValue(name, QVector3D(a[0], a[1], a[2]));
+    else
+      p.setUniformValue(name, a[0]);
+  });
   p.setUniformValue("u_vp", f.proj * f.view);
   p.setUniformValue("u_campos", f.camEye);
   p.setUniformValue("u_eye", f.camEye);
@@ -1003,11 +1018,13 @@ void VegetationRenderer::setCommonUniforms(QOpenGLShaderProgram &p, const VegFra
   p.setUniformValue("u_fogbase", f.fogBase);
   p.setUniformValue("u_fogheight", f.fogHeight);
   p.setUniformValue("u_time", f.time);
-  p.setUniformValue("u_lightvp", f.lightVP);
-  p.setUniformValue("u_shadowon", f.shadowOn ? 1.0f : 0.0f);
   p.setUniformValue("u_drone", f.dronePos);
   p.setUniformValue("u_droner", f.droneRadius);
-  p.setUniformValue("u_shadowtex", 1);
+  if (&p == prog_.get()) { // only the lit program receives shadows
+    if (csmLocs_.vp < 0)
+      csmLocs_.resolve(&p);
+    csmLocs_.upload(&p, f.csm, f.shadowOn);
+  }
 }
 
 void VegetationRenderer::drawBucket(VariantGpu &v, int lod,

@@ -42,6 +42,8 @@
 // the sim is built with VAYU_SIM_GRASS.
 #pragma once
 
+#include "Atmosphere.h"
+#include "ShadowCascades.h"
 #include "VegetationAssets.h"
 #include "VsimTypes.h"
 #include "procgen/Vegetation.h"
@@ -63,14 +65,17 @@ class QOpenGLShaderProgram;
 namespace vsim {
 
 // The renderer's shared GLSL, appended in this order after the vegetation
-// shaders' own declarations: atmosphere (skyColor, u_sundir), shadow receive
-// (shadowFactor), lighting (sunLightColor, ambientLight, applyAerialPerspective).
+// shaders' own declarations: atmosphere (skyColor, u_sundir), lighting
+// (u_campos, sunLightColor, ambientLit, applyAerialPerspective), then the shadow
+// receive: kCascadeShadowGLSL (csmVisibility) followed by kShadowGLSL.
 struct VegGlsl {
   QByteArray atmosphere, shadow, lighting;
 };
 
 struct VegFrame {
-  QMatrix4x4 proj, view, lightVP;
+  QMatrix4x4 proj, view;
+  ShadowCascadeSet csm; // this frame's cascades (matrices, tiles, splits)
+  Atmosphere atmo;      // sun, sky, ambient and haze colours (uniforms of kAtmosphereGLSL)
   QVector3D camEye, sunDir, dronePos;
   float time = 0.0f;
   float droneRadius = 0.0f;
@@ -211,6 +216,7 @@ private:
   void drawImpostors(VariantGpu &v, const std::vector<float> &data,
                      const VegFrame &f);
   void setCommonUniforms(QOpenGLShaderProgram &p, const VegFrame &f);
+  CascadeUniforms csmLocs_; // shadow uniforms of prog_, resolved once per program
   void freeSpeciesTextures(SpeciesGpu &s);
   unsigned uploadTexture(const QImage &rgba, bool srgb, bool preserveCoverage,
                          float cutoff);
