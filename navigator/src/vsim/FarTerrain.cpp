@@ -26,10 +26,10 @@ namespace vsim {
 
 namespace {
 
-constexpr int kRings = 4;
-constexpr float kCell[kRings] = {48.0f, 96.0f, 192.0f, 384.0f};
+constexpr int kRings = 5;
+constexpr float kCell[kRings] = {24.0f, 48.0f, 96.0f, 192.0f, 384.0f};
 // How far each ring reaches beyond the previous one's outer edge [m].
-constexpr float kWidth[kRings] = {480.0f, 768.0f, 1536.0f, 3072.0f};
+constexpr float kWidth[kRings] = {72.0f, 384.0f, 768.0f, 1536.0f, 3072.0f};
 
 struct Rect {
   float x0, x1, y0, y1;
@@ -202,6 +202,36 @@ FarTerrain::Built FarTerrain::build(const procgen::TerrainField &f,
         // Same split as the chunk meshes: (00,10,11) and (00,11,01).
         for (const Vert *v : {&v00, &v10, &v11, &v00, &v11, &v01})
           verts_.insert(verts_.end(), v->f, v->f + 9);
+      }
+    }
+    if (ring == 0) {
+      // Skirt: a short wall hanging below the ring's surface along the window
+      // edge (just outside the clip rectangle), so whatever gap is left between
+      // the ring's coarse edge and the near chunks' finer one shows ground, not
+      // sky. Top follows the ring's edge polyline, which is where the ring
+      // surface starts once the window interior is clipped away.
+      auto wall = [&](const Vert &a, const Vert &b, float ox, float oy) {
+        Vert a2 = a, b2 = b, a3 = a, b3 = b;
+        for (Vert *v : {&a2, &b2, &a3, &b3}) {
+          v->f[0] += ox;
+          v->f[1] += oy;
+        }
+        a3.f[2] += kSkirtM; // NED z: +z is down
+        b3.f[2] += kSkirtM;
+        for (const Vert *v : {&a2, &b2, &b3, &a2, &b3, &a3})
+          verts_.insert(verts_.end(), v->f, v->f + 9);
+      };
+      const int ex0 = static_cast<int>(std::lround(win.x0 / c));
+      const int ex1 = static_cast<int>(std::lround(win.x1 / c));
+      const int ey0 = static_cast<int>(std::lround(win.y0 / c));
+      const int ey1 = static_cast<int>(std::lround(win.y1 / c));
+      for (int j = ey0; j < ey1; ++j) {
+        wall(vertAt(ex0, j), vertAt(ex0, j + 1), -kSkirtGapM, 0.0f);
+        wall(vertAt(ex1, j), vertAt(ex1, j + 1), kSkirtGapM, 0.0f);
+      }
+      for (int i = ex0; i < ex1; ++i) {
+        wall(vertAt(i, ey0), vertAt(i + 1, ey0), 0.0f, -kSkirtGapM);
+        wall(vertAt(i, ey1), vertAt(i + 1, ey1), 0.0f, kSkirtGapM);
       }
     }
     inner = outer;
