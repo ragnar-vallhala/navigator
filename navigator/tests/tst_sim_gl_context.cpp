@@ -552,6 +552,27 @@ private slots:
     QVERIFY2(sameScene(ref, capture(rig.r), &why), why);
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
+
+  // The textured ground (High) compiles, binds its six textures from the
+  // resources without a GL error, and shows something other than the plain
+  // ground (Low). Forced on both ways: the default is Low on this software GL.
+  void terrainMaterialRendersAndDiffersFromLow() {
+    Rig rig;
+    QVERIFY(rig.showDocked());
+    rig.r->setTerrainQuality(vsim::terrain::Quality::Low);
+    const Views low = capture(rig.r);
+    rig.r->setTerrainQuality(vsim::terrain::Quality::High);
+    const Views high = capture(rig.r);
+    QCOMPARE(rig.r->glErrorCount(), 0);
+    QVERIFY2(distinctColours(high.mesh) >= 40 && distinctColours(high.chunk) >= 40,
+             "textured frame is blank");
+    QVERIFY2(meanDiff(signature(low.chunk), signature(high.chunk)) > 1.0f,
+             "High looks the same as Low: the material was not applied");
+    // And back: the plain look returns exactly.
+    rig.r->setTerrainQuality(vsim::terrain::Quality::Low);
+    const char *why = nullptr;
+    QVERIFY2(sameScene(low, capture(rig.r), &why), why);
+  }
 };
 
 QTEST_MAIN(TstSimGlContext)

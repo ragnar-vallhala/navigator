@@ -251,6 +251,10 @@ navigator_test(tst_procgen
     ${SRC}/vsim/ChunkStreamer.cpp)
 target_include_directories(tst_procgen PRIVATE ${SRC}/vsim)
 
+# ---- Terrain material: splat rule + quality default (header only) ----------
+navigator_test(tst_terrainmaterial tst_terrainmaterial.cpp)
+target_include_directories(tst_terrainmaterial PRIVATE ${SRC}/vsim)
+
 # ---- Procedural vegetation placement (Qt-free core, headless) ---------------
 navigator_test(tst_vegetation
     tst_vegetation.cpp
@@ -293,6 +297,8 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
       tst_sim_gl_context.cpp
       ${SRC}/vsim/SimRendererWidget.cpp ${SRC}/vsim/SimRendererWidget.h
       ${SRC}/vsim/FarTerrain.cpp ${SRC}/vsim/FarTerrain.h
+      ${SRC}/vsim/TerrainMaterial.cpp ${SRC}/vsim/TerrainTextures.h
+      ${CMAKE_SOURCE_DIR}/resources/resources.qrc
       ${SRC}/vsim/procgen/Noise.cpp ${SRC}/vsim/procgen/TerrainField.cpp
       ${SRC}/vsim/procgen/GroundCover.cpp
       ${SRC}/ui/widgets/SimHudWidget.cpp ${SRC}/ui/widgets/SimHudWidget.h

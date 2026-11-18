@@ -331,6 +331,7 @@ void SimulatorWidget::buildUi() {
 
   auto *viewPanel = new SimViewPanel(*this, splitter);
   splitter->addWidget(viewPanel);
+  applyTerrainQuality();
 
   m_rightStack = new QStackedWidget(splitter);
   splitter->addWidget(m_rightStack);
@@ -1744,6 +1745,25 @@ void SimulatorWidget::onShipFinished(const WorldShipResult &r, int gen,
     // newer is coming: reset anyway rather than leave the stale state.
     m_spawnResetPending = false;
     sendSpawnReset();
+  }
+}
+
+void SimulatorWidget::applyTerrainQuality() {
+  QString q = QSettings().value(kTerrainQualityKey, QStringLiteral("auto"))
+                  .toString().toLower();
+  const QString env = qEnvironmentVariable("NAV_TERRAIN_QUALITY").toLower();
+  if (env == QLatin1String("low") || env == QLatin1String("high") ||
+      env == QLatin1String("auto"))
+    q = env;
+  for (vsim::SimRendererWidget *r : {m_renderer, m_downRenderer}) {
+    if (!r)
+      continue;
+    if (q == QLatin1String("low"))
+      r->setTerrainQuality(vsim::terrain::Quality::Low);
+    else if (q == QLatin1String("high"))
+      r->setTerrainQuality(vsim::terrain::Quality::High);
+    else
+      r->setTerrainQualityAuto();
   }
 }
 

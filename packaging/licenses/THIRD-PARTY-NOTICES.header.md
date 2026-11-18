@@ -53,6 +53,16 @@ the assimp development team, under the 3-clause BSD licence (text in
 Linux AppImage includes it). The Windows build does not include the simulator
 and does not ship assimp.
 
+## Terrain textures (CC0 1.0)
+
+The simulator's ground uses three photo textures (grass, rock and mud) from
+Poly Haven (`https://polyhaven.com/a/grass_path_2`,
+`https://polyhaven.com/a/rocky_trail_02`, `https://polyhaven.com/a/brown_mud_03`),
+embedded in the application. They are released under CC0 1.0, a public domain
+dedication (`https://polyhaven.com/license`), so no licence conditions apply;
+they are listed here for transparency. They were re-encoded (smaller JPEG,
+metadata removed) and are otherwise unchanged.
+
 ## nav (Apache-2.0)
 
 The `nav` command-line tool (`https://github.com/ragnar-vallhala/nav`),
