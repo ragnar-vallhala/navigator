@@ -38,13 +38,53 @@ TerrainField makeField(int palette, uint32_t seed = 11u) {
   return TerrainField(fp);
 }
 
-using Key = std::tuple<float, float, int, int>;
+using Key = std::tuple<float, float, int, int, int, float>;
 std::vector<Key> keysOf(const std::vector<VegInstance> &v) {
   std::vector<Key> k;
   for (const VegInstance &i : v)
-    k.emplace_back(i.pos.x, i.pos.y, i.species, i.variant);
+    k.emplace_back(i.pos.x, i.pos.y, i.species, i.variant, i.kind, i.scale);
   std::sort(k.begin(), k.end());
   return k;
+}
+
+// Trees of a scatter over [0, side)^2 in 256 m chunks.
+std::vector<VegInstance> treesOver(int palette, float side, uint32_t seed = 11u) {
+  const TerrainField f = makeField(palette, seed);
+  const VegParams p = vegParamsForPalette(palette);
+  std::vector<VegInstance> trees;
+  const int n = static_cast<int>(side / 256.0f);
+  for (int j = 0; j < n; ++j)
+    for (int i = 0; i < n; ++i)
+      for (const VegInstance &v : scatterVegetation(f, i, j, 256.0f, p))
+        if (v.species == kVegTree)
+          trees.push_back(v);
+  return trees;
+}
+
+// Mean over trees of the share of the other trees within `r` metres that are of
+// the tree's own kind (or conifer/broadleaf group when `byGroup`); labels are
+// taken from `lab`, positions from `t`. Trees without neighbours are skipped.
+double sameLabelShare(const std::vector<VegInstance> &t, const std::vector<int> &lab,
+                      float r) {
+  double sum = 0;
+  int cnt = 0;
+  for (std::size_t a = 0; a < t.size(); ++a) {
+    int same = 0, all = 0;
+    for (std::size_t b = 0; b < t.size(); ++b) {
+      if (a == b)
+        continue;
+      const float dx = t[a].pos.x - t[b].pos.x, dy = t[a].pos.y - t[b].pos.y;
+      if (dx * dx + dy * dy > r * r)
+        continue;
+      ++all;
+      same += lab[a] == lab[b];
+    }
+    if (all >= 3) {
+      sum += double(same) / all;
+      ++cnt;
+    }
+  }
+  return cnt ? sum / cnt : 0.0;
 }
 
 } // namespace
@@ -59,6 +99,12 @@ private slots:
   void treesKeepMinSpacing();
   void forestDenserThanYard();
   void collidersOnlyTreesAndLargeRocks();
+  void treeSpeciesAreFullSize();
+  void treesAreMixedAndClumped();
+  void treesHaveGapsAndMixedZones();
+  void crownsSetTheSpacing();
+  void collidersFollowTheDrawnSize();
+  void paletteSpeciesShares();
   void emptyForNoChunk();
 };
 
@@ -192,6 +238,7 @@ void TstVegetation::collidersOnlyTreesAndLargeRocks() {
     in.push_back(v);
   };
   add(kVegTree, 1.5f);
+  in.back().kind = 2;
   add(kVegBush, 2.0f);
   add(kVegGrassClump, 2.0f);
   add(kVegRock, 0.5f);
@@ -199,8 +246,8 @@ void TstVegetation::collidersOnlyTreesAndLargeRocks() {
   const auto c = vegetationColliders(in);
   QCOMPARE(c.size(), std::size_t(2));
   QVERIFY(!c[0].isRock);
-  QCOMPARE(c[0].radius, kVegTreeTrunkRadiusM * 1.5f);
-  QCOMPARE(c[0].height, kVegTreeHeightM * 1.5f);
+  QCOMPARE(c[0].radius, vegTreeKind(2).trunkRadiusM * 1.5f);
+  QCOMPARE(c[0].height, vegTreeKind(2).heightM * 1.5f);
   QVERIFY(c[1].isRock);
   QCOMPARE(c[1].radius, kVegRockRadiusM * 2.0f);
 
@@ -213,6 +260,165 @@ void TstVegetation::collidersOnlyTreesAndLargeRocks() {
                (i.species == kVegRock && i.scale >= kVegRockColliderMinScale));
   QVERIFY(expect > 0);
   QCOMPARE(vegetationColliders(v).size(), expect);
+}
+
+void TstVegetation::treeSpeciesAreFullSize() {
+  int conifers = 0, broadleaf = 0;
+  for (int k = 0; k < kVegTreeKindCount; ++k) {
+    const VegTreeKind &t = vegTreeKind(k);
+    (t.conifer ? conifers : broadleaf)++;
+    QVERIFY2(t.heightM * t.scaleMin >= 8.0f, t.id);
+    QVERIFY2(t.heightM * t.scaleMax <= 20.0f, t.id);
+    QVERIFY2(t.scaleMax > 1.2f * t.scaleMin, t.id); // real size variation
+    QVERIFY2(t.trunkRadiusM > 0.1f && t.trunkRadiusM < t.crownRadiusM, t.id);
+    QCOMPARE(vegTreeKindIndex(t.id), k);
+  }
+  QVERIFY(conifers >= 2);
+  QVERIFY(broadleaf >= 2);
+  QCOMPARE(vegTreeKindIndex("no_such_tree"), -1);
+
+  // Every placed tree is 8-20 m tall and each kind actually occurs.
+  const auto trees = treesOver(kPalForest, 512.0f);
+  QVERIFY(trees.size() > 500);
+  std::vector<int> perKind(kVegTreeKindCount, 0);
+  float lo = 1e9f, hi = 0.0f;
+  for (const VegInstance &v : trees) {
+    QVERIFY(v.kind < kVegTreeKindCount);
+    perKind[v.kind]++;
+    const float h = vegTreeKind(v.kind).heightM * v.scale;
+    lo = std::min(lo, h);
+    hi = std::max(hi, h);
+    QVERIFY2(h >= 8.0f && h <= 20.0f, qPrintable(QString::number(h)));
+  }
+  qInfo("forest tree heights %.1f .. %.1f m; per kind %d %d %d %d", lo, hi, perKind[0],
+        perKind[1], perKind[2], perKind[3]);
+  for (int n : perKind)
+    QVERIFY(n > int(trees.size()) / 20);
+  QVERIFY(lo < 11.0f && hi > 17.0f); // the range is used, not one size
+}
+
+void TstVegetation::treesAreMixedAndClumped() {
+  // Stands of one species cluster: a tree's neighbours share its kind (and its
+  // conifer/broadleaf group) clearly more often than if the same kinds were
+  // scattered at random over the same positions.
+  const auto trees = treesOver(kPalForest, 768.0f);
+  QVERIFY(trees.size() > 1000);
+  std::vector<int> kinds, groups;
+  for (const VegInstance &v : trees) {
+    kinds.push_back(v.kind);
+    groups.push_back(vegTreeKind(v.kind).conifer ? 1 : 0);
+  }
+  auto shuffled = [](std::vector<int> l) {
+    uint32_t s = 12345u;
+    for (std::size_t i = l.size(); i > 1; --i) {
+      s = s * 1664525u + 1013904223u;
+      std::swap(l[i - 1], l[(s >> 8) % i]);
+    }
+    return l;
+  };
+  const float r = 30.0f;
+  const double kindReal = sameLabelShare(trees, kinds, r);
+  const double kindRand = sameLabelShare(trees, shuffled(kinds), r);
+  const double grpReal = sameLabelShare(trees, groups, r);
+  const double grpRand = sameLabelShare(trees, shuffled(groups), r);
+  qInfo("same-kind share within %.0f m: stands %.3f vs uniform %.3f (index %.2f); "
+        "same-group %.3f vs %.3f (index %.2f)",
+        r, kindReal, kindRand, kindReal / kindRand, grpReal, grpRand, grpReal / grpRand);
+  QVERIFY2(kindReal > 1.4 * kindRand, "species do not clump");
+  QVERIFY2(grpReal > 1.25 * grpRand, "conifer/broadleaf stands do not clump");
+  // ... yet the land is mixed, not two big blocks.
+  QVERIFY(kindReal < 0.97);
+}
+
+void TstVegetation::treesHaveGapsAndMixedZones() {
+  const auto trees = treesOver(kPalForest, 768.0f);
+  // Clearings: share of 24 m cells without a single tree.
+  const float cell = 24.0f;
+  const int n = static_cast<int>(768.0f / cell);
+  std::vector<int> occ(n * n, 0);
+  for (const VegInstance &v : trees) {
+    const int i = std::min(n - 1, std::max(0, int(v.pos.x / cell)));
+    const int j = std::min(n - 1, std::max(0, int(v.pos.y / cell)));
+    occ[j * n + i]++;
+  }
+  const int empty = int(std::count(occ.begin(), occ.end(), 0));
+  const double emptyShare = double(empty) / (n * n);
+  qInfo("empty 24 m cells: %.1f %%", 100.0 * emptyShare);
+  QVERIFY2(emptyShare > 0.04, "no clearings");
+  QVERIFY2(emptyShare < 0.45, "too open for a forest");
+  // Mixed zones: trees that have both a conifer and a broadleaf within 25 m.
+  int mixed = 0;
+  for (std::size_t a = 0; a < trees.size(); a += 3) {
+    bool c = false, b = false;
+    for (std::size_t o = 0; o < trees.size(); ++o) {
+      const float dx = trees[a].pos.x - trees[o].pos.x, dy = trees[a].pos.y - trees[o].pos.y;
+      if (dx * dx + dy * dy > 25.0f * 25.0f)
+        continue;
+      (vegTreeKind(trees[o].kind).conifer ? c : b) = true;
+    }
+    mixed += c && b;
+  }
+  const double mixedShare = double(mixed) / double((trees.size() + 2) / 3);
+  qInfo("trees with both groups within 25 m: %.1f %%", 100.0 * mixedShare);
+  QVERIFY2(mixedShare > 0.05, "no mixed zones");
+  QVERIFY2(mixedShare < 0.85, "no pure stands");
+}
+
+void TstVegetation::crownsSetTheSpacing() {
+  const VegParams p = vegParamsForPalette(kPalForest);
+  const auto trees = treesOver(kPalForest, 512.0f);
+  QVERIFY(trees.size() > 500);
+  float minRatio = 1e9f;
+  for (std::size_t a = 0; a < trees.size(); ++a)
+    for (std::size_t b = a + 1; b < trees.size(); ++b) {
+      const float d = std::hypot(trees[a].pos.x - trees[b].pos.x,
+                                 trees[a].pos.y - trees[b].pos.y);
+      if (d > 30.0f)
+        continue;
+      const float ca = vegTreeKind(trees[a].kind).crownRadiusM * trees[a].scale;
+      const float cb = vegTreeKind(trees[b].kind).crownRadiusM * trees[b].scale;
+      const float need = std::min(
+          std::max(p.treeMinSpacingM, p.stands.crownSpacing * (ca + cb)), 12.0f);
+      QVERIFY2(d >= need - 1e-3f, qPrintable(QString("d %1 < need %2").arg(d).arg(need)));
+      minRatio = std::min(minRatio, d / (ca + cb));
+    }
+  qInfo("closest trunk spacing / crown radii sum: %.2f", minRatio);
+}
+
+void TstVegetation::collidersFollowTheDrawnSize() {
+  const auto trees = treesOver(kPalForest, 256.0f);
+  QVERIFY(trees.size() > 100);
+  const auto cs = vegetationColliders(trees);
+  QCOMPARE(cs.size(), trees.size());
+  for (std::size_t i = 0; i < trees.size(); ++i) {
+    const VegTreeKind &k = vegTreeKind(trees[i].kind);
+    QCOMPARE(cs[i].height, k.heightM * trees[i].scale);
+    QCOMPARE(cs[i].radius, k.trunkRadiusM * trees[i].scale);
+    QVERIFY(cs[i].height >= 8.0f && cs[i].height <= 20.0f);
+    QVERIFY(cs[i].radius > 0.1f && cs[i].radius < 1.5f); // a trunk, not a sapling
+    QVERIFY(!cs[i].isRock);
+  }
+}
+
+void TstVegetation::paletteSpeciesShares() {
+  auto conifShare = [](int pal) {
+    const auto t = treesOver(pal, 1024.0f, 5u);
+    int c = 0;
+    for (const VegInstance &v : t)
+      c += vegTreeKind(v.kind).conifer;
+    return std::make_pair(t.size(), t.empty() ? 0.0 : double(c) / t.size());
+  };
+  const auto alpine = conifShare(kPalAlpine);
+  const auto meadow = conifShare(kPalMeadow);
+  const auto forest = conifShare(kPalForest);
+  qInfo("conifer share: alpine %.2f (%zu), forest %.2f (%zu), meadow %.2f (%zu)",
+        alpine.second, alpine.first, forest.second, forest.first, meadow.second,
+        meadow.first);
+  QVERIFY(alpine.first > 50 && meadow.first > 20);
+  QVERIFY(alpine.second > forest.second);
+  QVERIFY(forest.second > meadow.second);
+  QVERIFY(alpine.second > 0.7);
+  QVERIFY(meadow.second < 0.4);
 }
 
 void TstVegetation::emptyForNoChunk() {

@@ -42,9 +42,10 @@ constexpr float kLodBand = 0.07f;  // cross-fade half width, fraction of the edg
 // distance otherwise). Fog is nearly opaque by ~500 m, so nothing goes farther.
 const VegSpeciesInfo kTable[] = {
     // id                       cat            size  span   lod ends         max   fb    sway  imp
-    {"fir_sapling",             procgen::kVegTree,  procgen::kVegTreeHeightM, false, {40, 90, 150}, 520, 250, 0.020f, true},
-    {"pine_sapling_small",      procgen::kVegTree,  procgen::kVegTreeHeightM, false, {40, 90, 150}, 520, 250, 0.020f, true},
-    {"island_tree_02",          procgen::kVegTree,  procgen::kVegTreeHeightM, false, {40, 90, 150}, 520, 250, 0.015f, true},
+    {"fir_tree_01",             procgen::kVegTree,  procgen::kVegTreeKinds[0].heightM, false, {55, 120, 220}, 560, 300, 0.012f, true},
+    {"pine_sapling_medium",     procgen::kVegTree,  procgen::kVegTreeKinds[1].heightM, false, {55, 120, 220}, 560, 300, 0.012f, true},
+    {"jacaranda_tree",          procgen::kVegTree,  procgen::kVegTreeKinds[2].heightM, false, {55, 120, 220}, 560, 300, 0.008f, true},
+    {"island_tree_01",          procgen::kVegTree,  procgen::kVegTreeKinds[3].heightM, false, {55, 120, 220}, 560, 300, 0.008f, true},
     {"shrub_03",                procgen::kVegBush,  1.0f, false, {25, 60, 110}, 170, 170, 0.030f, false},
     {"shrub_04",                procgen::kVegBush,  1.3f, true,  {25, 60, 110}, 170, 170, 0.030f, false},
     {"weed_plant_02",           procgen::kVegBush,  0.8f, true,  {20, 45, 80},  110, 110, 0.050f, false},
@@ -125,6 +126,7 @@ uniform sampler2D u_normal;   // linear, tangent space, +Y up
 uniform sampler2D u_arm;      // linear: R = ambient occlusion, G = roughness
 uniform float u_cutout;
 uniform float u_cutoff;
+uniform float u_sway;
 )GLSL";
 
 const char *kFSMain = R"GLSL(
@@ -183,6 +185,10 @@ void main() {
         sunLightColor() * (wrapDiffuse(Nf, sun) * 0.95 + thru * 0.45) * sh;
   } else {
     L = ambientLit(Nm) * ao * 1.25 + sunLightColor() * wrapDiffuse(Nm, sun) * 0.95 * sh;
+    // Poly Haven bark albedo averages 0.2-0.3 linear; with the AO term it read
+    // as black. Trunks (the swaying species) get a lift and an AO floor.
+    if (u_sway > 0.0)
+      L = ambientLit(Nm) * (0.6 + 0.4 * ao) * 1.5 + sunLightColor() * wrapDiffuse(Nm, sun) * 1.0 * sh;
   }
   o_color = vec4(applyAerialPerspective(base * L, toFrag, dist), 1.0);
 }
@@ -566,7 +572,10 @@ size_t VegetationRenderer::instanceCount() const {
 int VegetationRenderer::variantFor(const procgen::VegInstance &v, int *infoOut) const {
   if (v.species >= procgen::kVegSpeciesCount)
     return -1;
-  const std::vector<int> &pool = pool_[v.species];
+  const std::vector<int> &pool =
+      v.species == procgen::kVegTree
+          ? treePool_[std::min<int>(v.kind, procgen::kVegTreeKindCount - 1)]
+          : pool_[v.species];
   if (pool.empty())
     return -1;
   uint32_t h = uint32_t(v.variant) * 2654435761u ^
@@ -1134,13 +1143,18 @@ void VegetationRenderer::draw(const VegFrame &f) {
             v.tile = nextTile;
             nextTile += kAtlasAzimuths;
           }
-          // A forest should be mostly the full broadleaf crown, not the thin
-          // saplings; grass tufts outnumber the single blades.
-          const int copies = av.name.contains("seedling") ? 3
-                             : (assets_.species[si].id == "pine_sapling_small") ? (av.name.endsWith("_a") ? 1 : 0)
-                             : (info.cat == procgen::kVegTree && assets_.species[si].id == "island_tree_02") ? 9 : 1;
-          for (int c = 0; c < copies; ++c)
-            pool_[size_t(info.cat)].push_back(int(var_.size()));
+          // Grass tufts outnumber the single blades; every tree variant of a
+          // kind is equally likely.
+          const int copies = av.name.contains("seedling") ? 3 : 1;
+          for (int c = 0; c < copies; ++c) {
+            if (info.cat == procgen::kVegTree) {
+              const int kind = procgen::vegTreeKindIndex(info.id);
+              if (kind >= 0)
+                treePool_[size_t(kind)].push_back(int(var_.size()));
+            } else {
+              pool_[size_t(info.cat)].push_back(int(var_.size()));
+            }
+          }
           var_.push_back(v);
         }
       }

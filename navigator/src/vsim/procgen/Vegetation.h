@@ -21,8 +21,15 @@
 // the point itself, and everything about it (position, height, slope, ground
 // cover, hash) is a pure function of the point's global cell. So scattering two
 // adjacent chunks yields exactly the instances of scattering both as one
-// region: no gaps, no duplicates, and no neighbour lookups. Trees keep a minimum
-// spacing because their jitter is confined to the inside of the cell.
+// region: no gaps and no duplicates.
+//
+// Trees are full-size (8-20 m) and stand in stands: low-frequency noise (a pure
+// function of the position) picks conifer or broadleaf and which species of the
+// group, so one species clumps, with mixed zones where the fields cross, and a
+// second field opens clearings. A tree candidate only survives if no
+// higher-priority neighbouring candidate stands closer than the sum of their
+// crown radii times a factor; the neighbour test reads only the candidates'
+// global cells, never the chunk, so it is chunk independent too.
 //
 // Instances only carry placement; the renderer picks a shared mesh per species/
 // variant. vegetationColliders() lists the instances that should block the
@@ -46,22 +53,50 @@ enum VegSpecies : uint8_t {
 inline constexpr int kVegSpeciesCount = 4;
 inline constexpr int kVegVariants = 4; // distinct mesh variants per species
 
+// The tree species. Sizes are at instance scale 1 [m]: the single source for the
+// renderer's species table and for the colliders, so what is drawn is what is
+// solid. The renderer scales every variant of a species to heightM, so the
+// collider height is exact whichever variant is drawn. An instance's scale is
+// drawn from [scaleMin, scaleMax], giving heights from 8 m to 20 m.
+struct VegTreeKind {
+  const char *id;      // asset species id (assets/vegetation/manifest.json)
+  bool conifer;
+  float heightM;       // drawn height at scale 1
+  float scaleMin, scaleMax;
+  float trunkRadiusM;  // collider radius at scale 1 (measured trunk, see assets)
+  float crownRadiusM;  // canopy radius at scale 1, drives the spacing
+};
+inline constexpr int kVegTreeKindCount = 4;
+// Trunk radii follow the measured ones (manifest "trunkRadius", median radial distance of
+// the solid geometry 0.5-1.5 m above the base, at the model's own size) times
+// the drawn-size / model-size ratio; tst_vegetation_scale checks them against
+// the assets. Crown radii are the modelled canopy half-width at drawn size.
+inline constexpr VegTreeKind kVegTreeKinds[kVegTreeKindCount] = {
+    // id                   conifer height  scale range   trunk  crown
+    {"fir_tree_01",         true,   16.0f,  0.70f, 1.25f, 0.15f, 2.8f},
+    {"pine_sapling_medium", true,   12.0f,  0.75f, 1.30f, 0.48f, 2.8f},
+    {"jacaranda_tree",      false,  13.0f,  0.62f, 1.45f, 0.45f, 8.2f},
+    {"island_tree_01",      false,   9.5f,  0.85f, 1.30f, 0.50f, 4.6f},
+};
+inline const VegTreeKind &vegTreeKind(int kind) {
+  return kVegTreeKinds[kind < 0 ? 0 : (kind >= kVegTreeKindCount ? kVegTreeKindCount - 1 : kind)];
+}
+// Index of the kind with this asset id, -1 when there is none.
+int vegTreeKindIndex(const char *id);
+
 struct VegInstance {
   PgVec3 pos;       // base on the surface, NED world metres
   float yaw = 0.0f; // rotation about the vertical [rad]
   float scale = 1.0f; // size multiplier on the species' nominal mesh
   uint8_t species = kVegTree;
-  uint8_t variant = 0; // 0 .. kVegVariants-1
+  uint8_t variant = 0; // trees: any value, the renderer takes it modulo the
+                       // kind's variant count; others 0 .. kVegVariants-1
+  uint8_t kind = 0;    // trees: index into vegTreeKind()
   float tint = 0.0f;   // small colour variation, 0..1
 };
 
-// Sizes at instance scale 1 [m]: the single source for the renderer's species
-// table and for the colliders, so what is drawn is what is solid. Every tree
-// species is scaled to the same height, so a tree's collider height is exact
-// whichever model is drawn; rocks are scaled by their longest footprint side
-// (their height differs per model, kVegRockHeightM is the typical one).
-inline constexpr float kVegTreeHeightM = 3.6f;
-inline constexpr float kVegTreeTrunkRadiusM = 0.15f;
+// Rocks are scaled by their longest footprint side (their height differs per
+// model, kVegRockHeightM is the typical one).
 inline constexpr float kVegRockSpanM = 1.3f;
 inline constexpr float kVegRockRadiusM = 0.5f * kVegRockSpanM;
 inline constexpr float kVegRockHeightM = 0.5f;
@@ -84,6 +119,9 @@ struct VegExclusion {
     return VegExclusion{x, y, halfX, halfY, true};
   }
   bool contains(float px, float py) const;
+  // True when a disc of radius `pad` around the point reaches the zone (a crown
+  // overhanging a pad).
+  bool reaches(float px, float py, float pad) const;
 };
 
 struct VegSpeciesParams {
@@ -99,10 +137,21 @@ struct VegSpeciesParams {
   float groundMin = 0.5f;
 };
 
+// How trees gather into stands. All distances in metres.
+struct VegTreeStands {
+  float coniferShare = 0.5f; // 0 = broadleaf only .. 1 = conifer only (area share)
+  float clumpM = 130.0f;     // size of a single-species stand
+  float standM = 85.0f;      // size of a thick stand / clearing
+  float openShare = 0.22f;   // roughly the part of the land left open
+  float mixWidth = 0.10f;    // width of the mixed zone between two stands (0..0.5)
+  float crownSpacing = 0.55f; // trunks stand >= this * (crown radii sum) apart
+};
+
 struct VegParams {
   uint32_t seed = 1337u;
   VegSpeciesParams species[kVegSpeciesCount];
-  float treeMinSpacingM = 3.0f; // closest two trees may stand [m]
+  VegTreeStands stands;
+  float treeMinSpacingM = 2.5f; // closest two trunks may stand [m]
   std::vector<VegExclusion> exclusions;
   float clearAroundSpawnM = 8.0f; // nothing within this of the origin
 
@@ -127,8 +176,8 @@ struct VegCollider {
   bool isRock = false;
 };
 
-// Trunks of trees and rocks at least kVegRockColliderMinScale; bushes and grass
-// clumps have none.
+// Trunks of trees (radius and height of their species, times the instance scale)
+// and rocks at least kVegRockColliderMinScale; bushes and grass clumps have none.
 std::vector<VegCollider>
 vegetationColliders(const std::vector<VegInstance> &instances);
 

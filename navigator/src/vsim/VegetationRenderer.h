@@ -229,6 +229,8 @@ private:
   std::vector<VariantGpu> var_;
   std::vector<int> infoOfSpecies_; // species table row per asset species, -1 none
   std::array<std::vector<int>, procgen::kVegSpeciesCount> pool_; // flat variants
+  // Tree variants per tree kind (procgen::VegInstance::kind).
+  std::array<std::vector<int>, procgen::kVegTreeKindCount> treePool_;
   bool resolvedAssets_ = false;
 
   std::unique_ptr<QOpenGLShaderProgram> prog_, progBillboard_, progBake_;
