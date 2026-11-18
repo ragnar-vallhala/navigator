@@ -126,6 +126,7 @@ QJsonObject worldToJson(const vsim::WorldConfig &w) {
                     {"palette", w.field.palette},
                     {"mountain_bias", w.field.mountainBias},
                     {"flat_radius_m", w.field.flatRadiusM},
+                    {"relief_m", w.field.reliefM},
                     {"col_brown", w.field.colBrownT},
                     {"col_rock", w.field.colRockT},
                     {"col_snow", w.field.colSnowT},
@@ -207,6 +208,7 @@ vsim::WorldConfig worldFromJson(const QJsonObject &root) {
   w.field.mountainBias =
       pg.value("mountain_bias").toDouble(w.field.mountainBias);
   w.field.flatRadiusM = pg.value("flat_radius_m").toDouble(w.field.flatRadiusM);
+  w.field.reliefM = pg.value("relief_m").toDouble(0.0); // absent in old files
   w.field.colBrownT = pg.value("col_brown").toDouble(w.field.colBrownT);
   w.field.colRockT = pg.value("col_rock").toDouble(w.field.colRockT);
   w.field.colSnowT = pg.value("col_snow").toDouble(w.field.colSnowT);

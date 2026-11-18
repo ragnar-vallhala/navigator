@@ -178,6 +178,23 @@ private slots:
     QCOMPARE(c.field.seed, quint32(77));
   }
 
+  // The relief height survives a save and a restart (.vworld and the restart path
+  // both go through the procedural JSON); an old file without it loads as none.
+  void reliefSurvivesSerialization() {
+    vsim::WorldConfig w;
+    QVERIFY(vsim::applyWorldPreset(w, "alpine", 5));
+    QVERIFY(w.field.reliefM > 0.0f);
+    const QString json = WorldEditorWidget::serializeProcedural(w);
+    vsim::WorldConfig back;
+    QVERIFY(WorldEditorWidget::deserializeProcedural(back, json));
+    QCOMPARE(back.field.reliefM, w.field.reliefM);
+    vsim::WorldConfig old;
+    old.field.reliefM = 0.25f; // stale value must not leak into an old file
+    QVERIFY(WorldEditorWidget::deserializeProcedural(
+        old, QStringLiteral("{\"biome\":\"alpine\",\"seed\":5}")));
+    QCOMPARE(old.field.reliefM, 0.0f);
+  }
+
   void legacyFiniteMeadowLoadsAsEndless() {
     WorldEditorWidget we;
     // No finite arena entry and no size/resolution controls any more.

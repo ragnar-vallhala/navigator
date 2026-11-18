@@ -40,7 +40,7 @@ inline PgVec3 mix(const PgVec3 &a, const PgVec3 &b, float t) {
 
 TerrainField::TerrainField(const FieldParams &p)
     : p_(p), hills_(p.seed), mtn_(p.seed ^ 0x9e3779b9u),
-      macro_(p.seed ^ 0x68bc21ebu), warp_(p.seed ^ 0xb5297a4du),
+      macro_(p.seed ^ 0x68bc21ebu), warp_(p.seed ^ 0xb5297a4du), relief_(p.seed ^ 0x7f4a7c15u),
       cover_(p.seed, p.palette),
       baseFreq_(p.featureM > 0.0f ? 1.0f / p.featureM : 1.0f / 150.0f),
       macroFreq_(p.macroM > 0.0f ? 1.0f / p.macroM : 1.0f / 1400.0f) {
@@ -48,14 +48,29 @@ TerrainField::TerrainField(const FieldParams &p)
   padHeight_ = rawHeight(0.0f, 0.0f);
 }
 
+// Add relief without lifting the surface above the field's own peak elevation
+// (heightM stays the true ceiling of the world).
+float TerrainField::withRelief(float h, float relief) const {
+  return std::min(h + relief, std::max(h, p_.heightM));
+}
+
 float TerrainField::height(float wx, float wy) const {
   const float h = rawHeight(wx, wy);
   const float R = p_.flatRadiusM;
   if (R <= 0.0f)
-    return h;
+    return withRelief(h, reliefHeight(wx, wy));
   const float r = std::sqrt(wx * wx + wy * wy);
   const float t = smoothstep(R, 2.5f * R, r); // 0 on the pad, 1 outside
-  return padHeight_ + (h - padHeight_) * t;
+  return withRelief(padHeight_ + (h - padHeight_) * t, t * reliefHeight(wx, wy));
+}
+
+float TerrainField::reliefHeight(float wx, float wy) const {
+  if (p_.reliefM <= 0.0f || p_.shape == 1)
+    return 0.0f;
+  // Two slow octaves (about 30 m and 15 m) so hummocks vary in size and the
+  // slope stays under reliefM * 0.15 even at the largest setting.
+  const float n = relief_.fbm(wx / 30.0f, wy / 30.0f, 2, 2.0f, 0.5f);
+  return p_.reliefM * clamp01(0.5f + 0.6f * n);
 }
 
 float TerrainField::duneHeight(float wx, float wy) const {
