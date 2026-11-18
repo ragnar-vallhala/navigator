@@ -332,6 +332,8 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
       ${SRC}/vsim/FarTerrain.cpp ${SRC}/vsim/FarTerrain.h
       ${SRC}/vsim/SimRendererWidget.cpp ${SRC}/vsim/SimRendererWidget.h
       ${SRC}/vsim/VegetationRenderer.cpp
+      ${SRC}/vsim/TerrainMaterial.cpp ${SRC}/vsim/TerrainTextures.h
+      ${CMAKE_SOURCE_DIR}/resources/resources.qrc
       ${SRC}/ui/widgets/SimHudWidget.cpp ${SRC}/ui/widgets/SimHudWidget.h
       ${SRC}/core/Units.cpp
       ${SRC}/vsim/DroneModel.cpp
