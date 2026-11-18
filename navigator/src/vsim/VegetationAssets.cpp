@@ -201,6 +201,7 @@ bool loadVegetationAssets(VegAssets &out, QString *error, const QString &root,
       const QJsonArray fp = vo.value("footprint").toArray();
       v.footprintX = float(fp.at(0).toDouble());
       v.footprintZ = float(fp.at(1).toDouble());
+      v.trunkRadius = float(vo.value("trunkRadius").toDouble());
       const QJsonArray lods = vo.value("lods").toArray();
       if (lods.size() != kVegLodCount)
         return fail(error, v.name + ": expected 3 LODs");

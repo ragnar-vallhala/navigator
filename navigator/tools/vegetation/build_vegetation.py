@@ -83,33 +83,47 @@ def grass_budget(orig, lod):
     return max(4, min(60, orig // 4))
 
 
-TREE = (6000, 1500, 300)
-# Conifer saplings are made of thousands of tiny needle cards; at the broadleaf
-# budget they decimate to bare twigs, so they keep about 2.5x as many triangles.
-CONIFER = (15000, 3000, 500)
 SMALL = (3000, 800, 150)
+# Full-size trees (8-20 m): the crown is the whole point, so LOD 0 keeps enough
+# cards to read as a dense crown from a drone at 20 m, and the far LODs stay
+# cheap because the billboard impostor takes over beyond them.
+BIG_CONIFER = (45000, 9000, 1400)
+BIG_BROADLEAF = (45000, 8000, 1200)
 
 SPECIES = [
-    dict(id='fir_sapling', gltf='fir_sapling_1k.gltf', category='tree',
-         title='Fir sapling', variants=['fir_sapling_a', 'fir_sapling_b', 'fir_sapling_c'],
-         budget=lod_budgets(CONIFER), pivot='base',
-         mats={'fir_sapling_branches': dict(weight=0.08, cutout=False, cull=False, size=512),
-               'fir_sapling_twigs': dict(weight=0.92, cutout=True, cull=True, size=1024,
-                                         scale_cap=(3.0, 4.0, 6.0), tris_per_comp=4)}),
-    dict(id='pine_sapling_small', gltf='pine_sapling_small_1k.gltf', category='tree',
-         title='Pine sapling', variants=['pine_sapling_small_a', 'pine_sapling_small_b',
-                                         'pine_sapling_small_c'],
-         budget=lod_budgets(CONIFER), pivot='base',
-         mats={'pine_sapling_small_bark': dict(weight=0.08, cutout=False, cull=False, size=512),
-               'pine_sapling_small_twig': dict(weight=0.92, cutout=True, cull=True, size=1024,
-                                               scale_cap=(3.0, 4.0, 6.0), tris_per_comp=4)}),
-    dict(id='island_tree_02', gltf='island_tree_02_1k.gltf', category='tree',
-         title='Island tree (broadleaf)', variants=['island_tree_02_LOD0'], pivot='base',
-         budget=lod_budgets(TREE),
-         mats={'island_tree_02': dict(weight=0.35, cutout=False, cull=False, size=1024),
-               'island_tree_02_leaves': dict(weight=0.50, cutout=True, key_black=True, cull=True, size=1024,
-                                             scale_cap=(3.5, 4.5, 6.0), tris_per_comp=2),
-               'island_tree_02_branches': dict(weight=0.15, cutout=False, cull=True, size=1024,
+    dict(id='fir_tree_01', gltf='fir_tree_01_1k.gltf', category='tree',
+         title='Fir tree 01 (conifer)',
+         # variant c is not shipped: its trunk mesh has no UV coordinates
+         variants=['fir_tree_01_a_LOD0', 'fir_tree_01_b_LOD0'],
+         budget=lod_budgets(BIG_CONIFER), pivot='base',
+         mats={'fir_tree_01_bark': dict(weight=0.05, cutout=False, cull=False, size=512),
+               'fir_tree_01_trunk_a': dict(weight=0.03, cutout=False, cull=False, size=512),
+               'fir_tree_01_trunk_b': dict(weight=0.03, cutout=False, cull=False, size=512),
+               'fir_tree_01_twig': dict(weight=0.86, cutout=True, cull=True, size=1024,
+                                        scale_cap=(8.0, 11.0, 16.0), tris_per_comp=4)}),
+    dict(id='pine_sapling_medium', gltf='pine_sapling_medium_1k.gltf', category='tree',
+         title='Pine (medium, conifer)',
+         variants=['pine_sapling_medium_a_LOD0', 'pine_sapling_medium_b_LOD0',
+                   'pine_sapling_medium_c_LOD0'],
+         budget=lod_budgets(BIG_CONIFER), pivot='base',
+         mats={'pine_sapling_medium_bark': dict(weight=0.08, cutout=False, cull=False, size=512),
+               'pine_sapling_medium_twig': dict(weight=0.92, cutout=True, cull=True, size=1024,
+                                                scale_cap=(6.0, 8.0, 12.0), tris_per_comp=4)}),
+    dict(id='jacaranda_tree', gltf='jacaranda_tree_1k.gltf', category='tree',
+         title='Jacaranda tree (broadleaf)', variants=['jacaranda_tree_LOD0'], pivot='base',
+         budget=lod_budgets(BIG_BROADLEAF),
+         mats={'jacaranda_tree_trunk': dict(weight=0.08, cutout=False, cull=False, size=512),
+               'jacaranda_tree_leaves': dict(weight=0.82, cutout=True, key_black=True, cull=True,
+                                             size=1024, scale_cap=(3.5, 4.5, 6.0), tris_per_comp=2),
+               'jacaranda_tree_branches': dict(weight=0.10, cutout=False, cull=True, size=512,
+                                               scale_cap=(2.0, 2.5, 3.0), tris_per_comp=12)}),
+    dict(id='island_tree_01', gltf='island_tree_01_1k.gltf', category='tree',
+         title='Island tree 01 (broadleaf)', variants=['island_tree_01_LOD0'], pivot='base',
+         budget=lod_budgets(BIG_BROADLEAF),
+         mats={'island_tree_01': dict(weight=0.10, cutout=False, cull=False, size=512),
+               'island_tree_01_leaves': dict(weight=0.78, cutout=True, key_black=True, cull=True,
+                                             size=1024, scale_cap=(3.5, 4.5, 6.0), tris_per_comp=2),
+               'island_tree_01_branches': dict(weight=0.12, cutout=False, cull=True, size=512,
                                                scale_cap=(2.0, 2.5, 3.0), tris_per_comp=12)}),
     dict(id='shrub_03', gltf='shrub_03_1k.gltf', category='shrub', title='Shrub 03',
          variants=['shrub_03_a', 'shrub_03_b', 'shrub_03_c', 'shrub_03_d'], pivot='bbox',
@@ -221,6 +235,8 @@ class Gltf:
         out = []
         for p in j['meshes'][node['mesh']]['primitives']:
             at = p['attributes']
+            if 'TEXCOORD_0' not in at:
+                continue   # no UVs (fir_tree_01 variant c trunk): cannot be textured
             P = self.accessor(at['POSITION']) + t
             N = self.accessor(at['NORMAL'])
             UV = self.accessor(at['TEXCOORD_0'])
@@ -681,6 +697,23 @@ def process_species(sp, raw_dir, out_dir, log):
             cx, cz = (lo[0] + hi[0]) / 2, (lo[2] + hi[2]) / 2
         shift = np.array([cx, lo[1], cz])
         orig_tris = sum(len(p['T']) for p in prims)
+        # Trunk radius: median distance from the (median) axis of the solid, non
+        # cut-out, non thinned geometry between 0.5 and 1.5 m above the base.  A
+        # multi-stem tree or low branches at the base make it larger, which is
+        # what a drone would hit; the simulator's collider follows it.
+        slab = []
+        for pr in prims:
+            cfg = sp['mats'].get(pr['mat'])
+            if cfg is None or cfg['cutout'] or cfg['cull']:
+                continue
+            q = pr['P'][np.unique(pr['T'])] - shift
+            slab.append(q[(q[:, 1] >= 0.5) & (q[:, 1] <= 1.5)])
+        slab = np.concatenate(slab) if slab else np.zeros((0, 3))
+        if len(slab):
+            ax = np.median(slab[:, [0, 2]], axis=0)
+            trunk_radius = round(float(np.median(np.hypot(slab[:, 0] - ax[0], slab[:, 2] - ax[1]))), 4)
+        else:
+            trunk_radius = None
         lod_rows = []
         for lod in range(LODS):
             total = sp['budget'](orig_tris, lod)
@@ -703,7 +736,7 @@ def process_species(sp, raw_dir, out_dir, log):
         variants.append(dict(
             name=vname, sourceTriangles=orig_tris, lods=lod_rows,
             bboxMin=b0['bboxMin'], bboxMax=b0['bboxMax'],
-            nominalHeight=round(b0['bboxMax'][1], 4),
+            nominalHeight=round(b0['bboxMax'][1], 4), trunkRadius=trunk_radius,
             footprint=[round(b0['bboxMax'][0] - b0['bboxMin'][0], 4),
                        round(b0['bboxMax'][2] - b0['bboxMin'][2], 4)]))
     info = read_info(raw_dir, sid)
@@ -739,7 +772,7 @@ def main():
                         arm='linear; R=ambient occlusion, G=roughness, B=0',
                         alpha='linear 8-bit coverage, alpha test at alphaCutoff'),
         meshFormat='vmesh v1 little endian, see tools/vegetation/build_vegetation.py',
-        lodBudgetsTrees=list(TREE), lodBudgetsSmall=list(SMALL), species=species)
+        lodBudgetsConifers=list(BIG_CONIFER), lodBudgetsBroadleaf=list(BIG_BROADLEAF), lodBudgetsSmall=list(SMALL), species=species)
     with open(mpath, 'w', encoding='utf8') as f:
         json.dump(manifest, f, indent=1)
         f.write('\n')

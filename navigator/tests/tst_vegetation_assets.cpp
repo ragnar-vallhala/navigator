@@ -157,12 +157,39 @@ private slots:
   }
 
   void cutoutMaterialsExist() {
-    const VegSpeciesAssets *fir = assets_.find("fir_sapling");
+    const VegSpeciesAssets *fir = assets_.find("fir_tree_01");
     QVERIFY(fir);
     bool anyCut = false;
     for (const VegMaterial &m : fir->materials)
       anyCut = anyCut || m.cutout();
     QVERIFY(anyCut);
+  }
+
+  // Full-size trees: at least two conifers and two broadleaf species, each with
+  // a modelled height of 8 m or more and a measured trunk.
+  void fullSizeTreesShipped() {
+    const QJsonArray sp = manifest_.value("species").toArray();
+    const QStringList conifers = {"fir_tree_01", "pine_sapling_medium"};
+    const QStringList broadleaf = {"jacaranda_tree", "island_tree_01"};
+    for (const QStringList &group : {conifers, broadleaf})
+      for (const QString &id : group) {
+        const VegSpeciesAssets *s = assets_.find(id);
+        QVERIFY2(s, qPrintable(id));
+        QCOMPARE(s->category, QStringLiteral("tree"));
+        bool inManifest = false;
+        for (const QJsonValue &v : sp)
+          if (v.toObject().value("id").toString() == id) {
+            inManifest = true;
+            QVERIFY(v.toObject().value("license").toString() == "CC0");
+          }
+        QVERIFY2(inManifest, qPrintable(id));
+        for (const VegVariant &v : s->variants) {
+          QVERIFY2(v.nominalHeight >= 5.0f, qPrintable(v.name));
+          QVERIFY2(v.trunkRadius > 0.05f && v.trunkRadius < 2.0f, qPrintable(v.name));
+          // a crown worth the name at LOD 0
+          QVERIFY2(v.lods[0].triangleCount() >= 15000, qPrintable(v.name));
+        }
+      }
   }
 
   void embeddedSizeIsBounded() {

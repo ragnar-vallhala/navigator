@@ -79,6 +79,7 @@ struct VegVariant {
   float nominalHeight = 0.0f; // metres, as modelled
   float footprintX = 0.0f;    // metres, as modelled
   float footprintZ = 0.0f;
+  float trunkRadius = 0.0f;   // metres as modelled, 0 when not measured (trees)
 };
 
 struct VegSpeciesAssets {
