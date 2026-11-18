@@ -178,7 +178,7 @@ private slots:
     }
     qInfo("embedded vegetation resource: %d files, %.1f MB", n, double(total) / 1e6);
     QVERIFY(n > 100);
-    QVERIFY(total < 30 * 1000 * 1000);
+    QVERIFY(total < qint64(30) * 1000 * 1000);
   }
 
   void rejectsBrokenMesh() {
