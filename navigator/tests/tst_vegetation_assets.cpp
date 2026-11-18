@@ -244,8 +244,15 @@ private slots:
           total += a;
           lowest = std::min(lowest, std::min({p[0].y(), p[1].y(), p[2].y()}));
         }
+        // The crown's whorls are counted above 0.30 H: the few low drooping
+        // branches below it fill the bottom third and are not whorls.
         int whorls = 0, empty = 99;
-        for (double a : area) {
+        double lowArea = 0;
+        for (size_t b = 0; b < area.size(); ++b)
+          if (float(b) * bin < 0.30f * H)
+            lowArea += area[b];
+        for (size_t b = size_t(0.30f * H / bin); b < area.size(); ++b) {
+          const double a = area[b];
           if (a > 0.003 * total) {
             if (empty >= 3) ++whorls;
             empty = 0;
@@ -253,11 +260,13 @@ private slots:
             ++empty;
           }
         }
-        qInfo("%s lod%d: %d whorls of %d tiers, lowest needle %.1f of %.1f", qPrintable(v.name), l,
-              whorls, m.tiers, double(lowest), double(H));
-        QVERIFY2(whorls >= m.tiers - 2 && whorls <= m.tiers + 1, // the leader may read as one more
+        qInfo("%s lod%d: %d whorls of %d tiers, lowest needle %.1f of %.1f, %.0f%% of needle area below 0.3 H",
+              qPrintable(v.name), l, whorls, m.tiers, double(lowest), double(H), 100.0 * lowArea / total);
+        QVERIFY2(whorls >= m.tiers - 3 && whorls <= m.tiers + 1, // the leader may read as one more
                  qPrintable(QString("%1 lod%2: %3 whorls vs %4 tiers").arg(v.name).arg(l).arg(whorls).arg(m.tiers)));
-        QVERIFY2(lowest > 0.22f * H, qPrintable(QString("%1 lod%2: lowest needle %3 of %4").arg(v.name).arg(l).arg(double(lowest)).arg(double(H))));
+        // the bottom third is not a bare pole: low branches droop down toward the ground
+        QVERIFY2(lowest < 0.15f * H, qPrintable(QString("%1 lod%2: lowest needle %3 of %4").arg(v.name).arg(l).arg(double(lowest)).arg(double(H))));
+        QVERIFY2(lowArea > 0.04 * total, qPrintable(QString("%1 lod%2: %3 of the needle area is low").arg(v.name).arg(l).arg(lowArea / total)));
       }
   }
 
