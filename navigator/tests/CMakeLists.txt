@@ -300,6 +300,34 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
     target_sources(tst_sim_gl_context PRIVATE ${SRC}/vsim/GpuGrass.cpp)
     target_compile_definitions(tst_sim_gl_context PRIVATE VAYU_SIM_GRASS=1)
   endif()
+  target_sources(tst_sim_gl_context PRIVATE ${SRC}/vsim/VegetationRenderer.cpp
+      ${SRC}/vsim/procgen/Vegetation.cpp ${SRC}/vsim/procgen/Noise.cpp
+      ${SRC}/vsim/procgen/TerrainField.cpp ${SRC}/vsim/procgen/GroundCover.cpp)
+  target_link_libraries(tst_sim_gl_context PRIVATE navigator_vegetation)
+
+  # ---- Vegetation renderer in the real 3D view (xvfb software GL) -----------
+  # Forest scene with vegetation on vs off, instance counts per palette, LOD
+  # selection, billboards, GL teardown. Skips on the offscreen platform.
+  navigator_test(tst_vegetation_render
+      tst_vegetation_render.cpp
+      ${SRC}/vsim/SimRendererWidget.cpp ${SRC}/vsim/SimRendererWidget.h
+      ${SRC}/vsim/VegetationRenderer.cpp
+      ${SRC}/ui/widgets/SimHudWidget.cpp ${SRC}/ui/widgets/SimHudWidget.h
+      ${SRC}/core/Units.cpp
+      ${SRC}/vsim/DroneModel.cpp
+      ${SRC}/vsim/ChunkStreamer.cpp
+      ${SRC}/vsim/procgen/Noise.cpp ${SRC}/vsim/procgen/TerrainGen.cpp
+      ${SRC}/vsim/procgen/TerrainField.cpp ${SRC}/vsim/procgen/GroundCover.cpp
+      ${SRC}/vsim/procgen/Vegetation.cpp)
+  target_include_directories(tst_vegetation_render PRIVATE ${SRC}/vsim
+      ${SRC}/ui/widgets ${VAYU_SITL_SDK})
+  target_link_libraries(tst_vegetation_render PRIVATE Qt6::OpenGL
+      Qt6::OpenGLWidgets navigator_vegetation)
+  if(NAVIGATOR_SIM_GRASS)
+    target_sources(tst_vegetation_render PRIVATE ${SRC}/vsim/GpuGrass.cpp
+        ${SRC}/vsim/procgen/Flora.cpp)
+    target_compile_definitions(tst_vegetation_render PRIVATE VAYU_SIM_GRASS=1)
+  endif()
 endif()
 
 # ---- No OpenGL context: the 3D views show a notice instead of crashing ----
