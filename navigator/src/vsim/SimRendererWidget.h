@@ -22,6 +22,7 @@
 // the SITL view renders terrain without grass. The code is retained in-tree for
 // later re-enable (cmake -DNAVIGATOR_SIM_GRASS=ON).
 #ifdef VAYU_SIM_GRASS
+#include "Atmosphere.h"
 #include "GpuGrass.h"
 #endif
 #include "DroneModel.h"
@@ -234,6 +235,20 @@ public:
     litAmbStr_ = ambientStrength;
     update();
   }
+  // Sun position: elevation above the horizon and azimuth clockwise from north,
+  // both degrees (see Atmosphere.h). Drives the light, the shadow map, the sky
+  // disc and the low-sun tint together. Defaults to the original look.
+  void setSun(float elevationDeg, float azimuthDeg) {
+    atmo_.setSun(elevationDeg, azimuthDeg);
+    syncSunDir();
+    update();
+  }
+  void setAtmosphere(const Atmosphere &a) {
+    atmo_ = a;
+    syncSunDir();
+    update();
+  }
+  const Atmosphere &atmosphere() const { return atmo_; }
   // World-space XY the terrain streamer should centre on: the free-fly camera
   // when roaming (sim stopped), otherwise the drone. Lets endless terrain follow
   // both WASD navigation and actual flight.
@@ -458,7 +473,6 @@ private:
   int ul_model_ = -1;
   int ul_nmat_ = -1;
   int ul_color_ = -1;
-  int ul_sundir_ = -1;
   int ul_campos_ = -1;
   int ul_fogdensity_ = -1;
   int ul_fogstart_ = -1;
@@ -491,7 +505,6 @@ private:
   // Sky shader: attribute-less fullscreen triangle, view-ray gradient + glow.
   std::unique_ptr<QOpenGLShaderProgram> progSky_;
   int us_invvp_ = -1;
-  int us_sundir_ = -1;
   int us_time_ = -1;
   QOpenGLVertexArrayObject skyVao_;
 
@@ -527,7 +540,7 @@ private:
   // Flora shader: instanced grass/flower blades, wind + distance fade + fog.
   std::unique_ptr<QOpenGLShaderProgram> progFlora_;
   int uf_vp_ = -1, uf_campos_ = -1, uf_time_ = -1;
-  int uf_fadestart_ = -1, uf_fadeend_ = -1, uf_sundir_ = -1;
+  int uf_fadestart_ = -1, uf_fadeend_ = -1;
   int uf_fogdensity_ = -1, uf_fogstart_ = -1;
   QOpenGLBuffer grassVbo_[3]; // shared blade geometry at 3 LODs (24/12/6 verts)
   int grassVerts_[3] = {0, 0, 0};
@@ -547,7 +560,14 @@ private:
   // Sun direction (toward the light, world NED) shared by lit + sky. A real
   // directional key ~45 deg above the horizon (z<0 is up in NED) for moody,
   // directional overcast light rather than flat noon overhead.
+  // Mirror of atmo_.sunDirection() for the grass and shadow code.
+  Atmosphere atmo_ = Atmosphere::defaults();
   QVector3D sunDir_{0.55f, 0.42f, -0.72f};
+  void syncSunDir() {
+    const Vec3f d = atmo_.sunDirection();
+    sunDir_ = QVector3D(d.x, d.y, d.z);
+  }
+  void applyAtmosphere(QOpenGLShaderProgram *prog) const;
 
   Mesh ground_;
   Mesh unitBox_;     // [-0.5,0.5]^3, pos+normal (lit) — scaled per obstacle

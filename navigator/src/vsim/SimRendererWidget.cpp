@@ -86,33 +86,9 @@ void main() {
 }
 )GLSL";
 
-// Shared atmosphere GLSL. Appended after the #version + uniform/in decls of
-// BOTH the sky and lit fragment shaders so distant terrain fog fades into
-// exactly the sky behind it (no edge seam). Declares u_sundir; defines the sky
-// gradient + a warm sun glow. (No tonemap: the terrain albedo/lighting are
-// already display-referred, so we show them directly — an ACES pass here, with
-// no linear/sRGB management around it, just shifted the colors.)
-const char *kAtmosphereGLSL = R"GLSL(
-uniform vec3 u_sundir;     // unit direction toward the sun (world, NED)
-vec3 skyColor(vec3 dir) {
-  float up = -dir.z;        // NED up is -Z
-  // Overcast, desaturated grey-teal — the moody storm palette.
-  vec3 zenith  = vec3(0.28, 0.35, 0.38);
-  vec3 horizon = vec3(0.52, 0.57, 0.58);
-  vec3 ground  = vec3(0.34, 0.38, 0.38); // below-horizon haze seen from height, not black
-  vec3 col = (up >= 0.0)
-      ? mix(horizon, zenith, pow(clamp(up, 0.0, 1.0), 0.55))
-      : mix(horizon, ground, smoothstep(0.0, 1.0, clamp(-up * 1.5, 0.0, 1.0)));
-  float s = max(dot(normalize(dir), normalize(u_sundir)), 0.0);
-  // Soft, not a step: the glow must not cut off at up == 0, or the sky just
-  // below the horizon is darker than the horizon colour the fog fades to (a
-  // visible seam where the far terrain ends).
-  float aboveHorizon = smoothstep(-0.10, 0.0, up);
-  // Sun is diffused behind cloud: a soft bright bloom, no hard disc.
-  col += vec3(0.30, 0.30, 0.26) * pow(s, 5.0) * aboveHorizon;
-  return col;
-}
-)GLSL";
+// The shared sky/sun GLSL (skyColor, fogColor, sunDisc, ambientLight) lives in
+// Atmosphere.h, appended to the sky, lit and flora fragment programs so distant
+// terrain fog fades into exactly the sky behind it.
 
 // Lit program for solids (imported airframe + world mesh / terrain, obstacles):
 // world-space directional Lambert + sky/ground hemispheric ambient, then aerial
@@ -188,14 +164,12 @@ void main() {
   vec3 toFrag = v_world - u_campos;
   float dist = length(toFrag);
   vec3 sun = normalize(u_sundir);
-  vec3 sunCol = vec3(1.04, 0.93, 0.74) * u_sunint;  // warm golden key (matches grass)
+  vec3 sunCol = u_suncol * u_sunint;  // warm golden key, tinted at low sun
   // Wrapped diffuse for a soft terminator that still shows light direction.
   float wrap = clamp(dot(n, sun) * 0.45 + 0.55, 0.0, 1.0); wrap *= wrap;
   // Hemispheric ambient: NED up is -Z, so up-facing (n.z<0) catches sky light.
-  float hemi = 0.5 + 0.5 * (-n.z);                 // 0 down .. 1 up
   // Cool-but-warmed overcast ambient (shadows read soft teal, not cold).
-  vec3 ambient = mix(vec3(0.07, 0.09, 0.09),
-                     vec3(0.22, 0.25, 0.26), clamp(hemi, 0.0, 1.0)) * u_ambstr;
+  vec3 ambient = ambientLight(n) * u_ambstr;
   vec3 base = u_color * v_color;
   if (u_terrain > 0.5) {
     vec2 p = v_world.xy;
@@ -237,9 +211,7 @@ void main() {
   // Haze: true distance, thinned with altitude (see kFogGLSL). Fog colour is
   // the horizon's, never the dark below-horizon sky.
   float fog = fogAmount(u_campos, v_world, u_fogstart, u_fogdensity);
-  float hl = length(vdir.xy);
-  vec3 fdir = hl > 1e-4 ? vec3(vdir.xy / hl, 0.0) : vec3(1.0, 0.0, 0.0);
-  o_color = vec4(mix(lit, skyColor(fdir), clamp(fog, 0.0, 1.0)), 1.0);
+  o_color = vec4(mix(lit, fogColor(vdir), clamp(fog, 0.0, 1.0)), 1.0);
 }
 )GLSL";
 
@@ -285,7 +257,8 @@ void main() {
   vec2 cuv = dir.xy / max(-dir.z * 0.65 + 0.12, 0.10);
   cuv = cuv * 0.9 + u_time * vec2(0.012, 0.005);
   float cov = cfbm(cuv);
-  cov = smoothstep(0.30, 0.92, cov);          // dense overcast coverage
+  // Coverage 1 = the original dense overcast; lower values open gaps.
+  cov = smoothstep(mix(0.95, 0.30, u_cloudcover), mix(1.15, 0.92, u_cloudcover), cov);
   cov *= smoothstep(0.02, 0.22, up);          // no clouds right at the horizon
   // Cloud shading: dark teal-grey masses, lighter toward the diffused sun.
   float sunAmt = pow(max(dot(normalize(dir), normalize(u_sundir)), 0.0), 3.0);
@@ -293,6 +266,8 @@ void main() {
   vec3 litCloud  = vec3(0.55, 0.59, 0.60);
   vec3 cloudCol = mix(darkCloud, litCloud, clamp(sunAmt * 0.8 + 0.18, 0.0, 1.0));
   sky = mix(sky, cloudCol, cov * 0.88);
+  // Sun disc last, dimmed by the cloud in front of it.
+  sky += sunDisc(dir) * (1.0 - 0.92 * cov);
   o_color = vec4(sky, 1.0);
 }
 )GLSL";
@@ -381,7 +356,7 @@ float shadowMapFactor(vec3 wpos, vec3 nrm, vec3 lightDir) {
   // map calls it lit or dark flips triangle to triangle on a steep face (hatched
   // saw-tooth). Leave those to the wrapped diffuse term and fade the map in over
   // the first few percent of facet N.L; cast shadows on sun-facing ground stay.
-  return mix(1.0, s, smoothstep(0.0, 0.10, ndg));
+  return mix(1.0, s, smoothstep(0.0, 0.03, ndg));
 }
 float shadowFactor(vec3 wpos, vec3 nrm, vec3 lightDir) {
   return shadowMapFactor(wpos, nrm, lightDir) * droneShadow(wpos, lightDir);
@@ -477,9 +452,7 @@ void main() {
   float trans = pow(max(dot(vdir, normalize(u_sundir)), 0.0), 4.0);
   col += albedo * trans * (0.25 + 0.75 * v_hf) * 0.8;
   float fog = fogAmount(u_campos, v_world, u_fogstart, u_fogdensity);
-  float hl = length(vdir.xy);
-  vec3 fdir = hl > 1e-4 ? vec3(vdir.xy / hl, 0.0) : vec3(1.0, 0.0, 0.0);
-  o_color = vec4(mix(col, skyColor(fdir), clamp(fog, 0.0, 1.0)), 1.0);
+  o_color = vec4(mix(col, fogColor(vdir), clamp(fog, 0.0, 1.0)), 1.0);
 }
 )GLSL";
 #endif // VAYU_SIM_GRASS
@@ -1064,7 +1037,6 @@ void SimRendererWidget::initResources() {
   ul_model_ = progLit_->uniformLocation("u_model");
   ul_nmat_ = progLit_->uniformLocation("u_nmat");
   ul_color_ = progLit_->uniformLocation("u_color");
-  ul_sundir_ = progLit_->uniformLocation("u_sundir");
   ul_campos_ = progLit_->uniformLocation("u_campos");
   ul_fogdensity_ = progLit_->uniformLocation("u_fogdensity");
   ul_fogstart_ = progLit_->uniformLocation("u_fogstart");
@@ -1086,7 +1058,6 @@ void SimRendererWidget::initResources() {
                           QByteArray(kSkyFragmentHead) + kAtmosphereGLSL +
                               kSkyFragmentMain);
   us_invvp_ = progSky_->uniformLocation("u_invvp");
-  us_sundir_ = progSky_->uniformLocation("u_sundir");
   us_time_ = progSky_->uniformLocation("u_time");
   skyVao_.create(); // core profile needs a bound VAO even with no attributes
 
@@ -1099,7 +1070,6 @@ void SimRendererWidget::initResources() {
   uf_time_ = progFlora_->uniformLocation("u_time");
   uf_fadestart_ = progFlora_->uniformLocation("u_fadestart");
   uf_fadeend_ = progFlora_->uniformLocation("u_fadeend");
-  uf_sundir_ = progFlora_->uniformLocation("u_sundir");
   uf_fogdensity_ = progFlora_->uniformLocation("u_fogdensity");
   uf_fogstart_ = progFlora_->uniformLocation("u_fogstart");
   buildGrassBlade();
@@ -1313,10 +1283,14 @@ void SimRendererWidget::paintGL() {
 
   // Sky-dome background (gradient + sun glow along the per-pixel view ray).
   // Drawn first with depth test off so the scene paints over it.
+  applyAtmosphere(progLit_.get()); // once per frame; uniforms persist per program
+#ifdef VAYU_SIM_GRASS
+  applyAtmosphere(progFlora_.get());
+#endif
+  applyAtmosphere(progSky_.get());
   glDisable(GL_DEPTH_TEST);
   progSky_->bind();
   progSky_->setUniformValue(us_invvp_, (proj_ * view).inverted());
-  progSky_->setUniformValue(us_sundir_, sunDir_);
   progSky_->setUniformValue(us_time_, floraTime_);
   skyVao_.bind();
   glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -1370,10 +1344,11 @@ void SimRendererWidget::paintGL() {
   // Grass over the terrain (after the ground so depth works). GPU-generated when
   // available + selected; otherwise the CPU chunk-instanced path.
   if (worldVisible_ && !training && floraVisible_) {
-    if (gpuGrassActive_ && gpuGrass_.ready())
+    if (gpuGrassActive_ && gpuGrass_.ready()) {
+      gpuGrass_.setAtmosphere(atmo_);
       gpuGrass_.render(this, proj_, view, camEye_, sunDir_, floraTime_,
                        lightVP_, shadowTex_, shadowOn_);
-    else
+    } else
       drawFlora(view);
   }
 #endif
@@ -1569,7 +1544,10 @@ void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks) {
   // Orthographic light frustum aimed along -sun, centred on the ground under the
   // camera so it follows the view. NED up is -Z; pick a safe up if sun is steep.
   const QVector3D fwd = -sunDir_.normalized();            // light view forward
-  const QVector3D center(camEye_.x(), camEye_.y(), 0.0f); // ground under camera
+  // The ground under the camera (fogBaseZ_), not z = 0: on high terrain a z = 0
+  // centre puts the visible ground outside the +-130 m window and behind the
+  // near plane, so the shadows vanish.
+  const QVector3D center(camEye_.x(), camEye_.y(), fogBaseZ_);
   const QVector3D lpos = center - fwd * 200.0f;
   const QVector3D up =
       std::abs(fwd.z()) > 0.99f ? QVector3D(1, 0, 0) : QVector3D(0, 0, -1);
@@ -1583,6 +1561,9 @@ void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks) {
   glViewport(0, 0, shadowSize_, shadowSize_);
   glClear(GL_DEPTH_BUFFER_BIT);
   glEnable(GL_DEPTH_TEST);
+  // Casters nearer the sun than the near plane (a ridge >200 m up-sun at a low
+  // sun) are clamped to depth 0 instead of clipped away, so they still shadow.
+  glEnable(GL_DEPTH_CLAMP);
   progDepth_->bind();
   auto drawDepth = [&](const Mesh &m) {
     if (m.vertex_count == 0)
@@ -1607,10 +1588,25 @@ void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks) {
       glDrawArrays(GL_TRIANGLES, 0, helipadDisk_.vertex_count);
     }
   progDepth_->release();
+  glDisable(GL_DEPTH_CLAMP);
 
   glBindFramebuffer(GL_FRAMEBUFFER, context()->defaultFramebufferObject());
   glViewport(0, 0, fbW_, fbH_);
   shadowOn_ = true;
+}
+
+void SimRendererWidget::applyAtmosphere(QOpenGLShaderProgram *prog) const {
+  if (!prog)
+    return;
+  prog->bind();
+  atmo_.forEachUniform([prog](const char *name, auto... v) {
+    const float a[] = {static_cast<float>(v)...};
+    if constexpr (sizeof...(v) == 3)
+      prog->setUniformValue(name, QVector3D(a[0], a[1], a[2]));
+    else
+      prog->setUniformValue(name, a[0]);
+  });
+  prog->release();
 }
 
 void SimRendererWidget::drawLit(const Mesh &m, const QMatrix4x4 &view,
@@ -1623,13 +1619,12 @@ void SimRendererWidget::drawLit(const Mesh &m, const QMatrix4x4 &view,
   progLit_->setUniformValue(ul_model_, model);
   progLit_->setUniformValue(ul_nmat_, model.normalMatrix());
   progLit_->setUniformValue(ul_color_, color);
-  progLit_->setUniformValue(ul_sundir_, sunDir_);
   progLit_->setUniformValue(ul_campos_, camEye_);
   // Aerial perspective: gentle haze that fully veils the streamed-terrain edge.
-  progLit_->setUniformValue(ul_fogdensity_, 1.0f / 420.0f);
-  progLit_->setUniformValue(ul_fogstart_, 45.0f);
+  progLit_->setUniformValue(ul_fogdensity_, atmo_.fogDensity);
+  progLit_->setUniformValue(ul_fogstart_, atmo_.fogStartM);
   progLit_->setUniformValue("u_fogbase", fogBaseZ_);
-  progLit_->setUniformValue("u_fogheight", kFogHeightM);
+  progLit_->setUniformValue("u_fogheight", atmo_.fogHeightM);
   progLit_->setUniformValue("u_ringclip", drawingFarRing_ ? QVector4D(farTerrain_.clipRect()[0], farTerrain_.clipRect()[1], farTerrain_.clipRect()[2], farTerrain_.clipRect()[3]) : QVector4D());
   progLit_->setUniformValue(ul_lightvp_, lightVP_);
   progLit_->setUniformValue(ul_shadowon_, shadowOn_ ? 1.0f : 0.0f);
@@ -2205,11 +2200,10 @@ void SimRendererWidget::drawFlora(const QMatrix4x4 &view) {
   progFlora_->setUniformValue(uf_time_, floraTime_);
   progFlora_->setUniformValue(uf_fadestart_, 90.0f);
   progFlora_->setUniformValue(uf_fadeend_, 150.0f);
-  progFlora_->setUniformValue(uf_sundir_, sunDir_);
-  progFlora_->setUniformValue(uf_fogdensity_, 1.0f / 420.0f);
-  progFlora_->setUniformValue(uf_fogstart_, 45.0f);
+  progFlora_->setUniformValue(uf_fogdensity_, atmo_.fogDensity);
+  progFlora_->setUniformValue(uf_fogstart_, atmo_.fogStartM);
   progFlora_->setUniformValue("u_fogbase", fogBaseZ_);
-  progFlora_->setUniformValue("u_fogheight", kFogHeightM);
+  progFlora_->setUniformValue("u_fogheight", atmo_.fogHeightM);
   floraVao_.bind();
   for (auto &kv : floraChunks_) {
     FloraChunk *fc = kv.second.get();
