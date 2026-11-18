@@ -360,7 +360,8 @@ void main() {
   vec3 Lb = vec3(0.0);
   for (int i = 0; i < 3; ++i) {
     vec3 nb = i == 0 ? nb0 : (i == 1 ? nb1 : nb2);
-    Lb += (i == 0 ? 0.4 : 0.3) * (ambientLit(nb) * 1.3 + sunLightColor() * wrapDiffuse(nb, sun));
+    // 0.92: the mesh's ambient AO floor (0.6 + 0.4 * ao) averages about that on bark
+    Lb += (i == 0 ? 0.4 : 0.3) * (ambientLit(nb) * 1.3 * 0.92 + sunLightColor() * wrapDiffuse(nb, sun));
   }
   vec3 barkTint = tintMul(v_tint);
   vec3 barkLit = rgb * barkTint * L; // broadleaf trunks: their old lighting, unchanged

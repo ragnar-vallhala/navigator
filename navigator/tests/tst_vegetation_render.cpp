@@ -467,9 +467,15 @@ private slots:
       if (px.size() < 50)
         return 0.0;
       const int cut = y1 - (y1 - y0) / 5;
+      // Bark, not needles: low branches now hang into this band, and foliage is
+      // the green-dominant part of it.
+      auto isBark = [&](const QPoint &p) {
+        const QRgb c = on.pixel(p);
+        return qGreen(c) <= qRed(c) + 4;
+      };
       std::vector<int> xs;
       for (const QPoint &p : px)
-        if (p.y() >= cut)
+        if (p.y() >= cut && isBark(p))
           xs.push_back(p.x());
       if (xs.size() < 8)
         return 0.0;
@@ -477,7 +483,7 @@ private slots:
       const int cx = xs[xs.size() / 2];
       double sum = 0;
       for (const QPoint &p : px)
-        if (p.y() >= cut && std::abs(p.x() - cx) <= 5) {
+        if (p.y() >= cut && std::abs(p.x() - cx) <= 5 && isBark(p)) {
           const QRgb c = on.pixel(p);
           sum += 0.299 * qRed(c) + 0.587 * qGreen(c) + 0.114 * qBlue(c);
           ++*count;
