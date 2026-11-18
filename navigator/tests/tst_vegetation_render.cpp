@@ -195,7 +195,9 @@ private slots:
       for (bool bill : {false, true}) {
         const float maxD = (bill || !s.impostor) ? s.maxDist : s.fallbackMax;
         int lastLod = -1;
-        for (float d = 0.5f; d < maxD + 20.0f; d += 0.37f) {
+        const int steps = int((maxD + 20.0f - 0.5f) / 0.37f) + 1;
+        for (int st = 0; st < steps; ++st) {
+          const float d = 0.5f + float(st) * 0.37f;
           const VegLodChoice c = vegChooseLod(s, d, bill);
           if (d >= maxD) {
             QCOMPARE(c.n, 0);
