@@ -105,6 +105,7 @@ private slots:
   void crownsSetTheSpacing();
   void collidersFollowTheDrawnSize();
   void paletteSpeciesShares();
+  void forestHasTwoConifersAndTwoBroadleafs();
   void emptyForNoChunk();
 };
 
@@ -419,6 +420,27 @@ void TstVegetation::paletteSpeciesShares() {
   QVERIFY(forest.second > meadow.second);
   QVERIFY(alpine.second > 0.7);
   QVERIFY(meadow.second < 0.4);
+}
+
+// The forest world must put real conifer stands in front of the player, not only
+// allow them: every kind appears, conifers are a meaningful share.
+void TstVegetation::forestHasTwoConifersAndTwoBroadleafs() {
+  const TerrainField f = makeField(kPalForest);
+  const VegParams p = vegParamsForPalette(kPalForest);
+  int n[kVegTreeKindCount] = {0}, total = 0;
+  for (int j = -2; j <= 1; ++j)
+    for (int i = -2; i <= 1; ++i)
+      for (const VegInstance &v : scatterVegetation(f, i, j, 256.0f, p))
+        if (v.species == kVegTree) { ++n[v.kind]; ++total; }
+  QVERIFY(total > 200);
+  int conifers = 0;
+  for (int k = 0; k < kVegTreeKindCount; ++k) {
+    QVERIFY2(n[k] > total / 40, qPrintable(QString("kind %1: %2 of %3").arg(k).arg(n[k]).arg(total)));
+    if (vegTreeKind(k).conifer)
+      conifers += n[k];
+  }
+  const double share = double(conifers) / total;
+  QVERIFY2(share > 0.15 && share < 0.85, qPrintable(QString("conifer share %1").arg(share)));
 }
 
 void TstVegetation::emptyForNoChunk() {

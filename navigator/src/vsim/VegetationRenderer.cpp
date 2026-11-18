@@ -42,10 +42,10 @@ constexpr float kLodBand = 0.07f;  // cross-fade half width, fraction of the edg
 // distance otherwise). Fog is nearly opaque by ~500 m, so nothing goes farther.
 const VegSpeciesInfo kTable[] = {
     // id                       cat            size  span   lod ends         max   fb    sway  imp
-    {"fir_tree_01",             procgen::kVegTree,  procgen::kVegTreeKinds[0].heightM, false, {55, 120, 220}, 560, 300, 0.012f, true},
-    {"pine_sapling_medium",     procgen::kVegTree,  procgen::kVegTreeKinds[1].heightM, false, {55, 120, 220}, 560, 300, 0.012f, true},
-    {"jacaranda_tree",          procgen::kVegTree,  procgen::kVegTreeKinds[2].heightM, false, {55, 120, 220}, 560, 300, 0.008f, true},
-    {"island_tree_01",          procgen::kVegTree,  procgen::kVegTreeKinds[3].heightM, false, {55, 120, 220}, 560, 300, 0.008f, true},
+    {"fir_tree_01",             procgen::kVegTree,  procgen::kVegTreeKinds[0].heightM, false, {30, 70, 130}, 560, 300, 0.012f, true},
+    {"pine_sapling_medium",     procgen::kVegTree,  procgen::kVegTreeKinds[1].heightM, false, {30, 70, 130}, 560, 300, 0.012f, true},
+    {"jacaranda_tree",          procgen::kVegTree,  procgen::kVegTreeKinds[2].heightM, false, {30, 70, 130}, 560, 300, 0.008f, true},
+    {"island_tree_01",          procgen::kVegTree,  procgen::kVegTreeKinds[3].heightM, false, {30, 70, 130}, 560, 300, 0.008f, true},
     {"shrub_03",                procgen::kVegBush,  1.0f, false, {25, 60, 110}, 170, 170, 0.030f, false},
     {"shrub_04",                procgen::kVegBush,  1.3f, true,  {25, 60, 110}, 170, 170, 0.030f, false},
     {"weed_plant_02",           procgen::kVegBush,  0.8f, true,  {20, 45, 80},  110, 110, 0.050f, false},
@@ -65,6 +65,15 @@ constexpr int kTableN = int(sizeof(kTable) / sizeof(kTable[0]));
 // n = -z, e = x, d = -y.
 const char *kCommonGLSL = R"GLSL(
 vec3 gltfToNed(vec3 g) { return vec3(-g.z, g.x, -g.y); }
+// Per-instance look from the base position alone (no data to ship, same for
+// every chunking): x = mirror, y = width, z = lean azimuth, w = lean amount.
+vec4 instVary(vec2 p) {
+  float a = fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+  float b = fract(a * 37.719 + 0.31);
+  float c = fract(b * 53.17 + 0.7);
+  float d = fract(c * 29.41 + 0.13);
+  return vec4(a > 0.5 ? -1.0 : 1.0, mix(0.80, 1.22, b), c * 6.2831853, d * 0.07);
+}
 vec3 tintMul(float t) { return mix(vec3(0.86, 0.90, 0.82), vec3(1.10, 1.06, 0.96), t); }
 vec3 srgbEnc(vec3 c) {
   vec3 hi = 1.055 * pow(max(c, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
@@ -89,6 +98,7 @@ out vec3 v_nrm;
 out vec2 v_uv;
 out float v_tint;
 out float v_fade;
+out float v_hm;          // metres above the instance base
 )GLSL";
 
 const char *kVSMain = R"GLSL(
@@ -96,8 +106,17 @@ void main() {
   float s = i_misc.x * u_k;
   float cy = cos(i_posyaw.w), sy = sin(i_posyaw.w);
   mat2 R = mat2(cy, sy, -sy, cy);
-  vec3 p = gltfToNed(a_pos) * s;
-  vec3 n = gltfToNed(a_nrm);
+  vec3 g = a_pos, gn = a_nrm;
+  // Trees (the 0-0.02 sway band; shrubs, grass and rocks sway more or not at all)
+  // vary per instance: mirror, width and a slight lean break up the rows.
+  if (u_sway > 0.0 && u_sway < 0.02) {
+    vec4 vv = instVary(i_posyaw.xy);
+    g.x *= vv.x; gn.x *= vv.x;
+    g.xz *= vv.y;
+    g.xz += vec2(cos(vv.z), sin(vv.z)) * (g.y * vv.w);
+  }
+  vec3 p = gltfToNed(g) * s;
+  vec3 n = gltfToNed(gn);
   p.xy = R * p.xy;
   n.xy = R * n.xy;
   float h = clamp(a_pos.y / max(u_height, 1e-4), 0.0, 1.0);
@@ -109,6 +128,7 @@ void main() {
   v_uv = a_uv;
   v_tint = i_misc.y;
   v_fade = i_misc.z;
+  v_hm = g.y * s;
   gl_Position = u_vp * vec4(v_world, 1.0);
 }
 )GLSL";
@@ -120,6 +140,7 @@ in vec3 v_nrm;
 in vec2 v_uv;
 in float v_tint;
 in float v_fade;
+in float v_hm;
 out vec4 o_color;
 uniform sampler2D u_diffuse;  // sRGB colour, linear alpha coverage
 uniform sampler2D u_normal;   // linear, tangent space, +Y up
@@ -179,6 +200,9 @@ void main() {
     // Foliage: shaded as a rounded crown (normals leaned toward the sky), with
     // a floor of ambient light and the sun shining through thin leaves, so a
     // tree seen from its shaded side is dark green, not black.
+    // Conifer needle textures average 0.24-0.32 and olive-brown (broadleaf
+    // leaves are greener and lighter): lift and green them (conifers sway 0.012).
+    if (u_sway > 0.01) base *= vec3(1.1, 1.25, 0.95);
     vec3 Nf = normalize(mix(Nm, vec3(0.0, 0.0, -1.0), 0.45));
     float thru = clamp(-dot(N, sun), 0.0, 1.0);
     L = ambientLit(Nf) * (0.55 + 0.45 * ao) * 1.5 +
@@ -187,8 +211,15 @@ void main() {
     L = ambientLit(Nm) * ao * 1.25 + sunLightColor() * wrapDiffuse(Nm, sun) * 0.95 * sh;
     // Poly Haven bark albedo averages 0.2-0.3 linear; with the AO term it read
     // as black. Trunks (the swaying species) get a lift and an AO floor.
-    if (u_sway > 0.0)
-      L = ambientLit(Nm) * (0.6 + 0.4 * ao) * 1.5 + sunLightColor() * wrapDiffuse(Nm, sun) * 1.0 * sh;
+    if (u_sway > 0.0) {
+      // The island tree's bark has grey lichen patches; under the blue sky
+      // ambient they went pale blue-white. Warm the bark and keep the AO floor.
+      base *= vec3(1.0, 0.90, 0.78);
+      // The root flare is textured with pale sand and lichen that does not
+      // match the ground it sits in: blend it into soil over the first 40 cm.
+      base = mix(vec3(0.10, 0.075, 0.05), base, smoothstep(0.0, 0.4, v_hm) * 0.6 + 0.4);
+      L = ambientLit(Nm) * (0.6 + 0.4 * ao) * 1.3 + sunLightColor() * wrapDiffuse(Nm, sun) * 1.0 * sh;
+    }
   }
   o_color = vec4(applyAerialPerspective(base * L, toFrag, dist), 1.0);
 }
@@ -212,6 +243,15 @@ out float v_w;
 out float v_fade;
 out float v_tint;
 out vec3 v_world;
+// Per-instance look from the base position alone (no data to ship, same for
+// every chunking): x = mirror, y = width, z = lean azimuth, w = lean amount.
+vec4 instVary(vec2 p) {
+  float a = fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+  float b = fract(a * 37.719 + 0.31);
+  float c = fract(b * 53.17 + 0.7);
+  float d = fract(c * 29.41 + 0.13);
+  return vec4(a > 0.5 ? -1.0 : 1.0, mix(0.80, 1.22, b), c * 6.2831853, d * 0.07);
+}
 vec2 tileUv(float tile, vec2 q) {
   float col = mod(tile, 8.0), row = floor(tile / 8.0);
   return (vec2(col, row) + q) / 8.0;
@@ -223,16 +263,19 @@ void main() {
   float hlen = length(hv);
   vec2 h = hlen > 1e-4 ? hv / hlen : vec2(1.0, 0.0);
   vec2 rgt = vec2(h.y, -h.x);
+  vec4 vv = instVary(i_posyaw.xy);
   vec3 w = i_posyaw.xyz + vec3(0.0, 0.0, -u_cy * s) +
-           vec3(rgt * (c.x * u_half * s), -c.y * u_half * s);
+           vec3(rgt * (c.x * u_half * s * vv.y), -c.y * u_half * s);
   float cyw = cos(i_posyaw.w), syw = sin(i_posyaw.w);
   vec2 hl = vec2(cyw * h.x + syw * h.y, -syw * h.x + cyw * h.y); // into model frame
+  hl.y *= vv.x; // a mirrored tree seen from here is the baked one seen from the mirror azimuth
   float f = atan(hl.y, -hl.x) / 6.28318530718 * 8.0;
   f = f - 8.0 * floor(f / 8.0);
   float i0 = floor(f);
   v_w = f - i0;
   float i1 = mod(i0 + 1.0, 8.0);
   vec2 q = (c * 0.5 + 0.5) * 0.96 + 0.02;
+  if (vv.x < 0.0) q.x = 1.0 - q.x;
   v_uv0 = tileUv(u_tile + i0, q);
   v_uv1 = tileUv(u_tile + i1, q);
   v_fade = i_misc.z;
@@ -264,7 +307,7 @@ float bayer4(vec2 p) {
 void main() {
   vec4 c0 = texture(u_atlas, v_uv0), c1 = texture(u_atlas, v_uv1);
   float a = mix(c0.a, c1.a, v_w);
-  if (a < 0.5) discard;
+  if (a < 0.35) discard; // mip levels thin the coverage, so keep a bit more than half
   float b = bayer4(gl_FragCoord.xy);
   bool keep = v_fade > 1.5 ? (v_fade - 2.0) < b : v_fade > b;
   if (!keep) discard;
@@ -299,6 +342,7 @@ uniform sampler2D u_diffuse;
 uniform sampler2D u_arm;
 uniform float u_cutout;
 uniform float u_cutoff;
+uniform vec3 u_albedoMul; // the conifer lift of the mesh shader
 vec3 srgbEnc(vec3 c) {
   vec3 hi = 1.055 * pow(max(c, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
   return mix(c * 12.92, hi, step(vec3(0.0031308), c));
@@ -307,7 +351,7 @@ void main() {
   vec4 d = texture(u_diffuse, v_uv);
   if (u_cutout > 0.5 && d.a < u_cutoff) discard;
   float ao = texture(u_arm, v_uv).r;
-  o_color = vec4(srgbEnc(d.rgb) * mix(0.55, 1.0, ao), 1.0);
+  o_color = vec4(srgbEnc(d.rgb) * u_albedoMul * mix(0.55, 1.0, ao), 1.0);
 }
 )GLSL";
 
@@ -987,6 +1031,7 @@ void VegetationRenderer::bakeImpostors(VariantGpu &v) {
       glActiveTexture(GL_TEXTURE4);
       glBindTexture(GL_TEXTURE_2D, mat.tex[2]);
       progBake_->setUniformValue("u_cutout", vm.cutout() ? 1.0f : 0.0f);
+      progBake_->setUniformValue("u_albedoMul", kTable[v.info].sway > 0.01f ? QVector3D(1.1f, 1.25f, 0.95f) : QVector3D(1.0f, 1.0f, 1.0f));
       progBake_->setUniformValue("u_cutoff", vm.alphaCutoff);
       glDrawElements(GL_TRIANGLES, GLsizei(sm.indexCount), GL_UNSIGNED_INT,
                      reinterpret_cast<void *>(uintptr_t(sm.firstIndex) * 4));
@@ -1065,8 +1110,14 @@ void VegetationRenderer::drawBucket(VariantGpu &v, int lod,
                             reinterpret_cast<void *>(uintptr_t(sm.firstIndex) * 4), n);
     ++stats_.drawCalls;
     stats_.triangles += (long long)(sm.indexCount / 3) * n;
+    stats_.lodTriangles[lod] += (long long)(sm.indexCount / 3) * n;
   }
   stats_.instancesDrawn += int(n);
+  if (kTable[v.info].cat == procgen::kVegTree) {
+    const int kind = procgen::vegTreeKindIndex(kTable[v.info].id);
+    if (kind >= 0)
+      stats_.treeMeshes[kind] += int(n);
+  }
 }
 
 void VegetationRenderer::drawImpostors(VariantGpu &v, const std::vector<float> &data,
@@ -1098,6 +1149,11 @@ void VegetationRenderer::drawImpostors(VariantGpu &v, const std::vector<float> &
   stats_.impostors += int(n);
   stats_.instancesDrawn += int(n);
   stats_.triangles += 2LL * n;
+  if (kTable[v.info].cat == procgen::kVegTree) {
+    const int kind = procgen::vegTreeKindIndex(kTable[v.info].id);
+    if (kind >= 0)
+      stats_.treeImpostors[kind] += int(n);
+  }
 }
 
 void VegetationRenderer::draw(const VegFrame &f) {

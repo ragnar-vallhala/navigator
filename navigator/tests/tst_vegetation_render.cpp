@@ -334,6 +334,31 @@ private slots:
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
 
+  // Every tree kind must reach the screen, conifers included: a pool or table
+  // that never picks a kind looks exactly like a forest without them.
+  void everyTreeKindIsDrawn() {
+    const World forest = buildWorld(kPalForest, -2, 1);
+    Rig rig(true);
+    loadTerrain(rig.r, forest);
+    loadVegetation(rig.r, forest);
+    QVERIFY(rig.show());
+    int meshes[procgen::kVegTreeKindCount] = {0}, imp[procgen::kVegTreeKindCount] = {0};
+    for (float heading : {0.4f, 2.0f, 3.6f, 5.2f}) {
+      aimCamera(rig.r, forest, -60.0f, -60.0f, 20.0f, heading, 0.15f);
+      settledFrame(rig.r);
+      const VegetationRenderer::Stats st = rig.r->vegetationStats();
+      for (int k = 0; k < procgen::kVegTreeKindCount; ++k) {
+        meshes[k] += st.treeMeshes[k];
+        imp[k] += st.treeImpostors[k];
+      }
+    }
+    for (int k = 0; k < procgen::kVegTreeKindCount; ++k) {
+      qInfo("tree kind %d (%s): %d meshes, %d impostors", k, procgen::kVegTreeKinds[k].id, meshes[k], imp[k]);
+      QVERIFY2(meshes[k] + imp[k] > 0, procgen::kVegTreeKinds[k].id);
+    }
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
   // Context teardown: the GL side frees completely, comes back from the CPU
   // instance lists, draws the same and leaks nothing.
   void teardownAndRebuild() {

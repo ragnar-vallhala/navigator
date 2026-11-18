@@ -164,6 +164,11 @@ public:
     int instancesDrawn = 0, drawCalls = 0, impostors = 0, chunksDrawn = 0;
     long long triangles = 0;
     int speciesReady = 0, impostorVariants = 0;
+    // Trees drawn this frame per kind (procgen::kVegTreeKinds order), as meshes
+    // and as impostors, and the triangles the meshes cost.
+    int treeMeshes[procgen::kVegTreeKindCount] = {};
+    int treeImpostors[procgen::kVegTreeKindCount] = {};
+    long long lodTriangles[3] = {}; // all species, by mesh LOD
   };
   const Stats &stats() const { return stats_; }
   bool impostorsAvailable() const { return atlasOk_; }
