@@ -337,7 +337,7 @@ void TstVegetation::treesHaveGapsAndMixedZones() {
   // Clearings: share of 24 m cells without a single tree.
   const float cell = 24.0f;
   const int n = static_cast<int>(768.0f / cell);
-  std::vector<int> occ(n * n, 0);
+  std::vector<int> occ(static_cast<size_t>(n) * static_cast<size_t>(n), 0);
   for (const VegInstance &v : trees) {
     const int i = std::min(n - 1, std::max(0, int(v.pos.x / cell)));
     const int j = std::min(n - 1, std::max(0, int(v.pos.y / cell)));
@@ -360,7 +360,7 @@ void TstVegetation::treesHaveGapsAndMixedZones() {
     }
     mixed += c && b;
   }
-  const double mixedShare = double(mixed) / double((trees.size() + 2) / 3);
+  const double mixedShare = double(mixed) / std::ceil(double(trees.size()) / 3.0);
   qInfo("trees with both groups within 25 m: %.1f %%", 100.0 * mixedShare);
   QVERIFY2(mixedShare > 0.05, "no mixed zones");
   QVERIFY2(mixedShare < 0.85, "no pure stands");
