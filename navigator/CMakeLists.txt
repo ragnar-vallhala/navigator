@@ -259,6 +259,7 @@ set(GCS_SITL_SOURCES
     src/vsim/procgen/TerrainField.cpp
     src/vsim/procgen/GroundCover.cpp
     src/vsim/procgen/Vegetation.cpp
+    src/vsim/VegetationRenderer.cpp
     src/vsim/procgen/WorldPresets.cpp
     src/vsim/procgen/Helipads.cpp
     src/vsim/MassProperties.cpp
@@ -309,6 +310,7 @@ set(GCS_SITL_HEADERS
     src/vsim/procgen/GroundCover.h
     src/vsim/procgen/Flora.h
     src/vsim/procgen/Vegetation.h
+    src/vsim/VegetationRenderer.h
     src/vsim/procgen/WorldPresets.h
     src/vsim/MassProperties.h
     src/vsim/DroneModel.h
@@ -498,7 +500,7 @@ if(NOT TARGET navigator_workspace)
 endif()
 target_sources(Navigator PRIVATE
     src/ui/main/DockShell.cpp src/ui/main/DockShell.h)
-target_link_libraries(Navigator PRIVATE navigator_workspace)
+target_link_libraries(Navigator PRIVATE navigator_workspace navigator_vegetation)
 if(UNIX AND NOT APPLE)
     # An installed copy keeps the dock library in lib/ beside the binary
     # (~/.local/opt/navigator/{Navigator,lib/}); BUILD_RPATH still holds the

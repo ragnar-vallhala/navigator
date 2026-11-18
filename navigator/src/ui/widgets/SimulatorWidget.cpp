@@ -1139,6 +1139,20 @@ void SimulatorWidget::onStreamTick() {
   const int res = m_chunkStreamer.config().resolution;
   const int collRes = m_chunkStreamer.config().collisionResolution;
   const int gen = m_streamGen;
+  // Vegetation parameters for this world's palette, keeping clear of the pads
+  // and obstacles known now (later ones are removed in the renderer).
+  std::shared_ptr<const vsim::procgen::VegParams> vegParams;
+  if (m_renderer->vegetationEnabled()) {
+    auto vp = std::make_shared<vsim::procgen::VegParams>(
+        vsim::procgen::vegParamsForPalette(
+            m_chunkStreamer.config().field.palette));
+    vp->seed = m_chunkStreamer.config().field.seed ^ 0x5bd1e995u;
+    if (!m_renderer->vegetationTreesEnabled())
+      vp->of(vsim::procgen::kVegTree).density = 0.0f; // trees are opt-in
+    vp->exclusions = vsim::vegExclusionsFor(
+        m_helipads, m_worldEditor->config().obstacles);
+    vegParams = std::move(vp);
+  }
   for (const vsim::ChunkReq &req : p.toBuild) {
     auto *watcher = new QFutureWatcher<BuiltChunk>(this);
     connect(watcher, &QFutureWatcherBase::finished, this,
@@ -1150,8 +1164,12 @@ void SimulatorWidget::onStreamTick() {
                     req.key); // stale: config changed mid-build
               watcher->deleteLater();
             });
-    watcher->setFuture(QtConcurrent::run([field, req, chunkM, res, collRes]() {
+    watcher->setFuture(QtConcurrent::run([field, req, chunkM, res, collRes,
+                                          vegParams]() {
       BuiltChunk b;
+      if (vegParams)
+        b.veg = vsim::procgen::scatterVegetation(*field, req.cx, req.cy, chunkM,
+                                                 *vegParams);
       b.mesh =
           vsim::procgen::meshFieldChunk(*field, req.cx, req.cy, chunkM, res);
       b.collMesh = collRes == res
@@ -1186,6 +1204,14 @@ void SimulatorWidget::onChunkMeshed(qint64 key, const BuiltChunk &built) {
   m_renderer->setWorldChunk(d.key, d.positions, d.normals, d.colors);
   if (m_downRenderer)
     m_downRenderer->setWorldChunk(d.key, d.positions, d.normals, d.colors);
+  if (m_renderer->vegetationEnabled()) {
+    const float cm = m_chunkStreamer.config().chunkM;
+    const float vx = (vsim::ChunkStreamer::cxOf(key) + 0.5f) * cm;
+    const float vy = (vsim::ChunkStreamer::cyOf(key) + 0.5f) * cm;
+    m_renderer->setChunkVegetation(key, built.veg, vx, vy, cm * 0.5f);
+    if (m_downRenderer)
+      m_downRenderer->setChunkVegetation(key, built.veg, vx, vy, cm * 0.5f);
+  }
 
   tryBuildCollision();
 }
