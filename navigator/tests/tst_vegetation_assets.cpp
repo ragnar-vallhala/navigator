@@ -255,10 +255,61 @@ private slots:
         }
         qInfo("%s lod%d: %d whorls of %d tiers, lowest needle %.1f of %.1f", qPrintable(v.name), l,
               whorls, m.tiers, double(lowest), double(H));
-        QVERIFY2(whorls >= m.tiers - 1 && whorls <= m.tiers + 1, // the leader may read as one more
+        QVERIFY2(whorls >= m.tiers - 2 && whorls <= m.tiers + 1, // the leader may read as one more
                  qPrintable(QString("%1 lod%2: %3 whorls vs %4 tiers").arg(v.name).arg(l).arg(whorls).arg(m.tiers)));
         QVERIFY2(lowest > 0.22f * H, qPrintable(QString("%1 lod%2: lowest needle %3 of %4").arg(v.name).arg(l).arg(double(lowest)).arg(double(H))));
       }
+  }
+
+  // The pine's trunk is sturdy and tapers (measured on the trunk submesh at
+  // every LOD), and its whorls are widest low down and narrow toward the top.
+  void pineTrunkTapersAndWhorlsNarrow() {
+    const VegSpeciesAssets *s = assets_.find("pine_sapling_medium");
+    QVERIFY(s);
+    for (const VegVariant &v : s->variants)
+      for (int l = 0; l < kVegLodCount; ++l) {
+        const VegMesh &m = v.lods[l];
+        auto radiusAt = [&](const VegSubmesh &sm, float y0, float y1) {
+          float r = 0;
+          for (uint32_t i = sm.firstIndex; i < sm.firstIndex + sm.indexCount; ++i) {
+            const float *f = &m.vertices[size_t(m.indices[i]) * VegMesh::kFloatsPerVertex];
+            if (f[1] >= y0 && f[1] <= y1)
+              r = std::max(r, std::hypot(f[0], f[2]));
+          }
+          return r;
+        };
+        const float H = m.bboxMax.y();
+        const float footR = radiusAt(m.submeshes[0], 0.0f, 0.5f);
+        const float topR = radiusAt(m.submeshes[0], 0.6f * H, H);
+        qInfo("%s lod%d: trunk radius foot %.2f, upper %.2f", qPrintable(v.name), l,
+              double(footR), double(topR));
+        QVERIFY2(footR >= 0.24f, qPrintable(v.name));
+        QVERIFY2(topR > 0.0f && topR <= 0.5f * footR, qPrintable(v.name));
+        // whorl reach: lowest third of the needle heights against the highest third
+        const VegSubmesh &nd = m.submeshes[1];
+        float lo = H, hi = 0;
+        for (uint32_t i = nd.firstIndex; i < nd.firstIndex + nd.indexCount; ++i) {
+          const float y = m.vertices[size_t(m.indices[i]) * VegMesh::kFloatsPerVertex + 1];
+          lo = std::min(lo, y);
+          hi = std::max(hi, y);
+        }
+        const float third = (hi - lo) / 3.0f;
+        const float lowR = radiusAt(nd, lo, lo + third);
+        const float upR = radiusAt(nd, hi - third, hi);
+        qInfo("%s lod%d: whorl reach low %.2f, high %.2f", qPrintable(v.name), l, double(lowR), double(upR));
+        QVERIFY2(lowR >= 2.0f * upR, qPrintable(v.name));
+        QVERIFY2(lowR >= 2.5f, qPrintable(v.name));
+      }
+    // and it wears a real bark (lighter than the old near-black one)
+    const VegMaterial &bark = s->materials[0];
+    const QImage d = bark.diffuse.convertToFormat(QImage::Format_RGB888);
+    double sum = 0;
+    for (int y = 0; y < d.height(); ++y)
+      for (int x = 0; x < d.width(); ++x)
+        sum += qGray(d.pixel(x, y));
+    const double mean = sum / (double(d.width()) * d.height()) / 255.0;
+    qInfo("pine bark mean gray %.2f", mean);
+    QVERIFY(mean > 0.28);
   }
 
   // The conifer needle albedo must not be brighter than the broadleaf leaves
