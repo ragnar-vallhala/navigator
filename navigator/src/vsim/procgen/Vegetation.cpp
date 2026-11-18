@@ -80,16 +80,16 @@ VegParams vegParamsForPalette(int palette) {
   auto &R = p.species[kVegRock];
   // Light default mix (endless / unknown palettes).
   T = sp(16.0f, 0.20f, 0.85f, 0.0f, 0.55f, 0.8f, 1.4f, 0.5f);
-  B = sp(8.0f, 0.20f, 0.80f, 0.0f, 0.65f, 0.7f, 1.3f, 0.5f);
-  G = sp(5.0f, 0.25f, 0.85f, 0.0f, 0.55f, 0.7f, 1.4f, 0.5f);
+  B = sp(6.0f, 0.25f, 0.80f, 0.0f, 0.65f, 0.7f, 1.3f, 0.5f);
+  G = sp(2.2f, 0.35f, 0.85f, 0.0f, 0.55f, 0.7f, 1.4f, 0.5f);
   R = sp(20.0f, 0.10f, 0.60f, 0.0f, 1.0f, 0.5f, 2.2f, 0.1f);
   p.treeMinSpacingM = 3.0f;
 
   switch (palette) {
   case kPalForest:
     T = sp(6.0f, 0.85f, 0.85f, 0.0f, 0.70f, 0.8f, 1.5f, 0.5f);
-    B = sp(6.0f, 0.35f, 0.80f, 0.0f, 0.70f, 0.7f, 1.3f, 0.5f);
-    G = sp(5.0f, 0.30f, 0.85f, 0.0f, 0.60f, 0.7f, 1.4f, 0.5f);
+    B = sp(4.0f, 0.50f, 0.80f, 0.0f, 0.70f, 0.7f, 1.3f, 0.5f);
+    G = sp(1.6f, 0.50f, 0.85f, 0.0f, 0.60f, 0.7f, 1.4f, 0.5f);
     R = sp(20.0f, 0.10f, 0.60f, 0.0f, 1.0f, 0.5f, 2.0f, 0.1f);
     p.treeMinSpacingM = 3.5f;
     break;
@@ -125,19 +125,19 @@ VegParams vegParamsForPalette(int palette) {
     break;
   case kPalPasture:
     T = sp(22.0f, 0.20f, 0.85f, 0.0f, 0.50f, 0.8f, 1.4f, 0.5f);
-    B = sp(10.0f, 0.20f, 0.80f, 0.0f, 0.60f, 0.7f, 1.3f, 0.5f);
-    G = sp(5.0f, 0.30f, 0.85f, 0.0f, 0.55f, 0.7f, 1.4f, 0.5f);
+    B = sp(7.0f, 0.30f, 0.80f, 0.0f, 0.60f, 0.7f, 1.3f, 0.5f);
+    G = sp(1.6f, 0.50f, 0.85f, 0.0f, 0.55f, 0.7f, 1.4f, 0.5f);
     R.density = 0.05f;
     break;
   case kPalMeadow:
     T = sp(20.0f, 0.35f, 0.85f, 0.0f, 0.55f, 0.8f, 1.5f, 0.5f);
-    B = sp(9.0f, 0.30f, 0.80f, 0.0f, 0.65f, 0.7f, 1.3f, 0.5f);
-    G = sp(5.0f, 0.30f, 0.85f, 0.0f, 0.55f, 0.7f, 1.4f, 0.5f);
+    B = sp(5.0f, 0.45f, 0.80f, 0.0f, 0.65f, 0.7f, 1.3f, 0.5f);
+    G = sp(1.5f, 0.55f, 0.85f, 0.0f, 0.55f, 0.7f, 1.4f, 0.5f);
     break;
   case kPalHills:
     T = sp(18.0f, 0.30f, 0.82f, 0.0f, 0.55f, 0.8f, 1.5f, 0.5f);
-    B = sp(9.0f, 0.30f, 0.78f, 0.0f, 0.65f, 0.7f, 1.3f, 0.5f);
-    G = sp(5.0f, 0.25f, 0.85f, 0.0f, 0.55f, 0.7f, 1.4f, 0.5f);
+    B = sp(6.0f, 0.40f, 0.78f, 0.0f, 0.65f, 0.7f, 1.3f, 0.5f);
+    G = sp(1.7f, 0.50f, 0.85f, 0.0f, 0.55f, 0.7f, 1.4f, 0.5f);
     R = sp(14.0f, 0.25f, 0.55f, 0.0f, 1.0f, 0.5f, 2.2f, 0.1f);
     break;
   default:

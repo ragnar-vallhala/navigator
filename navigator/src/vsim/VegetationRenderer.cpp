@@ -41,13 +41,13 @@ constexpr float kLodBand = 0.07f;  // cross-fade half width, fraction of the edg
 // distance otherwise). Fog is nearly opaque by ~500 m, so nothing goes farther.
 const VegSpeciesInfo kTable[] = {
     // id                       cat            size  span   lod ends         max   fb    sway  imp
-    {"fir_sapling",             procgen::kVegTree,  6.0f, false, {40, 90, 150}, 520, 250, 0.020f, true},
-    {"pine_sapling_small",      procgen::kVegTree,  6.0f, false, {40, 90, 150}, 520, 250, 0.020f, true},
-    {"island_tree_02",          procgen::kVegTree,  5.5f, false, {40, 90, 150}, 520, 250, 0.015f, true},
+    {"fir_sapling",             procgen::kVegTree,  3.2f, false, {40, 90, 150}, 520, 250, 0.020f, true},
+    {"pine_sapling_small",      procgen::kVegTree,  3.0f, false, {40, 90, 150}, 520, 250, 0.020f, true},
+    {"island_tree_02",          procgen::kVegTree,  3.8f, false, {40, 90, 150}, 520, 250, 0.015f, true},
     {"shrub_03",                procgen::kVegBush,  1.0f, false, {25, 60, 110}, 170, 170, 0.030f, false},
     {"shrub_04",                procgen::kVegBush,  1.3f, true,  {25, 60, 110}, 170, 170, 0.030f, false},
     {"weed_plant_02",           procgen::kVegBush,  0.8f, true,  {20, 45, 80},  110, 110, 0.050f, false},
-    {"grass_bermuda_01",        procgen::kVegGrassClump, 0.45f, false, {15, 35, 60}, 85, 85, 0.120f, false},
+    {"grass_bermuda_01",        procgen::kVegGrassClump, 0.40f, false, {15, 35, 60}, 85, 85, 0.120f, false},
     {"rock_09",                 procgen::kVegRock,  1.3f, true,  {40, 90, 150}, 260, 260, 0.0f, false},
     {"rock_07",                 procgen::kVegRock,  1.3f, true,  {40, 90, 150}, 260, 260, 0.0f, false},
     {"namaqualand_boulders_01", procgen::kVegRock,  1.3f, true,  {40, 90, 150}, 260, 260, 0.0f, false},
@@ -169,7 +169,18 @@ void main() {
   // lighting works on display-referred colour, so encode back before applying
   // the same sun + ambient terms the terrain uses.
   vec3 base = srgbEnc(d.rgb) * tintMul(v_tint);
-  vec3 L = ambientLight(Nm) * ao + sunLightColor() * wrapDiffuse(Nm, sun) * 0.95 * sh;
+  vec3 L;
+  if (u_cutout > 0.5) {
+    // Foliage: shaded as a rounded crown (normals leaned toward the sky), with
+    // a floor of ambient light and the sun shining through thin leaves, so a
+    // tree seen from its shaded side is dark green, not black.
+    vec3 Nf = normalize(mix(Nm, vec3(0.0, 0.0, -1.0), 0.45));
+    float thru = clamp(-dot(N, sun), 0.0, 1.0);
+    L = ambientLight(Nf) * (0.55 + 0.45 * ao) * 1.5 +
+        sunLightColor() * (wrapDiffuse(Nf, sun) * 0.95 + thru * 0.45) * sh;
+  } else {
+    L = ambientLight(Nm) * ao * 1.25 + sunLightColor() * wrapDiffuse(Nm, sun) * 0.95 * sh;
+  }
   o_color = vec4(applyAerialPerspective(base * L, toFrag, dist), 1.0);
 }
 )GLSL";
@@ -255,7 +266,8 @@ void main() {
   // A crown has no single normal: lean the upward one toward the viewer.
   vec2 hz = toFrag.xy / max(length(toFrag.xy), 1e-3);
   vec3 N = normalize(vec3(-hz * 0.45, -0.85));
-  vec3 L = ambientLight(N) * 0.85 + sunLightColor() * wrapDiffuse(N, sun) * 0.95;
+  // Same foliage terms as the mesh shader (ambient floor, light through leaves).
+  vec3 L = ambientLight(N) * 1.5 + sunLightColor() * (wrapDiffuse(N, sun) * 0.95 + 0.25);
   o_color = vec4(applyAerialPerspective(rgb * tintMul(v_tint) * L, toFrag, dist), 1.0);
 }
 )GLSL";
@@ -1050,7 +1062,12 @@ void VegetationRenderer::draw(const VegFrame &f) {
             v.tile = nextTile;
             nextTile += kAtlasAzimuths;
           }
-          pool_[size_t(info.cat)].push_back(int(var_.size()));
+          // A forest should be mostly the full broadleaf crown, not the thin
+          // saplings; grass tufts outnumber the single blades.
+          const int copies = av.name.contains("seedling") ? 3
+                             : (info.cat == procgen::kVegTree && assets_.species[si].id == "island_tree_02") ? 9 : 1;
+          for (int c = 0; c < copies; ++c)
+            pool_[size_t(info.cat)].push_back(int(var_.size()));
           var_.push_back(v);
         }
       }
