@@ -321,6 +321,7 @@ in float v_tint;
 in vec3 v_world;
 out vec4 o_color;
 uniform sampler2D u_atlas;   // display-referred colour, coverage in alpha
+uniform sampler2D u_atlasMask; // alpha: foliage share of the covered texels
 )GLSL";
 
 const char *kBillFSMain = R"GLSL(
@@ -338,6 +339,9 @@ void main() {
   bool keep = v_fade > 1.5 ? (v_fade - 2.0) < b : v_fade > b;
   if (!keep) discard;
   vec3 rgb = (c0.rgb * c0.a * (1.0 - v_w) + c1.rgb * c1.a * v_w) / max(a, 1e-3);
+  // Foliage takes the crown tint; bark keeps its colour, as on the meshes.
+  float fol = clamp(mix(texture(u_atlasMask, v_uv0).a, texture(u_atlasMask, v_uv1).a, v_w) / max(a, 1e-3), 0.0, 1.0);
+  vec3 tint = mix(tintMul(v_tint), foliageTint(v_tint), fol);
   vec3 toFrag = v_world - u_campos;
   float dist = length(toFrag);
   vec3 sun = normalize(u_sundir);
@@ -346,7 +350,7 @@ void main() {
   vec3 N = normalize(vec3(-hz * 0.45, -0.85));
   // Same foliage terms as the mesh shader (ambient floor, light through leaves).
   vec3 L = ambientLit(N) * 1.5 + sunLightColor() * (wrapDiffuse(N, sun) * 0.95 + 0.25);
-  o_color = vec4(applyAerialPerspective(rgb * foliageTint(v_tint) * L, toFrag, dist), 1.0);
+  o_color = vec4(applyAerialPerspective(rgb * tint * L, toFrag, dist), 1.0);
 }
 )GLSL";
 
@@ -363,7 +367,8 @@ void main() { v_uv = a_uv; gl_Position = u_mvp * vec4(a_pos, 1.0); }
 const char *kBakeFS = R"GLSL(
 #version 330 core
 in vec2 v_uv;
-out vec4 o_color;
+layout(location = 0) out vec4 o_color;
+layout(location = 1) out vec4 o_mask; // alpha 1 on foliage (cut-out) texels, 0 on bark
 uniform sampler2D u_diffuse;
 uniform sampler2D u_arm;
 uniform float u_cutout;
@@ -378,6 +383,7 @@ void main() {
   if (u_cutout > 0.5 && d.a < u_cutoff) discard;
   float ao = texture(u_arm, v_uv).r;
   o_color = vec4(srgbEnc(d.rgb) * u_albedoMul * mix(0.55, 1.0, ao), 1.0);
+  o_mask = vec4(0.0, 0.0, 0.0, u_cutout > 0.5 ? 1.0 : 0.0);
 }
 )GLSL";
 
@@ -776,6 +782,16 @@ bool VegetationRenderer::buildAtlas() {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 3); // tiles stay >= 16 px
+  // Second target of the bake: which covered texels are foliage (see kBakeFS).
+  glGenTextures(1, &atlasMask_);
+  glBindTexture(GL_TEXTURE_2D, atlasMask_);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, px, px, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 3);
   glGenRenderbuffers(1, &atlasDepth_);
   glBindRenderbuffer(GL_RENDERBUFFER, atlasDepth_);
   glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, px, px);
@@ -785,6 +801,10 @@ bool VegetationRenderer::buildAtlas() {
   glBindFramebuffer(GL_FRAMEBUFFER, atlasFbo_);
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                          atlasTex_, 0);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D,
+                         atlasMask_, 0);
+  const GLenum bufs[2] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+  glDrawBuffers(2, bufs);
   glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER,
                             atlasDepth_);
   const bool ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
@@ -864,7 +884,9 @@ void VegetationRenderer::releaseGL() {
     glDeleteRenderbuffers(1, &atlasDepth_);
   if (atlasTex_)
     glDeleteTextures(1, &atlasTex_);
-  atlasFbo_ = atlasDepth_ = atlasTex_ = 0;
+  if (atlasMask_)
+    glDeleteTextures(1, &atlasMask_);
+  atlasFbo_ = atlasDepth_ = atlasTex_ = atlasMask_ = 0;
   atlasOk_ = false;
   atlasTried_ = false;
   prog_.reset();
@@ -874,7 +896,7 @@ void VegetationRenderer::releaseGL() {
 
 int VegetationRenderer::liveObjects() const {
   int n = (prog_ ? 1 : 0) + (progBillboard_ ? 1 : 0) + (progBake_ ? 1 : 0);
-  n += (atlasFbo_ ? 1 : 0) + (atlasDepth_ ? 1 : 0) + (atlasTex_ ? 1 : 0);
+  n += (atlasFbo_ ? 1 : 0) + (atlasDepth_ ? 1 : 0) + (atlasTex_ ? 1 : 0) + (atlasMask_ ? 1 : 0);
   for (const SpeciesGpu &s : sp_)
     for (const Mat &m : s.mats)
       for (unsigned t : m.tex)
@@ -1030,6 +1052,40 @@ void VegetationRenderer::ensureMesh(VariantGpu &v, int lod) {
 }
 
 // Renders `v` from kAtlasAzimuths directions into its atlas tiles.
+// Reads this variant's baked tiles back (tests only): how many covered texels
+// are foliage and how many are bark, and where they sit vertically.
+void VegetationRenderer::collectBakeStats(const VariantGpu &v) {
+  GLint prevFbo = 0, prevRead = 0;
+  glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+  glGetIntegerv(GL_READ_BUFFER, &prevRead);
+  glBindFramebuffer(GL_FRAMEBUFFER, atlasFbo_);
+  std::vector<unsigned char> cov(size_t(kTilePx) * kTilePx * 4), msk(cov.size());
+  for (int a = 0; a < kAtlasAzimuths; ++a) {
+    const int tile = v.tile + a;
+    const int tx = (tile % kAtlasTiles) * kTilePx, ty = (tile / kAtlasTiles) * kTilePx;
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glReadPixels(tx, ty, kTilePx, kTilePx, GL_RGBA, GL_UNSIGNED_BYTE, cov.data());
+    glReadBuffer(GL_COLOR_ATTACHMENT1);
+    glReadPixels(tx, ty, kTilePx, kTilePx, GL_RGBA, GL_UNSIGNED_BYTE, msk.data());
+    for (int y = 0; y < kTilePx; ++y)
+      for (int x = 0; x < kTilePx; ++x) {
+        const size_t i = (size_t(y) * kTilePx + size_t(x)) * 4 + 3;
+        if (cov[i] < 128)
+          continue;
+        const double up = double(y) / double(kTilePx - 1); // 0 at the foot, 1 at the top
+        if (msk[i] >= 128) {
+          ++bakeStatsOut_.foliagePx;
+          bakeStatsOut_.foliageHeightSum += up;
+        } else {
+          ++bakeStatsOut_.barkPx;
+          bakeStatsOut_.barkHeightSum += up;
+        }
+      }
+  }
+  glBindFramebuffer(GL_FRAMEBUFFER, GLuint(prevFbo));
+  glReadBuffer(GLenum(prevRead)); // belongs to the framebuffer bound when it was read
+}
+
 void VegetationRenderer::bakeImpostors(VariantGpu &v) {
   ensureMesh(v, 1);
   const VegMesh &m =
@@ -1085,7 +1141,11 @@ void VegetationRenderer::bakeImpostors(VariantGpu &v) {
   glDisable(GL_SCISSOR_TEST);
   glBindFramebuffer(GL_FRAMEBUFFER, GLuint(prevFbo));
   glViewport(prevVp[0], prevVp[1], prevVp[2], prevVp[3]);
+  if (bakeStats_)
+    collectBakeStats(v);
   glBindTexture(GL_TEXTURE_2D, atlasTex_);
+  glGenerateMipmap(GL_TEXTURE_2D);
+  glBindTexture(GL_TEXTURE_2D, atlasMask_);
   glGenerateMipmap(GL_TEXTURE_2D);
   glBindTexture(GL_TEXTURE_2D, 0);
   glActiveTexture(GL_TEXTURE0);
@@ -1347,7 +1407,9 @@ void VegetationRenderer::draw(const VegFrame &f) {
         glDeleteRenderbuffers(1, &atlasDepth_);
       if (atlasTex_)
         glDeleteTextures(1, &atlasTex_);
-      atlasFbo_ = atlasDepth_ = atlasTex_ = 0;
+      if (atlasMask_)
+        glDeleteTextures(1, &atlasMask_);
+      atlasFbo_ = atlasDepth_ = atlasTex_ = atlasMask_ = 0;
     }
   }
   // Bake what is needed (a few per frame): variants seen at LOD2 range.
@@ -1401,6 +1463,9 @@ void VegetationRenderer::draw(const VegFrame &f) {
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, atlasTex_);
     progBillboard_->setUniformValue("u_atlas", 2);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, atlasMask_);
+    progBillboard_->setUniformValue("u_atlasMask", 3);
     for (size_t vi = 0; vi < var_.size(); ++vi)
       if (!buckets_[vi * 4 + 3].empty())
         drawImpostors(var_[vi], buckets_[vi * 4 + 3], f);
