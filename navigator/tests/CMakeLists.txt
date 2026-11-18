@@ -279,6 +279,11 @@ target_include_directories(tst_dronemodel PRIVATE ${SRC}/vsim)
 navigator_test(tst_shadow_cascades tst_shadow_cascades.cpp)
 target_include_directories(tst_shadow_cascades PRIVATE ${SRC}/vsim)
 
+# ---- Vegetation assets load from the embedded resource (no GL) ----------------
+navigator_test(tst_vegetation_assets tst_vegetation_assets.cpp)
+target_include_directories(tst_vegetation_assets PRIVATE ${SRC}/vsim)
+target_link_libraries(tst_vegetation_assets PRIVATE navigator_vegetation)
+
 # ---- 3D sim view survives its GL context being recreated ------------------
 # Needs a real GL platform (xcb on an Xvfb, LIBGL_ALWAYS_SOFTWARE=1): it skips on
 # the offscreen platform ctest uses, which crashes QOpenGLWidget/QOpenGLWindow.

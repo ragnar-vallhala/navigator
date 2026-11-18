@@ -321,6 +321,23 @@ set(GCS_RESOURCES
 )
 
 # -------------------------------------------------------
+# Vegetation assets: the processed models and textures under assets/vegetation
+# are embedded as a Qt resource (prefix /vegetation) inside one small static
+# library, so the ~10 MB blob is compiled once and shared by Navigator and by
+# the tests that load it. The file list is globbed at configure time.
+# -------------------------------------------------------
+set(VEG_ASSET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/vegetation")
+file(GLOB_RECURSE VEG_ASSET_FILES CONFIGURE_DEPENDS
+     "${VEG_ASSET_DIR}/*.vmesh" "${VEG_ASSET_DIR}/*.jpg"
+     "${VEG_ASSET_DIR}/*.png" "${VEG_ASSET_DIR}/manifest.json")
+add_library(navigator_vegetation STATIC
+    src/vsim/VegetationAssets.cpp src/vsim/VegetationAssets.h)
+target_include_directories(navigator_vegetation PUBLIC src/vsim)
+target_link_libraries(navigator_vegetation PUBLIC Qt6::Core Qt6::Gui)
+qt_add_resources(navigator_vegetation vegetation_assets
+    PREFIX "/vegetation" BASE "${VEG_ASSET_DIR}" FILES ${VEG_ASSET_FILES})
+
+# -------------------------------------------------------
 # Executable
 # -------------------------------------------------------
 qt_add_executable(Navigator
