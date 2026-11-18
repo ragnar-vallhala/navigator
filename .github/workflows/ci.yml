@@ -462,31 +462,15 @@ jobs:
         with:
           submodules: recursive
       - name: Install Qt6 + private headers + Xvfb
-        timeout-minutes: 20
-        run: |
-          apt_retry() { # bounded attempts: a hung mirror must not eat the job
-            for a in 1 2 3; do
-              sudo timeout -k 10 300 apt-get -o Acquire::Retries=3 \
-                -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
-                -o DPkg::Lock::Timeout=120 "$@" && return 0
-              echo "apt-get $1 failed or timed out (attempt $a), retrying"
-              # a killed install leaves dpkg interrupted
-              sudo dpkg --configure -a || true
-              # the runner could not resolve the default Ubuntu mirror
-              # hostnames (DNS): retry through a different mirror
-              sudo sed -i -E 's#(mirror\+file:/etc/apt/apt-mirrors\.txt|https?://(azure\.archive|security|archive)\.ubuntu\.com/ubuntu/?)#http://mirrors.edge.kernel.org/ubuntu/#g' \
-                /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list \
-                /etc/apt/sources.list 2>/dev/null || true
-              sleep 10
-            done
-            return 1
-          }
-          apt_retry update
-          apt_retry install -y cmake ninja-build python3-numpy \
-            qt6-base-dev qt6-base-private-dev qt6-base-dev-tools \
-            qt6-serialport-dev libgl1-mesa-dev libassimp-dev libpulse-dev \
-            xvfb libgl1-mesa-dri libxkbcommon-x11-0 libxcb-icccm4 \
-            libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 \
+        uses: ./.github/actions/apt-install
+        with:
+          cache-id: workspace
+          packages: >-
+            cmake ninja-build python3-numpy
+            qt6-base-dev qt6-base-private-dev qt6-base-dev-tools
+            qt6-serialport-dev libgl1-mesa-dev libassimp-dev libpulse-dev
+            xvfb libgl1-mesa-dri libxkbcommon-x11-0 libxcb-icccm4
+            libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0
             libxcb-xkb1
       - name: Configure + build the mock and its tests
         run: |
