@@ -118,28 +118,18 @@ jobs:
         with:
           submodules: recursive
       - name: Install build and packaging dependencies
-        timeout-minutes: 20
-        run: |
-          apt_retry() { # bounded attempts: a hung mirror must not eat the job
-            for a in 1 2 3; do
-              sudo timeout -k 10 300 apt-get -o Acquire::Retries=3 \
-                -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
-                -o DPkg::Lock::Timeout=120 "$@" && return 0
-              echo "apt-get $1 failed or timed out (attempt $a), retrying"
-              sudo dpkg --configure -a || true
-              sleep 10
-            done
-            return 1
-          }
-          apt_retry update
-          # Build deps as in ci.yml; the flashing tools nav drives (st-flash,
-          # openocd, avrdude) are bundled from these packages; the xcb libs are
-          # what the Qt xcb platform plugin needs to be deployed with.
-          apt_retry install -y cmake ninja-build curl file desktop-file-utils \
-            qt6-base-dev qt6-base-private-dev qt6-base-dev-tools qt6-serialport-dev \
-            libgl1-mesa-dev libassimp-dev libpulse-dev \
-            libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
-            libxcb-render-util0 libxcb-shape0 libxcb-xkb1 \
+        # Build deps as in ci.yml; the flashing tools nav drives (st-flash,
+        # openocd, avrdude) are bundled from these packages; the xcb libs are
+        # what the Qt xcb platform plugin needs to be deployed with.
+        uses: ./.github/actions/apt-install
+        with:
+          cache-id: release-linux
+          packages: >-
+            cmake ninja-build curl file desktop-file-utils
+            qt6-base-dev qt6-base-private-dev qt6-base-dev-tools qt6-serialport-dev
+            libgl1-mesa-dev libassimp-dev libpulse-dev
+            libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1
+            libxcb-render-util0 libxcb-shape0 libxcb-xkb1
             stlink-tools openocd avrdude
       - name: Fetch the firmware SITL SDK
         env:
@@ -190,6 +180,12 @@ jobs:
           cp "$RUNNER_TEMP/work/AppDir/usr/share/doc/navigator/THIRD-PARTY-NOTICES.md" \
              "$RUNNER_TEMP/out/navigator-${VERSION}-${CHANNEL}-THIRD-PARTY-NOTICES-linux.md"
           ls -l "$RUNNER_TEMP/out"
+      - name: Install Xvfb for the smoke test
+        uses: ./.github/actions/apt-install
+        with:
+          cache-id: release-smoke
+          packages: xvfb libgl1-mesa-dri
+          update: "false"
       - name: Smoke test the AppImage (xcb on Xvfb, software GL, 10 s)
         # It must start and stay up. A crash on start exits early, a healthy
         # app is stopped by the timeout (exit 124).
@@ -198,9 +194,6 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: '1'
           APPIMAGE_EXTRACT_AND_RUN: '1'
         run: |
-          sudo timeout -k 10 300 apt-get -o Acquire::Retries=3 \
-            -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
-            -o DPkg::Lock::Timeout=120 install -y xvfb libgl1-mesa-dri >/dev/null
           img="$RUNNER_TEMP/out/navigator-${VERSION}-${CHANNEL}-linux-x86_64.AppImage"
           priv=$(mktemp -d)
           rc=0

@@ -1,0 +1,76 @@
+name: apt install with retries and a .deb cache
+description: >
+  The one place a job installs Ubuntu packages. The runner's apt mirror times
+  out or fails DNS now and then (the failure is in the mirror, before any of
+  our code runs), so: every attempt is bounded, attempts back off (10 s, 30 s,
+  90 s), later attempts switch to another mirror, the downloaded .debs are
+  kept in the Actions cache so a warm run needs no mirror for them, and if
+  `apt-get update` still fails the install is tried on the runner image's own
+  package lists (enough when the .debs are cached). The caller must have
+  checked the repo out first (this action is local).
+
+inputs:
+  packages:
+    description: Packages to install (space separated).
+    required: true
+  cache-id:
+    description: Short name of this package list, part of the cache key (the key is limited to 512 characters, a package list is not).
+    required: true
+  update:
+    description: Run apt-get update first ("true" or "false").
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Restore the cached .debs
+      uses: actions/cache@v5
+      with:
+        path: ~/.apt-debs
+        # One entry per package list and per runner image (the .debs are
+        # release specific; ImageVersion is set on GitHub-hosted runners). The
+        # workflow files are hashed so a changed package list gets a fresh
+        # entry. A near miss restores the closest older set, which still
+        # covers most packages.
+        key: apt-debs-${{ inputs.cache-id }}-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageVersion }}-${{ hashFiles('.github/actions/qt-build/action.yml', '.github/workflows/ci.yml', '.github/workflows/release.yml') }}
+        restore-keys: |
+          apt-debs-${{ inputs.cache-id }}-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageVersion }}-
+          apt-debs-${{ inputs.cache-id }}-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Install packages (bounded, with backoff)
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        DO_UPDATE: ${{ inputs.update }}
+      run: |
+        debs="$HOME/.apt-debs"
+        mkdir -p "$debs/partial"
+        apt_retry() { # bounded attempts: a hung mirror must not eat the job
+          local delay=10
+          for a in 1 2 3; do
+            sudo timeout -k 10 300 apt-get -o Dir::Cache::archives="$debs" \
+              -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=120 "$@" \
+              && return 0
+            echo "apt-get $1 failed or timed out (attempt $a), retrying in ${delay}s"
+            # a killed install leaves dpkg interrupted
+            sudo dpkg --configure -a || true
+            # the runner could not resolve the default Ubuntu mirror
+            # hostnames (DNS): retry through a different mirror
+            sudo sed -i -E 's#(mirror\+file:/etc/apt/apt-mirrors\.txt|https?://(azure\.archive|security|archive)\.ubuntu\.com/ubuntu/?)#http://mirrors.edge.kernel.org/ubuntu/#g' \
+              /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list \
+              /etc/apt/sources.list 2>/dev/null || true
+            sleep "$delay"
+            delay=$((delay * 3))
+          done
+          return 1
+        }
+        if [ "$DO_UPDATE" = "true" ]; then
+          apt_retry update || echo "::warning::apt-get update failed; trying the install on the image's package lists"
+        fi
+        # shellcheck disable=SC2086 -- PACKAGES is a deliberate word list
+        apt_retry install -y $PACKAGES
+        # root wrote the cache directory: let the cache step read it
+        sudo chown -R "$(id -u):$(id -g)" "$debs"
+        sudo rm -f "$debs/lock"
