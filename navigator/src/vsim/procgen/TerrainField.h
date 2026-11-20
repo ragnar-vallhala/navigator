@@ -32,6 +32,7 @@
 #include "GroundCover.h"
 #include "Noise.h"
 #include "ProcgenTypes.h"
+#include "WaterField.h"
 
 #include <cstdint>
 
@@ -73,14 +74,22 @@ struct FieldParams {
   // centimetre to a few decimetres so the slope stays gentle; ignored on the
   // spawn pad and for dune worlds.
   float reliefM = 0.0f;
+  // Deepest point of the pond basins carved into the ground (WaterField); 0
+  // turns water off. Which palettes get ponds is a data table in GroundCover.cpp.
+  float waterDepthM = 3.0f;
 };
 
-class TerrainField {
+class TerrainField : private HeightSource {
 public:
   explicit TerrainField(const FieldParams &p);
 
-  // Elevation [m] above the ground plane at world (wx, wy). Always >= 0.
+  // Elevation [m] above the ground plane at world (wx, wy). Always >= 0. Pond
+  // basins are cut in here, so every consumer of the terrain sees them.
   float height(float wx, float wy) const;
+
+  // The ponds and lakes (WaterField) cut into this terrain.
+  const WaterField &water() const { return water_; }
+  const HeightSource &heightSource() const { return *this; }
 
   // Outward unit surface normal (NED, up is -Z) from central differences of
   // height() with step `eps` (use the mesh vertex spacing so normals match the
@@ -110,6 +119,8 @@ private:
   Noise warp_;
   Noise relief_;
   GroundCover cover_;
+  WaterField water_;
+  float baseHeight(float wx, float wy) const override; // before the basins
   float rawHeight(float wx, float wy) const; // before the spawn pad
   float duneHeight(float wx, float wy) const;
   float reliefHeight(float wx, float wy) const; // [0, reliefM]

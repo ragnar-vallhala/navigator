@@ -653,7 +653,8 @@ void TstProcgen::groundCoverGivesVarietyInEveryPalette() {
       }
     const double mean = sum / n, sd = std::sqrt(std::max(0.0, sum2 / n - mean * mean));
     const QString tag = QString("palette %1").arg(pal);
-    QVERIFY2(sd > 0.02, qPrintable(tag + " luma stddev too small"));
+    // The cover layer alone (ponds are WaterField basins now, not cover).
+    QVERIFY2(sd > 0.015, qPrintable(tag + " luma stddev too small"));
     QVERIFY2(hi - lo > 0.12f, qPrintable(tag + " luma range too small"));
     // Some, but not most, of the ground is track/water/rock/bare.
     const double frac = static_cast<double>(nonGrass) / n;
@@ -662,33 +663,33 @@ void TstProcgen::groundCoverGivesVarietyInEveryPalette() {
 }
 
 void TstProcgen::groundCoverPondsAndTracksExist() {
-  // Palettes with ponds: a level low sample somewhere over 800 m reads as water
-  // (blue-dominant, grass-free). Level ground only, since ponds are flat colour.
+  // Ponds are WaterField basins now: every pond palette gets bodies somewhere
+  // over a few kilometres, and the meshed colour at a pond's centre reads as
+  // water (blue-dominant, grass-free).
   for (int pal : {0, 2, 3, 5, 6, 7, 8, 9}) {
-    const GroundCover g(1337u, pal);
-    int water = 0;
-    for (float y : axis(-400.0f, 400.0f, 3.0f))
-      for (float x : axis(-400.0f, 400.0f, 3.0f)) {
-        const GroundCover::Sample s = g.sample(x, y, kBase, 0.02f, 1.0f);
-        if (s.grass < 0.2f && s.color.z > s.color.x + 0.03f)
-          ++water;
+    int bodies = 0;
+    for (uint32_t seed : {1337u, 7u, 21u}) {
+      FieldParams p;
+      p.seed = seed;
+      p.palette = pal;
+      p.heightM = 70.0f;
+      const TerrainField f(p);
+      for (const WaterBody &b :
+           f.water().bodiesIn(f.heightSource(), -2000, -2000, 2000, 2000)) {
+        ++bodies;
+        const GroundCover::Sample s =
+            f.colorAt(b.cx, b.cy, f.height(b.cx, b.cy), 1.0f);
+        QVERIFY2(s.grass < 0.2f && s.color.z > s.color.x + 0.03f,
+                 qPrintable(QString("palette %1: pond centre is not water").arg(pal)));
       }
-    QVERIFY2(water > 30, qPrintable(QString("palette %1: only %2 water samples").arg(pal).arg(water)));
+    }
+    QVERIFY2(bodies >= 2, qPrintable(QString("palette %1: only %2 ponds").arg(pal).arg(bodies)));
   }
   // The desert has no ponds.
-  const GroundCover d(1337u, kPalDesert);
-  for (float y : axis(-400.0f, 400.0f, 5.0f))
-    for (float x : axis(-400.0f, 400.0f, 5.0f)) {
-      const GroundCover::Sample s = d.sample(x, y, kBase, 0.02f, 1.0f);
-      QVERIFY(!(s.grass < 0.2f && s.color.z > s.color.x + 0.1f));
-    }
-  // Ponds never open on a slope (they would tilt): steep ground keeps grass.
-  const GroundCover g(1337u, kPalFlat);
-  for (float y : axis(-400.0f, 400.0f, 6.0f))
-    for (float x : axis(-400.0f, 400.0f, 6.0f)) {
-      const GroundCover::Sample s = g.sample(x, y, kBase, 0.02f, 0.80f);
-      QVERIFY(!(s.grass < 0.2f && s.color.z > s.color.x + 0.03f));
-    }
+  FieldParams dp;
+  dp.palette = kPalDesert;
+  const TerrainField desert(dp);
+  QVERIFY(desert.water().bodiesIn(desert.heightSource(), -2000, -2000, 2000, 2000).empty());
 }
 
 void TstProcgen::fieldMeshColoursVary() {

@@ -1370,6 +1370,10 @@ std::vector<QVector3D> SimulatorWidget::helipadsAround(float cx, float cy,
     return pads;
   vsim::procgen::HelipadParams hp;
   hp.radiusM = vsim::SimRendererWidget::kHelipadRadiusM;
+  hp.blocked = [this](float x, float y, float r) {
+    const auto f = m_chunkStreamer.field();
+    return f && f->water().nearWater(f->heightSource(), x, y, r);
+  };
   for (const auto &p : vsim::procgen::helipadsAround(
            m_terrainHeightAt, m_terrainRawHeightAt, cx, cy, range, hp))
     pads.emplace_back(p.x, p.y, p.z);

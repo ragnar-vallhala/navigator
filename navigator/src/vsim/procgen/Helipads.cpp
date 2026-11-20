@@ -80,6 +80,8 @@ std::vector<PgVec3> helipadsAround(const HeightFn &surface, const HeightFn &raw,
         const float jy = float((h2 >> 8) & 0xffu) / 255.0f - 0.5f;
         const float px = (float(gx) + 0.5f + jx * 0.8f) * kGrid;
         const float py = (float(gy) + 0.5f + jy * 0.8f) * kGrid;
+        if (p.blocked && p.blocked(px, py, p.radiusM + p.blockedClearM))
+          continue;
         const float s = slopeAt(px, py);
         if (s < bestSlope) {
           bestSlope = s;

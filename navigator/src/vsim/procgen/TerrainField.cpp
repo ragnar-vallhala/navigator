@@ -36,12 +36,24 @@ inline PgVec3 mix(const PgVec3 &a, const PgVec3 &b, float t) {
                 a.z + (b.z - a.z) * t};
 }
 
+WaterParams waterParams(const FieldParams &p) {
+  WaterParams w;
+  w.seed = p.seed;
+  const GroundCover::PondStyle ps = GroundCover::pondStyle(p.palette);
+  w.coverage = p.shape == 1 ? 0.0f : ps.amount; // dunes: no ponds
+  w.maxDepthM = p.waterDepthM;
+  // The spawn pad blends out to 2.5x its radius; keep a margin beyond it.
+  w.spawnClearM = std::max(60.0f, 2.5f * p.flatRadiusM + 25.0f);
+  w.maxLevelM = ps.fadeH * 0.75f * p.heightM;
+  return w;
+}
+
 } // namespace
 
 TerrainField::TerrainField(const FieldParams &p)
     : p_(p), hills_(p.seed), mtn_(p.seed ^ 0x9e3779b9u),
       macro_(p.seed ^ 0x68bc21ebu), warp_(p.seed ^ 0xb5297a4du), relief_(p.seed ^ 0x7f4a7c15u),
-      cover_(p.seed, p.palette),
+      cover_(p.seed, p.palette), water_(waterParams(p)),
       baseFreq_(p.featureM > 0.0f ? 1.0f / p.featureM : 1.0f / 150.0f),
       macroFreq_(p.macroM > 0.0f ? 1.0f / p.macroM : 1.0f / 1400.0f) {
   duneDir_ = static_cast<float>(p.seed % 628u) * 0.01f;
@@ -55,6 +67,11 @@ float TerrainField::withRelief(float h, float relief) const {
 }
 
 float TerrainField::height(float wx, float wy) const {
+  const float h = baseHeight(wx, wy);
+  return water_.enabled() ? water_.carve(*this, wx, wy, h) : h;
+}
+
+float TerrainField::baseHeight(float wx, float wy) const {
   const float h = rawHeight(wx, wy);
   const float R = p_.flatRadiusM;
   if (R <= 0.0f)
@@ -207,7 +224,20 @@ PgVec3 TerrainField::color(float h, float flatness) const {
 GroundCover::Sample TerrainField::colorAt(float wx, float wy, float h,
                                           float flatness) const {
   const float t = clamp01(p_.heightM > 0.0f ? h / p_.heightM : 0.0f);
-  return cover_.sample(wx, wy, color(h, flatness), t, flatness);
+  GroundCover::Sample s = cover_.sample(wx, wy, color(h, flatness), t, flatness);
+  if (!water_.enabled())
+    return s;
+  // Pond bed and wet shore. Under the water mesh this is the lake bed; with the
+  // water switched off it is the pond itself, as the old colour ponds were.
+  const float in = water_.inside(*this, wx, wy);
+  const float ring = water_.shoreRing(*this, wx, wy);
+  if (in > 0.0f || ring > 0.0f) {
+    const GroundCover::PondStyle ps = GroundCover::pondStyle(p_.palette);
+    s.color = mix(s.color, ps.shore, ring * 0.85f);
+    s.color = mix(s.color, ps.water, in);
+    s.grass *= 1.0f - std::max(in, ring * 0.8f);
+  }
+  return s;
 }
 
 namespace {
