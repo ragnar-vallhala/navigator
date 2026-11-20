@@ -91,10 +91,12 @@ private slots:
       for (int i = 0; i < 24; ++i) {
         const float a = 6.2831853f * float(i) / 24.0f;
         const float R = b.shoreRadius(a);
-        for (float d = R; d <= R + b.bankM; d += 1.0f)
+        for (int k = 0; float(k) < b.bankM - 0.5f; ++k) {
+          const float d = R + float(k);
           QVERIFY2(f.height(b.cx + d * std::cos(a), b.cy + d * std::sin(a)) >=
                        b.level - 0.01f,
                    "ground outside the shore is below the water level");
+        }
       }
     }
   }
@@ -103,8 +105,9 @@ private slots:
     const TerrainField f(hills());
     float maxSlope = 0.0f, minH = 1e9f;
     for (const WaterBody &b : bodies(f))
-      for (float x = b.cx - 60.0f; x <= b.cx + 60.0f; x += 1.0f)
-        for (float y = b.cy - 60.0f; y <= b.cy + 60.0f; y += 4.0f) {
+      for (int xi = 0; xi <= 120; ++xi)
+        for (int yi = 0; yi <= 30; ++yi) {
+          const float x = b.cx - 60.0f + float(xi), y = b.cy - 60.0f + 4.0f * float(yi);
           const float h = f.height(x, y);
           minH = std::min(minH, h);
           maxSlope = std::max(

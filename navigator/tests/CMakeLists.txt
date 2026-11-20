@@ -319,7 +319,7 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
     target_sources(tst_sim_gl_context PRIVATE ${SRC}/vsim/GpuGrass.cpp)
     target_compile_definitions(tst_sim_gl_context PRIVATE VAYU_SIM_GRASS=1)
   endif()
-  target_sources(tst_sim_gl_context PRIVATE ${SRC}/vsim/VegetationRenderer.cpp
+  target_sources(tst_sim_gl_context PRIVATE ${SRC}/vsim/VegetationRenderer.cpp ${SRC}/vsim/WaterRenderer.cpp
       ${SRC}/vsim/procgen/Vegetation.cpp ${SRC}/vsim/procgen/Noise.cpp
       ${SRC}/vsim/procgen/TerrainField.cpp ${SRC}/vsim/procgen/WaterField.cpp ${SRC}/vsim/procgen/GroundCover.cpp)
   target_link_libraries(tst_sim_gl_context PRIVATE navigator_vegetation)
@@ -340,7 +340,7 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
       tst_vegetation_render.cpp
       ${SRC}/vsim/FarTerrain.cpp ${SRC}/vsim/FarTerrain.h
       ${SRC}/vsim/SimRendererWidget.cpp ${SRC}/vsim/SimRendererWidget.h
-      ${SRC}/vsim/VegetationRenderer.cpp
+      ${SRC}/vsim/VegetationRenderer.cpp ${SRC}/vsim/WaterRenderer.cpp
       ${SRC}/vsim/TerrainMaterial.cpp ${SRC}/vsim/TerrainTextures.h
       ${CMAKE_SOURCE_DIR}/resources/resources.qrc
       ${SRC}/ui/widgets/SimHudWidget.cpp ${SRC}/ui/widgets/SimHudWidget.h

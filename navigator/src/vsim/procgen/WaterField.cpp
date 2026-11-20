@@ -27,7 +27,7 @@ namespace {
 constexpr float kTwoPi = 6.2831853f;
 constexpr float kBankM = 12.0f;
 constexpr float kRimMargin = 0.15f; // water sits this far below the lowest rim
-constexpr float kMaxRimRelief = 4.0f; // ground may vary this much around a body
+constexpr float kMaxRimRelief = 6.0f; // ground may vary this much around a body
 constexpr int kRimAngles = 16;
 
 uint32_t mix32(uint32_t x) {
@@ -85,7 +85,7 @@ bool WaterField::makeBody(const HeightSource &src, int ix, int iy,
     return false;
   const uint32_t h0 = cellHash(p_.seed, ix, iy, 0x77a7e4u);
   // Probability of a body in a cell grows with the palette's pond amount.
-  if (unit(h0) > std::min(0.85f, p_.coverage * 1.5f))
+  if (unit(h0) > std::min(0.6f, p_.coverage * 0.8f))
     return false;
 
   b.radiusM = 14.0f + 18.0f * unit(cellHash(p_.seed, ix, iy, 0x1u));
@@ -125,11 +125,12 @@ bool WaterField::makeBody(const HeightSource &src, int ix, int iy,
   hi = std::max(hi, src.baseHeight(b.cx, b.cy));
   if (hi - lo > kMaxRimRelief)
     return false;
-  b.level = rimLo - kRimMargin;
+  b.level = rimLo - std::min(kRimMargin, 0.25f * std::max(rimLo, 0.0f));
   if (b.level > p_.maxLevelM)
     return false;
-  b.depthM = std::min(p_.maxDepthM, 0.65f * b.level);
-  return b.depthM >= 0.8f;
+  // Never cut below the ground plane (heights stay >= 0): shallow on low ground.
+  b.depthM = std::min(p_.maxDepthM, 0.9f * b.level);
+  return b.depthM >= 0.12f; // flat worlds get shallow ponds, not none
 }
 
 bool WaterField::bodyAt(const HeightSource &src, float wx, float wy,
@@ -170,7 +171,10 @@ float WaterField::carve(const HeightSource &src, float wx, float wy,
   const float bowl = q < 1.0f ? 1.0f - q * q : 0.0f;
   const float target = b.level - b.depthM * bowl;
   const float s = 1.0f - smoothstep(R, R + b.bankM, d);
-  return hBase + (target - hBase) * s;
+  const float h = hBase + (target - hBase) * s;
+  // Outside the shore the ground is never below the water (a dip between the
+  // rim samples that set the level is filled), so the pond cannot leak.
+  return d >= R ? std::max(h, b.level) : h; // (continuous at the shore: h = level there)
 }
 
 float WaterField::inside(const HeightSource &src, float wx, float wy) const {

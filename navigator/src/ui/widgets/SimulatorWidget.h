@@ -240,6 +240,7 @@ private:
   void attachExternalSim();
   void pushRatesToSim(); // read persisted rates → m_sim->sendRates
   void applyTerrainQuality(); // persisted/env terrain quality → the 3D views
+  void applyWaterQuality();   // persisted/env water quality → the 3D views
   // Load the configured world mesh (baking up-axis/scale into NED) and push
   // it to the renderer; empty path clears it. When the sim is running, also
   // builds the collision BVH and ships it to the daemon (sendWorldMeshToSim).

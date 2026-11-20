@@ -332,6 +332,7 @@ void SimulatorWidget::buildUi() {
   auto *viewPanel = new SimViewPanel(*this, splitter);
   splitter->addWidget(viewPanel);
   applyTerrainQuality();
+  applyWaterQuality();
 
   m_rightStack = new QStackedWidget(splitter);
   splitter->addWidget(m_rightStack);
@@ -1794,6 +1795,25 @@ void SimulatorWidget::applyTerrainQuality() {
       r->setTerrainQuality(vsim::terrain::Quality::High);
     else
       r->setTerrainQualityAuto();
+  }
+}
+
+void SimulatorWidget::applyWaterQuality() {
+  QString q = QSettings().value(kWaterQualityKey, QStringLiteral("auto"))
+                  .toString().toLower();
+  const QString env = qEnvironmentVariable("NAV_WATER_QUALITY").toLower();
+  if (env == QLatin1String("low") || env == QLatin1String("high") ||
+      env == QLatin1String("auto"))
+    q = env;
+  for (vsim::SimRendererWidget *r : {m_renderer, m_downRenderer}) {
+    if (!r)
+      continue;
+    if (q == QLatin1String("low"))
+      r->setWaterQuality(vsim::terrain::Quality::Low);
+    else if (q == QLatin1String("high"))
+      r->setWaterQuality(vsim::terrain::Quality::High);
+    else
+      r->setWaterQualityAuto();
   }
 }
 

@@ -219,6 +219,9 @@ inline constexpr const char *kLogKeepRunsSettingKey = "simulator/logKeepRuns";
 // Terrain material quality of the 3D views: "auto" (High, except on a CPU
 // rasteriser), "low" or "high". NAV_TERRAIN_QUALITY overrides it for a run.
 inline constexpr const char *kTerrainQualityKey = "simulator/terrainQuality";
+// Water surface over the ponds: "auto" (as terrain), "low" (no water mesh, the
+// pond is painted ground) or "high". NAV_WATER_QUALITY overrides it for a run.
+inline constexpr const char *kWaterQualityKey = "simulator/waterQuality";
 inline constexpr int kLogKeepRunsDefault = 50;
 inline constexpr const char *kGeomGroup = "simulator/geometry";
 inline constexpr const char *kWorldGroup = "simulator/world";
