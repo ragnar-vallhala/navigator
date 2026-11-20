@@ -42,6 +42,10 @@ struct HelipadParams {
   // skirt 1.3 m below the centre surface). <= 0 disables the footprint screen.
   float maxReliefM = 0.6f;
   int ringPoints = 16;
+  // Optional veto (x, y, clearance radius [m]): true where a pad must not go,
+  // e.g. in or beside a pond, whose flat bed would otherwise pass the screens.
+  std::function<bool(float, float, float)> blocked;
+  float blockedClearM = 12.0f; // clearance asked of `blocked` beyond the footprint
 };
 
 // Largest |h(ring point) - h(centre)| over the footprint ring [m].

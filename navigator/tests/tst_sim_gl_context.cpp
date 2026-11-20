@@ -28,6 +28,8 @@
 // error was raised, no GL object leaks, and no stray top-level window remains.
 #include "SimHudWidget.h"
 #include "SimRendererWidget.h"
+#include "WaterRenderer.h"
+#include "procgen/TerrainField.h"
 
 #include <QGuiApplication>
 #include <QSurfaceFormat>
@@ -572,6 +574,95 @@ private slots:
     rig.r->setTerrainQuality(vsim::terrain::Quality::Low);
     const char *why = nullptr;
     QVERIFY2(sameScene(low, capture(rig.r), &why), why);
+  }
+
+  // The polar grid of a water body: valid indices, deepest at the centre,
+  // exactly the carved bowl's depth profile, nothing past the rim scale.
+  void waterMeshFollowsTheBowl() {
+    vsim::procgen::WaterBody b;
+    b.cx = 100.0f;
+    b.cy = -40.0f;
+    b.radiusM = 20.0f;
+    b.level = 5.0f;
+    b.depthM = 2.5f;
+    b.amp[0] = 0.15f;
+    b.phase[0] = 1.0f;
+    vsim::WaterMesh m;
+    vsim::appendWaterBody(m, b);
+    vsim::appendWaterBody(m, b); // a second body's indices are offset
+    const int n = m.vertexCount();
+    QCOMPARE(n, 2 * (1 + vsim::kWaterRings * vsim::kWaterSegments));
+    for (uint32_t i : m.indices)
+      QVERIFY(i < uint32_t(n));
+    QCOMPARE(m.indices.size() % 3, size_t(0));
+    float maxQ = 0.0f;
+    for (int i = 0; i < n; ++i) {
+      const float *v = &m.vertices[size_t(i) * vsim::kWaterVertexFloats];
+      const float depth = v[3], q = v[4];
+      // Flat at the level (NED); the rim past the shore a hair below it.
+      QVERIFY(v[2] == -5.0f || (q > 1.0f && std::fabs(v[2] - (-5.0f + 0.06f)) < 1e-4f));
+      QVERIFY(depth >= 0.0f && depth <= 2.5f + 1e-4f);
+      QVERIFY(std::fabs(depth - vsim::waterDepthAtQ(b, q)) < 1e-4f);
+      maxQ = std::max(maxQ, q);
+      const float d = std::hypot(v[0] - b.cx, v[1] - b.cy);
+      QVERIFY(d <= b.shoreRadius(std::atan2(v[1] - b.cy, v[0] - b.cx)) *
+                           vsim::kWaterRimScale + 1e-3f);
+    }
+    QVERIFY(std::fabs(maxQ - vsim::kWaterRimScale) < 1e-4f);
+    QCOMPARE(m.vertices[3], 2.5f); // the centre vertex is the deepest
+  }
+
+  // High draws the water over a carved pond; Low draws none and builds nothing.
+  void waterSurfaceRendersAtHighAndNotAtLow() {
+    vsim::procgen::FieldParams fp;
+    fp.seed = 7u;
+    fp.palette = vsim::procgen::kPalHills;
+    fp.heightM = 70.0f;
+    fp.flatRadiusM = 12.0f;
+    auto field = std::make_shared<const vsim::procgen::TerrainField>(fp);
+    const auto bodies =
+        field->water().bodiesIn(field->heightSource(), -1500, -1500, 1500, 1500);
+    QVERIFY(!bodies.empty());
+    const vsim::procgen::WaterBody b = bodies.front();
+
+    Rig rig;
+    QVERIFY(rig.showDocked());
+    rig.r->setTerrainField(field);
+    // Looking north (+x) at the pond from its south bank, a few metres up.
+    rig.r->setCameraPoseForTest({b.cx - b.radiusM - 12.0f, b.cy, -(b.level + 3.5f)},
+                                0.0f, 0.22f);
+    rig.r->setWaterQuality(vsim::terrain::Quality::Low);
+    const QImage low = rig.r->grabFrame();
+    QVERIFY(!rig.r->waterRenderer()->glReady());
+    QCOMPARE(rig.r->waterRenderer()->liveObjects(), 0);
+
+    rig.r->setWaterQuality(vsim::terrain::Quality::High);
+    const QImage high = rig.r->grabFrame();
+    QCOMPARE(rig.r->glErrorCount(), 0);
+    QVERIFY(rig.r->waterRenderer()->glReady());
+    QVERIFY(rig.r->waterRenderer()->bodyCount() >= 1);
+    QVERIFY(rig.r->waterRenderer()->liveObjects() >= 4); // program + VAO + 2 buffers
+    QVERIFY2(meanDiff(signature(low), signature(high)) > 1.0f,
+             "High looks the same as Low: the water was not drawn");
+
+    // The GL objects go with the context and come back on demand.
+    rig.r->resetGlResources();
+    const QImage again = rig.r->grabFrame();
+    QCOMPARE(rig.r->glErrorCount(), 0);
+    // The surface animates, so compare against the plain frame, not the earlier one.
+    QVERIFY2(meanDiff(signature(low), signature(again)) > 1.0f,
+             "the water did not come back after the context reset");
+
+    // And off again: the surface disappears, the plain frame returns.
+    rig.r->setWaterQuality(vsim::terrain::Quality::Low);
+    // Judge only the band of the frame where the pond sits (the sky and other
+    // animated content above it may change between frames).
+    const QImage off = rig.r->grabFrame();
+    const auto band = [](const QImage &im) {
+      return im.copy(0, im.height() * 36 / 100, im.width(), im.height() * 30 / 100);
+    };
+    QVERIFY2(meanDiff(signature(band(low)), signature(band(off))) < 8.0f,
+             "the water is still drawn after switching to Low");
   }
 };
 

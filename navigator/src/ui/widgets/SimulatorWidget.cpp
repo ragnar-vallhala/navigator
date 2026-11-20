@@ -333,6 +333,7 @@ void SimulatorWidget::buildUi() {
   auto *viewPanel = new SimViewPanel(*this, splitter);
   splitter->addWidget(viewPanel);
   applyTerrainQuality();
+  applyWaterQuality();
   applyVegetationTrees();
 
   m_rightStack = new QStackedWidget(splitter);
@@ -1374,6 +1375,10 @@ std::vector<QVector3D> SimulatorWidget::helipadsAround(float cx, float cy,
     return pads;
   vsim::procgen::HelipadParams hp;
   hp.radiusM = vsim::SimRendererWidget::kHelipadRadiusM;
+  hp.blocked = [this](float x, float y, float r) {
+    const auto f = m_chunkStreamer.field();
+    return f && f->water().nearWater(f->heightSource(), x, y, r);
+  };
   for (const auto &p : vsim::procgen::helipadsAround(
            m_terrainHeightAt, m_terrainRawHeightAt, cx, cy, range, hp))
     pads.emplace_back(p.x, p.y, p.z);
@@ -1794,6 +1799,25 @@ void SimulatorWidget::applyTerrainQuality() {
       r->setTerrainQuality(vsim::terrain::Quality::High);
     else
       r->setTerrainQualityAuto();
+  }
+}
+
+void SimulatorWidget::applyWaterQuality() {
+  QString q = QSettings().value(kWaterQualityKey, QStringLiteral("auto"))
+                  .toString().toLower();
+  const QString env = qEnvironmentVariable("NAV_WATER_QUALITY").toLower();
+  if (env == QLatin1String("low") || env == QLatin1String("high") ||
+      env == QLatin1String("auto"))
+    q = env;
+  for (vsim::SimRendererWidget *r : {m_renderer, m_downRenderer}) {
+    if (!r)
+      continue;
+    if (q == QLatin1String("low"))
+      r->setWaterQuality(vsim::terrain::Quality::Low);
+    else if (q == QLatin1String("high"))
+      r->setWaterQuality(vsim::terrain::Quality::High);
+    else
+      r->setWaterQualityAuto();
   }
 }
 

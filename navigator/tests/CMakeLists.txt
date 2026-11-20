@@ -243,13 +243,22 @@ navigator_test(tst_procgen
     tst_procgen.cpp
     ${SRC}/vsim/procgen/Noise.cpp
     ${SRC}/vsim/procgen/TerrainGen.cpp
-    ${SRC}/vsim/procgen/TerrainField.cpp
+    ${SRC}/vsim/procgen/TerrainField.cpp ${SRC}/vsim/procgen/WaterField.cpp
     ${SRC}/vsim/procgen/GroundCover.cpp
     ${SRC}/vsim/procgen/WorldPresets.cpp
     ${SRC}/vsim/procgen/Flora.cpp
     ${SRC}/vsim/procgen/Helipads.cpp
     ${SRC}/vsim/ChunkStreamer.cpp)
 target_include_directories(tst_procgen PRIVATE ${SRC}/vsim)
+
+# ---- Water basins: WaterField carve, shore, spawn exclusion, helipad veto ---
+navigator_test(tst_waterfield
+    tst_waterfield.cpp
+    ${SRC}/vsim/procgen/Noise.cpp
+    ${SRC}/vsim/procgen/TerrainField.cpp ${SRC}/vsim/procgen/WaterField.cpp
+    ${SRC}/vsim/procgen/GroundCover.cpp
+    ${SRC}/vsim/procgen/Helipads.cpp)
+target_include_directories(tst_waterfield PRIVATE ${SRC}/vsim)
 
 # ---- Terrain material: splat rule + quality default (header only) ----------
 navigator_test(tst_terrainmaterial tst_terrainmaterial.cpp)
@@ -259,7 +268,7 @@ target_include_directories(tst_terrainmaterial PRIVATE ${SRC}/vsim)
 navigator_test(tst_vegetation
     tst_vegetation.cpp
     ${SRC}/vsim/procgen/Noise.cpp
-    ${SRC}/vsim/procgen/TerrainField.cpp
+    ${SRC}/vsim/procgen/TerrainField.cpp ${SRC}/vsim/procgen/WaterField.cpp
     ${SRC}/vsim/procgen/GroundCover.cpp
     ${SRC}/vsim/procgen/Vegetation.cpp)
 target_include_directories(tst_vegetation PRIVATE ${SRC}/vsim)
@@ -268,7 +277,7 @@ target_include_directories(tst_vegetation PRIVATE ${SRC}/vsim)
 navigator_test(tst_worldpresets
     tst_worldpresets.cpp
     ${SRC}/vsim/procgen/Noise.cpp
-    ${SRC}/vsim/procgen/TerrainField.cpp
+    ${SRC}/vsim/procgen/TerrainField.cpp ${SRC}/vsim/procgen/WaterField.cpp
     ${SRC}/vsim/procgen/GroundCover.cpp
     ${SRC}/vsim/procgen/WorldPresets.cpp)
 target_include_directories(tst_worldpresets PRIVATE ${SRC}/vsim)
@@ -299,7 +308,7 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
       ${SRC}/vsim/FarTerrain.cpp ${SRC}/vsim/FarTerrain.h
       ${SRC}/vsim/TerrainMaterial.cpp ${SRC}/vsim/TerrainTextures.h
       ${CMAKE_SOURCE_DIR}/resources/resources.qrc
-      ${SRC}/vsim/procgen/Noise.cpp ${SRC}/vsim/procgen/TerrainField.cpp
+      ${SRC}/vsim/procgen/Noise.cpp ${SRC}/vsim/procgen/TerrainField.cpp ${SRC}/vsim/procgen/WaterField.cpp
       ${SRC}/vsim/procgen/GroundCover.cpp
       ${SRC}/ui/widgets/SimHudWidget.cpp ${SRC}/ui/widgets/SimHudWidget.h
       ${SRC}/core/Units.cpp
@@ -310,9 +319,9 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
     target_sources(tst_sim_gl_context PRIVATE ${SRC}/vsim/GpuGrass.cpp)
     target_compile_definitions(tst_sim_gl_context PRIVATE VAYU_SIM_GRASS=1)
   endif()
-  target_sources(tst_sim_gl_context PRIVATE ${SRC}/vsim/VegetationRenderer.cpp
+  target_sources(tst_sim_gl_context PRIVATE ${SRC}/vsim/VegetationRenderer.cpp ${SRC}/vsim/WaterRenderer.cpp
       ${SRC}/vsim/procgen/Vegetation.cpp ${SRC}/vsim/procgen/Noise.cpp
-      ${SRC}/vsim/procgen/TerrainField.cpp ${SRC}/vsim/procgen/GroundCover.cpp)
+      ${SRC}/vsim/procgen/TerrainField.cpp ${SRC}/vsim/procgen/WaterField.cpp ${SRC}/vsim/procgen/GroundCover.cpp)
   target_link_libraries(tst_sim_gl_context PRIVATE navigator_vegetation)
 
   # Colliders match the rendered size (no GL context needed).
@@ -320,7 +329,7 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
       tst_vegetation_scale.cpp
       ${SRC}/vsim/VegetationRenderer.cpp
       ${SRC}/vsim/procgen/Vegetation.cpp ${SRC}/vsim/procgen/Noise.cpp
-      ${SRC}/vsim/procgen/TerrainField.cpp ${SRC}/vsim/procgen/GroundCover.cpp)
+      ${SRC}/vsim/procgen/TerrainField.cpp ${SRC}/vsim/procgen/WaterField.cpp ${SRC}/vsim/procgen/GroundCover.cpp)
   target_include_directories(tst_vegetation_scale PRIVATE ${SRC}/vsim)
   target_link_libraries(tst_vegetation_scale PRIVATE Qt6::OpenGL navigator_vegetation)
 
@@ -331,7 +340,7 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
       tst_vegetation_render.cpp
       ${SRC}/vsim/FarTerrain.cpp ${SRC}/vsim/FarTerrain.h
       ${SRC}/vsim/SimRendererWidget.cpp ${SRC}/vsim/SimRendererWidget.h
-      ${SRC}/vsim/VegetationRenderer.cpp
+      ${SRC}/vsim/VegetationRenderer.cpp ${SRC}/vsim/WaterRenderer.cpp
       ${SRC}/vsim/TerrainMaterial.cpp ${SRC}/vsim/TerrainTextures.h
       ${CMAKE_SOURCE_DIR}/resources/resources.qrc
       ${SRC}/ui/widgets/SimHudWidget.cpp ${SRC}/ui/widgets/SimHudWidget.h
@@ -339,7 +348,7 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
       ${SRC}/vsim/DroneModel.cpp
       ${SRC}/vsim/ChunkStreamer.cpp
       ${SRC}/vsim/procgen/Noise.cpp ${SRC}/vsim/procgen/TerrainGen.cpp
-      ${SRC}/vsim/procgen/TerrainField.cpp ${SRC}/vsim/procgen/GroundCover.cpp
+      ${SRC}/vsim/procgen/TerrainField.cpp ${SRC}/vsim/procgen/WaterField.cpp ${SRC}/vsim/procgen/GroundCover.cpp
       ${SRC}/vsim/procgen/Vegetation.cpp)
   target_include_directories(tst_vegetation_render PRIVATE ${SRC}/vsim
       ${SRC}/ui/widgets ${VAYU_SITL_SDK})
@@ -372,7 +381,7 @@ if(NAVIGATOR_SIM_GRASS)
       tst_gpu_grass.cpp
       ${SRC}/vsim/GpuGrass.cpp
       ${SRC}/vsim/procgen/Noise.cpp
-      ${SRC}/vsim/procgen/TerrainField.cpp
+      ${SRC}/vsim/procgen/TerrainField.cpp ${SRC}/vsim/procgen/WaterField.cpp
       ${SRC}/vsim/procgen/GroundCover.cpp)
   target_include_directories(tst_gpu_grass PRIVATE ${SRC}/vsim)
   target_link_libraries(tst_gpu_grass PRIVATE Qt6::OpenGL)
@@ -389,7 +398,7 @@ if(NAVIGATOR_SITL)
       ${SRC}/vsim/ProceduralWorld.cpp
       ${SRC}/vsim/procgen/Noise.cpp
       ${SRC}/vsim/procgen/TerrainGen.cpp
-      ${SRC}/vsim/procgen/TerrainField.cpp
+      ${SRC}/vsim/procgen/TerrainField.cpp ${SRC}/vsim/procgen/WaterField.cpp
       ${SRC}/vsim/procgen/GroundCover.cpp
       ${SRC}/vsim/UserPresets.cpp
       ${SRC}/vsim/procgen/WorldPresets.cpp)

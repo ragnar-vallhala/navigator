@@ -527,6 +527,27 @@ void SimulatorWidget::buildSimControls(QWidget *host) {
   tqRow->addStretch();
   sv->addLayout(tqRow);
 
+  auto *wqRow = new QHBoxLayout();
+  wqRow->addWidget(new QLabel(tr("Water detail:"), simBody));
+  auto *wqCombo = new QComboBox(simBody);
+  wqCombo->addItem(tr("Auto"), QStringLiteral("auto"));
+  wqCombo->addItem(tr("High (animated water)"), QStringLiteral("high"));
+  wqCombo->addItem(tr("Low (painted pond)"), QStringLiteral("low"));
+  wqCombo->setCurrentIndex(std::max(
+      0, wqCombo->findData(QSettings().value(kWaterQualityKey, QStringLiteral("auto")))));
+  wqCombo->setToolTip(
+      tr("Ponds and lakes in the 3D views. High draws a lit, rippling water "
+         "surface with sky reflection and shore foam; Low shows the pond as "
+         "painted ground and is much cheaper. Auto picks High, except when "
+         "the graphics are drawn by the CPU (software OpenGL)."));
+  connect(wqCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+          [this, wqCombo] {
+            QSettings().setValue(kWaterQualityKey, wqCombo->currentData());
+            applyWaterQuality();
+          });
+  wqRow->addWidget(wqCombo);
+  wqRow->addStretch();
+  sv->addLayout(wqRow);
   auto *treesChk = new QCheckBox(tr("Trees"), simBody);
   treesChk->setChecked(vsim::VegetationRenderer::treesEnabledByConfig());
   treesChk->setToolTip(

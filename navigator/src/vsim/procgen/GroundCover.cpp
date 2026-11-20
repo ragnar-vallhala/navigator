@@ -167,11 +167,16 @@ const CoverStyle &styleFor(int pal) {
 
 } // namespace
 
+GroundCover::PondStyle GroundCover::pondStyle(int palette) {
+  const CoverStyle &s = styleFor(palette);
+  return {s.waterAmt, s.waterCol, s.shoreCol, s.fadeH};
+}
+
 GroundCover::GroundCover(uint32_t seed, int palette)
     : pal_(palette), rot_(static_cast<float>((seed >> 3) % 628u) * 0.005f),
       tint_(seed ^ 0x1f123bb5u), patch_(seed ^ 0x2545f491u),
       fine_(seed ^ 0x6c8e9cf5u), path_(seed ^ 0x3c6ef372u),
-      water_(seed ^ 0x510e527fu), rock_(seed ^ 0x9b05688cu) {}
+      rock_(seed ^ 0x9b05688cu) {}
 
 GroundCover::Sample GroundCover::sample(float wx, float wy, const PgVec3 &base,
                                         float h01, float flatness) const {
@@ -255,21 +260,6 @@ GroundCover::Sample GroundCover::sample(float wx, float wy, const PgVec3 &base,
     const PgVec3 pc = scale(s.pathCol, 0.9f + 0.2f * (0.5f + 0.5f * rag));
     col = mix(col, pc, pm);
     grass *= 1.0f - pm;
-  }
-
-  // Ponds: flat low-lying colour only (height is untouched, so no physics).
-  if (s.waterAmt > 0.0f) {
-    const float nn = water_.fbm(wx / 105.0f, wy / 105.0f, 3, 2.0f, 0.5f);
-    const float thr = 0.52f - 0.95f * s.waterAmt;
-    const float inside = smoothstep(thr, thr + 0.05f, nn + 0.10f * rag);
-    const float shore = smoothstep(thr - 0.06f, thr, nn + 0.10f * rag);
-    const float gate = flat * spawn * alt;
-    col = mix(col, s.shoreCol, shore * gate * 0.85f);
-    // Deeper toward the middle, with a faint sky sheen.
-    const float deep = smoothstep(thr, thr + 0.22f, nn);
-    const PgVec3 wc = mix(scale(s.waterCol, 1.35f), s.waterCol, deep);
-    col = mix(col, scale(wc, 0.94f + 0.12f * (0.5f + 0.5f * fine_.gradient(wx / 5.0f, wy / 9.0f))), inside * gate);
-    grass *= 1.0f - std::max(inside, shore * 0.8f) * gate;
   }
 
   // Mown stripes (racing lawn).
