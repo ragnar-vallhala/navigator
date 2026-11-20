@@ -45,6 +45,7 @@
 #include <QPoint>
 
 #include "VegetationRenderer.h"
+#include "WaterRenderer.h"
 
 #include <array>
 #include <map>
@@ -306,6 +307,22 @@ public:
   vsim::terrain::Quality terrainQuality() const {
     return terrainQualitySet_ ? terrainQuality_ : terrainDefault_;
   }
+  // Water surface (WaterRenderer.h) over the ponds the terrain field carves.
+  // High draws it; Low draws nothing (the pond bed is painted as a coloured
+  // pond). Same default rule as the terrain material. Applied on the next frame.
+  void setWaterQuality(vsim::terrain::Quality q) {
+    waterQualitySet_ = true;
+    waterQuality_ = q;
+    update();
+  }
+  void setWaterQualityAuto() {
+    waterQualitySet_ = false;
+    update();
+  }
+  vsim::terrain::Quality waterQuality() const {
+    return waterQualitySet_ ? waterQuality_ : terrainDefault_;
+  }
+  const WaterRenderer *waterRenderer() const { return water_.get(); }
   // World-space XY the terrain streamer should centre on: the free-fly camera
   // when roaming (sim stopped), otherwise the drone. Lets endless terrain follow
   // both WASD navigation and actual flight.
@@ -725,6 +742,12 @@ private:
   // the map (and GL handles aren't moved). Uploads/removals are queued from the
   // UI thread and flushed in paintGL where the GL context is current.
   std::unique_ptr<VegetationRenderer> veg_;
+  std::unique_ptr<WaterRenderer> water_;
+  std::shared_ptr<const procgen::TerrainField> waterField_;
+  QVector2D waterCentre_{1e9f, 1e9f}; // where the water body list was last built
+  vsim::terrain::Quality waterQuality_ = vsim::terrain::Quality::High;
+  bool waterQualitySet_ = false; // false: use terrainDefault_ (from GL_RENDERER)
+  void drawWater(const QMatrix4x4 &view);
   bool vegEnabled_ = true;
   void drawVegetation(const QMatrix4x4 &view);
   std::map<qint64, std::unique_ptr<Mesh>> worldChunks_;

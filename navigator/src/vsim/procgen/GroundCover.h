@@ -20,7 +20,7 @@
 // The base colour (TerrainField::color / meadowColor) only knows height and
 // slope, so a world came out one flat green. GroundCover adds, per world
 // position: a large-scale warm/cool tint, patches of different cover, tracks,
-// scattered rock, flat ponds (colour only: no height change, no physics),
+// scattered rock, parcels of fields (ponds are WaterField basins),
 // parcels of fields (or paving zones for the yard) and mown stripes. Which of
 // those a world gets, and every colour, is a data table per palette id (see
 // GroundCover.cpp), so the look of a preset is tuned there.
@@ -54,6 +54,15 @@ class GroundCover {
 public:
   GroundCover(uint32_t seed, int palette);
 
+  // Pond look and amount of a palette. The ponds themselves are WaterField
+  // basins now (a real dip in the terrain); this is only their data.
+  struct PondStyle {
+    float amount = 0.0f; // 0 = no ponds
+    PgVec3 water, shore;
+    float fadeH = 9.0f;  // cover fades out above this elevation fraction
+  };
+  static PondStyle pondStyle(int palette);
+
   struct Sample {
     PgVec3 color;
     // 1 = grass may grow here, 0 = path / water / rock / bare (CPU grass
@@ -69,7 +78,7 @@ public:
 private:
   int pal_;
   float rot_; // field-grid heading [rad], from the seed
-  Noise tint_, patch_, fine_, path_, water_, rock_;
+  Noise tint_, patch_, fine_, path_, rock_;
 };
 
 } // namespace vsim::procgen

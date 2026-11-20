@@ -481,6 +481,7 @@ SimRendererWidget::SimRendererWidget(QWindow *parent)
   f.setStencilBufferSize(8);
   setFormat(f);
   veg_ = std::make_unique<VegetationRenderer>();
+  water_ = std::make_unique<WaterRenderer>();
   vegEnabled_ = VegetationRenderer::enabledByConfig();
 }
 
@@ -687,6 +688,8 @@ int SimRendererWidget::liveGlObjects() const {
   n += terrainTex_.loaded() ? 6 : 0;
   if (veg_)
     n += veg_->liveObjects();
+  if (water_)
+    n += water_->liveObjects();
 #ifdef VAYU_SIM_GRASS
   n += progFlora_ ? 1 : 0;
   for (const QOpenGLBuffer &b : grassVbo_)
@@ -801,6 +804,8 @@ void SimRendererWidget::releaseGLResources(bool readBack) {
 
   if (veg_)
     veg_->releaseGL(); // instance lists stay, GL objects rebuild on demand
+  if (water_)
+    water_->releaseGL(); // bodies stay, GL objects rebuild on demand
   forEachMesh([](Mesh &m) { m.release(); });
   skyVao_.destroy();
   prog_.reset();
@@ -1379,6 +1384,11 @@ void SimRendererWidget::paintGL() {
 
   if (vegEnabled_ && worldVisible_ && !training && veg_)
     drawVegetation(view);
+
+  // Water over the carved ponds, after the opaque scene (it blends).
+  if (worldVisible_ && !training && water_ && waterField_ &&
+      waterQuality() == vsim::terrain::Quality::High)
+    drawWater(view);
 
   // Static world obstacles (lit solids), each scaled/rotated/placed.
   for (int oi = 0; worldVisible_ && !training && oi < obstacles_.size(); ++oi) {
@@ -2168,6 +2178,10 @@ void SimRendererWidget::clearWorldChunks() {
 
 void SimRendererWidget::setTerrainField(
     std::shared_ptr<const procgen::TerrainField> f) {
+  waterField_ = f;
+  waterCentre_ = QVector2D(1e9f, 1e9f); // rebuild the body list
+  if (water_)
+    water_->setBodies({});
   farTerrain_.setField(std::move(f));
   farMesh_.vertex_count = 0; // re-upload (the GL objects are reused)
   update();
@@ -2256,6 +2270,41 @@ void SimRendererWidget::drawVegetation(const QMatrix4x4 &view) {
   veg_->draw(f);
   if (veg_->busy())
     update(); // textures / impostors still arriving: keep painting
+}
+
+void SimRendererWidget::drawWater(const QMatrix4x4 &view) {
+  // The bodies near the camera, rebuilt when it has moved a fair way: cells are
+  // 170 m, the view ends in haze well inside 650 m.
+  constexpr float kRangeM = 650.0f, kRebuildM = 120.0f;
+  const QVector2D c(camEye_.x(), camEye_.y());
+  if ((c - waterCentre_).length() > kRebuildM) {
+    waterCentre_ = c;
+    water_->setBodies(waterField_->water().bodiesIn(
+        waterField_->heightSource(), c.x() - kRangeM, c.y() - kRangeM,
+        c.x() + kRangeM, c.y() + kRangeM));
+  }
+  if (!water_->hasBodies())
+    return;
+  if (!water_->glReady() &&
+      !water_->initGL({QByteArray(kAtmosphereGLSL) + kFogGLSL, kLightingGLSL}))
+    return;
+  WaterFrame f;
+  f.proj = proj_;
+  f.view = view;
+  f.atmo = atmo_;
+  f.camEye = camEye_;
+  f.sunDir = sunDir_;
+  f.time = floraTime_;
+  f.sunIntensity = litSunInt_;
+  f.ambientStrength = litAmbStr_;
+  f.fogDensity = atmo_.fogDensity;
+  f.fogStart = atmo_.fogStartM;
+  f.fogBase = fogBaseZ_;
+  f.fogHeight = atmo_.fogHeightM;
+  const auto pond =
+      procgen::GroundCover::pondStyle(waterField_->params().palette).water;
+  f.waterColor = QVector3D(pond.x, pond.y, pond.z);
+  water_->draw(f);
 }
 
 void SimRendererWidget::flushChunkUpdates() {
