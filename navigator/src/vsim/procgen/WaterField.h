@@ -31,6 +31,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace vsim::procgen {
@@ -94,6 +95,10 @@ private:
   bool makeBody(const HeightSource &src, int ix, int iy, WaterBody &out) const;
   WaterParams p_;
   uint32_t id_; // distinguishes instances for the per-thread body cache
+  struct BodyCache;
+  // Every cell looked up so far (with "no body" results), shared by all threads
+  // that mesh chunks or sample the minimap from this field.
+  std::shared_ptr<BodyCache> cache_;
 };
 
 } // namespace vsim::procgen
