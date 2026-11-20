@@ -152,6 +152,15 @@ public:
   // Lowest surface elevation [m] over the disc of `radius` around (wx, wy):
   // every mesh node inside it and a ring of points on its edge.
   float lowestUnder(float wx, float wy, float radius) const;
+  // Same, for a plane through the point tilted by gradient (gx, gy) [rise/run]:
+  // the lowest of surface minus plane over the disc, i.e. the height at the
+  // point where a plane of that tilt first touches the surface from below.
+  float lowestUnderTilted(float wx, float wy, float radius, float gx,
+                          float gy) const;
+  // Mean surface gradient (rise/run, x then y) across the disc: central
+  // differences over its diameter.
+  void gradientAcross(float wx, float wy, float radius, float *gx,
+                      float *gy) const;
 
 private:
   float node(int i, int j) const;

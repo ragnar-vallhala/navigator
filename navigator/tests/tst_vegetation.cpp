@@ -546,7 +546,7 @@ void TstVegetation::grassIsTintedPerPalette() {
 
 // Rocks stand on the terrain mesh the pilot sees (meshFieldChunk: slope cap
 // included, which the raw field can sit metres above on steep ground), on the
-// lowest point under their footprint. Checked with surfaceHeight(), the mesh's
+// lowest point under their tilted base (they lean toward the slope). Checked with surfaceHeight(), the mesh's
 // own height function, over the rock's nominal footprint circle (half the span
 // times the instance scale; tolerance 1 cm for float noise).
 void TstVegetation::rocksRestOnTheRenderedMesh() {
@@ -592,7 +592,7 @@ void TstVegetation::rocksRestOnTheRenderedMesh() {
     w.fp.seed = 21u;
     const TerrainField f(w.fp);
     const VegParams p = vegParamsForPalette(w.fp.palette);
-    int rocks = 0, steep = 0;
+    int rocks = 0, steep = 0, tilted = 0;
     for (int cy = -1; cy <= 0; ++cy)
       for (int cx = -1; cx <= 0; ++cx)
         for (const VegInstance &v : scatterVegetation(f, cx, cy, K, p)) {
@@ -601,32 +601,42 @@ void TstVegetation::rocksRestOnTheRenderedMesh() {
           ++rocks;
           const float base = -v.pos.z, r = kVegRockRadiusM * v.scale;
           const float tc = surfaceHeight(f, v.pos.x, v.pos.y, K, kStreamChunkRes);
-          float lowest = tc;
-          for (int ring = 1; ring <= 2; ++ring)
-            for (int k = 0; k < 8; ++k) {
+          // The rock's base is a plane through (pos, base) tilted by its
+          // gradient. plane - surface over the footprint: its maximum is the
+          // hover at the lowest-touching point, its minimum the burial.
+          float hover = -1e9f, burial = 1e9f;
+          for (int ring = 0; ring <= 2; ++ring)
+            for (int k = 0; k < (ring ? 8 : 1); ++k) {
               const float a = 0.785398f * static_cast<float>(k);
               const float rr = r * 0.5f * static_cast<float>(ring);
-              lowest = std::min(lowest,
-                                surfaceHeight(f, v.pos.x + rr * std::cos(a),
-                                              v.pos.y + rr * std::sin(a), K,
-                                              kStreamChunkRes));
+              const float dx = rr * std::cos(a), dy = rr * std::sin(a);
+              const float plane = base + v.tiltX * dx + v.tiltY * dy;
+              const float d =
+                  plane - surfaceHeight(f, v.pos.x + dx, v.pos.y + dy, K, kStreamChunkRes);
+              hover = std::max(hover, d);
+              burial = std::min(burial, d);
             }
-          const QString tag = QString("%1 rock at %2,%3 scale %4: base %5, centre %6, lowest %7")
+          const QString tag = QString("%1 rock at %2,%3 scale %4: base %5, centre %6, tilt %7,%8, hover %9, burial %10")
                                   .arg(w.name).arg(v.pos.x).arg(v.pos.y).arg(v.scale)
-                                  .arg(base).arg(tc).arg(lowest);
-          // Rests in the ground at its centre (never above the mesh there)...
-          QVERIFY2(base <= tc - kVegRockSinkM + 0.01f, qPrintable(tag));
-          // ...is not buried past the cap (it must stay visible)...
+                                  .arg(base).arg(tc).arg(v.tiltX).arg(v.tiltY)
+                                  .arg(hover).arg(burial);
+          // Rests in the ground (the tilted base is under the mesh somewhere)...
+          QVERIFY2(burial <= 0.01f, qPrintable(tag));
+          // ...is not buried past the cap at its centre (it must stay visible)...
           QVERIFY2(tc - base <= kVegRockMaxSinkM * v.scale + kVegRockSinkM + 0.01f,
                    qPrintable(tag));
-          // ...and hovers over its downhill toe by no more than the allowance.
-          QVERIFY2(base - lowest <= kVegRockMaxToeGapM * v.scale + 0.01f,
+          // ...and hovers over its lowest-touching point by no more than the allowance.
+          QVERIFY2(hover <= kVegRockMaxToeGapM * v.scale + 0.01f, qPrintable(tag));
+          QVERIFY2(std::fabs(v.tiltX) <= kVegTiltMax && std::fabs(v.tiltY) <= kVegTiltMax,
                    qPrintable(tag));
-          steep += (tc - lowest > 0.1f * v.scale);
+          tilted += (v.tiltX != 0.0f || v.tiltY != 0.0f);
+          steep += (std::hypot(v.tiltX, v.tiltY) > 0.2f);
         }
     QVERIFY2(rocks >= w.minRocks, qPrintable(QString("%1: %2 rocks").arg(w.name).arg(rocks)));
-    if (QByteArray(w.name) == "alpine")
-      QVERIFY2(steep > 5, "the alpine sample must include sloped rocks");
+    if (QByteArray(w.name) == "alpine") {
+      QVERIFY2(steep > 5, "the alpine sample must include tilted rocks");
+      QVERIFY2(tilted > rocks / 2, "most alpine rocks must be tilted to the slope");
+    }
   }
 }
 

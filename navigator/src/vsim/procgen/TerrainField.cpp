@@ -391,7 +391,16 @@ float SurfacePatch::at(float wx, float wy) const {
 }
 
 float SurfacePatch::lowestUnder(float wx, float wy, float radius) const {
-  float lo = at(wx, wy);
+  return lowestUnderTilted(wx, wy, radius, 0.0f, 0.0f);
+}
+
+float SurfacePatch::lowestUnderTilted(float wx, float wy, float radius, float gx,
+                                      float gy) const {
+  // Surface minus plane at offset (dx, dy); the plane is 0 at the centre.
+  auto rel = [&](float dx, float dy) {
+    return at(wx + dx, wy + dy) - (gx * dx + gy * dy);
+  };
+  float lo = rel(0.0f, 0.0f);
   const int i0 = static_cast<int>(std::floor((wx - radius - x0_) / step_));
   const int i1 = static_cast<int>(std::ceil((wx + radius - x0_) / step_));
   const int j0 = static_cast<int>(std::floor((wy - radius - y0_) / step_));
@@ -401,14 +410,21 @@ float SurfacePatch::lowestUnder(float wx, float wy, float radius) const {
       const float dx = x0_ + step_ * static_cast<float>(i) - wx;
       const float dy = y0_ + step_ * static_cast<float>(j) - wy;
       if (dx * dx + dy * dy <= radius * radius)
-        lo = std::min(lo, node(i, j));
+        lo = std::min(lo, node(i, j) - (gx * dx + gy * dy));
     }
   constexpr int kRing = 24;
   for (int k = 0; k < kRing; ++k) {
     const float a = 6.2831853f * static_cast<float>(k) / static_cast<float>(kRing);
-    lo = std::min(lo, at(wx + radius * std::cos(a), wy + radius * std::sin(a)));
+    lo = std::min(lo, rel(radius * std::cos(a), radius * std::sin(a)));
   }
   return lo;
+}
+
+void SurfacePatch::gradientAcross(float wx, float wy, float radius, float *gx,
+                                  float *gy) const {
+  const float inv = 1.0f / (2.0f * radius);
+  *gx = (at(wx + radius, wy) - at(wx - radius, wy)) * inv;
+  *gy = (at(wx, wy + radius) - at(wx, wy - radius)) * inv;
 }
 
 } // namespace vsim::procgen
