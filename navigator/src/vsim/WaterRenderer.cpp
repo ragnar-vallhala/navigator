@@ -168,8 +168,8 @@ void main() {
   // Width in metres (not depth), so a shallow pond gets the same thin band as a
   // deep one: foam only within ~1.6 m of the waterline.
   float edge = 1.0 - smoothstep(0.0, 1.6, v_dq.z);
-  float n1 = wNoise(v_pos.xy * 1.7 + vec2(u_time * 0.15, -u_time * 0.1));
-  float n2 = wNoise(v_pos.xy * 4.3 - vec2(u_time * 0.2, u_time * 0.12));
+  float n1 = wNoise(v_pos.xy * 5.2 + vec2(u_time * 0.35, -u_time * 0.22));
+  float n2 = wNoise(v_pos.xy * 13.0 - vec2(u_time * 0.5, u_time * 0.3));
   // Sparse patches (not a continuous ring): threshold the noise so the foam
   // breaks into drifting flecks along the waterline.
   float foam = edge * smoothstep(0.50, 0.82, n1 * 0.6 + n2 * 0.5);
