@@ -400,6 +400,111 @@ private slots:
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
 
+  // A trunk keeps its brightness when the mesh gives way to the impostor. One
+  // tree on bare ground, the same camera and light and so the same fog: the
+  // frame is taken with every tree forced to mesh LOD 2, then forced to the
+  // impostor, and the trunk texels (the tree's pixels in the lowest fifth of its
+  // silhouette, near its axis) are compared. The billboard shader itself has no
+  // other test; this reads back what it draws.
+  void trunkBrightnessSurvivesTheImpostorSwitch_data() {
+    QTest::addColumn<int>("kind");
+    QTest::addColumn<bool>("strict");
+    // Only the pine's trunk is asserted: it is the conifer whose bark the
+    // billboard now lights like the mesh. The fir's thin trunk is mostly hidden
+    // by needles, and the broadleaf impostors keep their old lighting (and bake
+    // a different LOD from the mesh LOD2 they are compared with), so those rows
+    // only log their ratio.
+    QTest::newRow("fir") << 0 << false;
+    QTest::newRow("pine") << 1 << true;
+    QTest::newRow("jacaranda") << 2 << false;
+    QTest::newRow("island") << 3 << false;
+  }
+  void trunkBrightnessSurvivesTheImpostorSwitch() {
+    QFETCH(int, kind);
+    QFETCH(bool, strict);
+    World w = buildWorld(kPalForest, -1, 0);
+    for (auto &v : w.veg)
+      v.clear();
+    for (size_t i = 0; i < w.cells.size(); ++i)
+      if (w.cells[i].first == 0 && w.cells[i].second == 0) {
+        VegInstance t;
+        t.species = kVegTree;
+        t.kind = uint8_t(kind);
+        t.variant = 0;
+        t.scale = 1.0f;
+        t.yaw = 0.3f;
+        t.tint = 0.5f;
+        t.pos = {40.0f, 0.0f, -surfaceHeight(*w.field, 40.0f, 0.0f, kChunkM, kRes)};
+        w.veg[i].push_back(t);
+      }
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    aimCamera(rig.r, w, 0.0f, 0.0f, 6.0f, 0.0f, 0.04f);
+    rig.r->setVegetationEnabled(false);
+    const QImage off = rig.r->grabFrame().convertToFormat(QImage::Format_RGB32);
+    rig.r->setVegetationEnabled(true);
+    auto trunkMean = [&](int lod, int *count) {
+      rig.r->setVegetationForcedLod(lod);
+      QImage on = settledFrame(rig.r);
+      for (int i = 0; i < 40 && lod == 3 && rig.r->vegetationStats().impostors == 0; ++i)
+        on = rig.r->grabFrame();
+      on = on.convertToFormat(QImage::Format_RGB32);
+      int y0 = on.height(), y1 = -1;
+      std::vector<QPoint> px;
+      for (int y = 0; y < on.height(); ++y)
+        for (int x = 0; x < on.width(); ++x) {
+          const QRgb a = on.pixel(x, y), b = off.pixel(x, y);
+          if (std::abs(qRed(a) - qRed(b)) + std::abs(qGreen(a) - qGreen(b)) +
+                  std::abs(qBlue(a) - qBlue(b)) > 40) {
+            px.push_back({x, y});
+            y0 = std::min(y0, y);
+            y1 = std::max(y1, y);
+          }
+        }
+      *count = 0;
+      if (px.size() < 50)
+        return 0.0;
+      const int cut = y1 - (y1 - y0) / 5;
+      // Bark, not needles: low branches now hang into this band, and foliage is
+      // the green-dominant part of it.
+      auto isBark = [&](const QPoint &p) {
+        const QRgb c = on.pixel(p);
+        return qGreen(c) <= qRed(c) + 4;
+      };
+      std::vector<int> xs;
+      for (const QPoint &p : px)
+        if (p.y() >= cut && isBark(p))
+          xs.push_back(p.x());
+      if (xs.size() < 8)
+        return 0.0;
+      std::nth_element(xs.begin(), xs.begin() + long(xs.size() / 2), xs.end());
+      const int cx = xs[xs.size() / 2];
+      double sum = 0;
+      for (const QPoint &p : px)
+        if (p.y() >= cut && std::abs(p.x() - cx) <= 5 && isBark(p)) {
+          const QRgb c = on.pixel(p);
+          sum += 0.299 * qRed(c) + 0.587 * qGreen(c) + 0.114 * qBlue(c);
+          ++*count;
+        }
+      return *count ? sum / *count : 0.0;
+    };
+    int nm = 0, ni = 0;
+    const double mesh = trunkMean(2, &nm);
+    const double imp = trunkMean(3, &ni);
+    qInfo("kind %d: trunk mean luminance mesh %.1f (%d px), impostor %.1f (%d px), ratio %.2f", kind,
+          mesh, nm, imp, ni, mesh > 0 ? imp / mesh : 0.0);
+    if (rig.r->vegetationStats().impostorVariants == 0)
+      QSKIP("no impostor atlas on this context");
+    if (!strict)
+      return;
+    QVERIFY2(nm >= 8 && ni >= 8, "trunk texels not found");
+    QVERIFY2(std::abs(imp - mesh) <= 0.15 * std::max(imp, mesh),
+             qPrintable(QString("mesh %1 vs impostor %2").arg(mesh).arg(imp)));
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
   // Every tree kind must reach the screen, conifers included: a pool or table
   // that never picks a kind looks exactly like a forest without them.
   void everyTreeKindIsDrawn() {

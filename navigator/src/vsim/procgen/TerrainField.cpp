@@ -391,4 +391,54 @@ ProcMesh meshFieldChunk(const TerrainField &f, int cx, int cy, float chunkM,
   return m;
 }
 
+SurfacePatch::SurfacePatch(const TerrainField &f, int cx, int cy, float chunkM,
+                           int res, int margin)
+    : x0_(static_cast<float>(cx) * chunkM), y0_(static_cast<float>(cy) * chunkM),
+      step_(chunkM / static_cast<float>(res < 1 ? 1 : res)), res_(res < 1 ? 1 : res),
+      margin_(margin < 1 ? 1 : margin) {
+  const int apron = erodeApron(f);
+  off_ = margin_ + apron;
+  gn_ = res_ + 1 + 2 * off_;
+  h_ = cappedGrid(f, x0_, y0_, step_, -off_, -off_, gn_);
+}
+
+float SurfacePatch::node(int i, int j) const {
+  i = std::min(std::max(i, -margin_), res_ + margin_);
+  j = std::min(std::max(j, -margin_), res_ + margin_);
+  return h_[static_cast<std::size_t>(j + off_) * gn_ + static_cast<std::size_t>(i + off_)];
+}
+
+float SurfacePatch::at(float wx, float wy) const {
+  const float u = (wx - x0_) / step_, v = (wy - y0_) / step_;
+  const int i = static_cast<int>(std::floor(u)), j = static_cast<int>(std::floor(v));
+  const float fx = u - static_cast<float>(i), fy = v - static_cast<float>(j);
+  const float h00 = node(i, j), h10 = node(i + 1, j), h01 = node(i, j + 1),
+              h11 = node(i + 1, j + 1);
+  // Same two-triangle split as meshFieldChunk.
+  if (fx >= fy)
+    return h00 + (h10 - h00) * fx + (h11 - h10) * fy;
+  return h00 + (h11 - h01) * fx + (h01 - h00) * fy;
+}
+
+float SurfacePatch::lowestUnder(float wx, float wy, float radius) const {
+  float lo = at(wx, wy);
+  const int i0 = static_cast<int>(std::floor((wx - radius - x0_) / step_));
+  const int i1 = static_cast<int>(std::ceil((wx + radius - x0_) / step_));
+  const int j0 = static_cast<int>(std::floor((wy - radius - y0_) / step_));
+  const int j1 = static_cast<int>(std::ceil((wy + radius - y0_) / step_));
+  for (int j = j0; j <= j1; ++j)
+    for (int i = i0; i <= i1; ++i) {
+      const float dx = x0_ + step_ * static_cast<float>(i) - wx;
+      const float dy = y0_ + step_ * static_cast<float>(j) - wy;
+      if (dx * dx + dy * dy <= radius * radius)
+        lo = std::min(lo, node(i, j));
+    }
+  constexpr int kRing = 24;
+  for (int k = 0; k < kRing; ++k) {
+    const float a = 6.2831853f * static_cast<float>(k) / static_cast<float>(kRing);
+    lo = std::min(lo, at(wx + radius * std::cos(a), wy + radius * std::sin(a)));
+  }
+  return lo;
+}
+
 } // namespace vsim::procgen

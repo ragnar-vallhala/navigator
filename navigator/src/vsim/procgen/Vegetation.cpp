@@ -261,6 +261,11 @@ std::vector<VegInstance> scatterVegetation(const TerrainField &f, int cx, int cy
     return a * (1 - fy) + b * fy;
   };
 
+  // Instances stand on the surface the terrain mesh draws, not on the raw
+  // field: the mesh caps slopes (cappedGrid), which can leave the raw height
+  // metres above it on steep ground. Placement tests keep using the field.
+  const SurfacePatch surface(f, cx, cy, chunkM, p.meshRes, 3);
+
   const float heightM = f.params().heightM + 1e-3f;
   const float clear2 = p.clearAroundSpawnM * p.clearAroundSpawnM;
 
@@ -386,7 +391,7 @@ std::vector<VegInstance> scatterVegetation(const TerrainField &f, int cx, int cy
           if (!accept(c.x, c.y, sv, 0.5f * c.crown, &h))
             continue;
           VegInstance v;
-          v.pos = PgVec3{c.x, c.y, -h};
+          v.pos = PgVec3{c.x, c.y, -surface.at(c.x, c.y)};
           v.yaw = 6.2831853f * u01(c.yaw);
           v.scale = c.scale;
           v.species = static_cast<uint8_t>(kVegTree);
@@ -423,10 +428,27 @@ std::vector<VegInstance> scatterVegetation(const TerrainField &f, int cx, int cy
           continue;
 
         VegInstance v;
-        v.pos = PgVec3{wx, wy, -h};
         v.yaw = 6.2831853f * u01(hcell(gx, gy, p.seed, salt + 3));
         v.scale = sv.scaleMin + (sv.scaleMax - sv.scaleMin) *
                                     u01(hcell(gx, gy, p.seed, salt + 4));
+        // A rock stands on its footprint's lowest point (a slope would
+        // otherwise leave the downhill side in the air); the rest on the spot.
+        float hz = surface.at(wx, wy);
+        if (s == kVegRock) {
+          // A rock has one yaw and no tilt, so on a slope it can only rest on
+          // the lowest point under its footprint (the downhill toe); that
+          // buries the uphill side. Bury it by at most kVegRockMaxSinkM per
+          // unit scale (so it never vanishes into the slope) and leave a toe
+          // gap of at most kVegRockMaxToeGapM per unit scale: steeper ground
+          // takes no rock rather than one hovering over it.
+          const float lo =
+              surface.lowestUnder(wx, wy, kVegRockRadiusM * v.scale);
+          const float buriedMax = hz - kVegRockMaxSinkM * v.scale;
+          if (buriedMax - lo > kVegRockMaxToeGapM * v.scale)
+            continue;
+          hz = std::max(lo, buriedMax) - kVegRockSinkM;
+        }
+        v.pos = PgVec3{wx, wy, -hz};
         v.species = static_cast<uint8_t>(s);
         v.variant = static_cast<uint8_t>(hcell(gx, gy, p.seed, salt + 5) %
                                          static_cast<uint32_t>(kVegVariants));
@@ -440,6 +462,7 @@ std::vector<VegInstance> scatterVegetation(const TerrainField &f, int cx, int cy
   return out;
 }
 
+// Tree colliders, when wired to the sim, must follow the Trees flag (rocks are not trees).
 std::vector<VegCollider>
 vegetationColliders(const std::vector<VegInstance> &instances) {
   std::vector<VegCollider> out;

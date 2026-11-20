@@ -40,6 +40,8 @@
 #include "WorldEditorWidget.h"
 
 #include <QApplication>
+#include <QCheckBox>
+#include <QSettings>
 #include <QDir>
 #include <QFile>
 #include <QElapsedTimer>
@@ -82,6 +84,10 @@ public:
   bool running() const { return w_.m_sim != nullptr; }
   QString logText() const { return w_.m_log->toPlainText(); }
   void clearLog() { w_.m_log->clear(); }
+  bool treesShown() const { return w_.m_renderer->vegetationTreesEnabled(); }
+  bool downTreesShown() const {
+    return !w_.m_downRenderer || w_.m_downRenderer->vegetationTreesEnabled();
+  }
   bool shipBusy() const {
     return w_.m_shipWatcher || w_.m_shipPending || w_.m_collisionPending ||
            w_.m_spawnResetPending || w_.m_heldPose.has_value();
@@ -245,6 +251,29 @@ private slots:
     delete a_;
     delete w_;
     qDeleteAll(restored_);
+  }
+
+  // The Sim controls "Trees" checkbox switches trees in the 3D views live and
+  // stores the choice; switching back on needs no world rebuild.
+  void treesCheckboxTogglesLiveAndPersists() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    QCheckBox *box = nullptr;
+    for (QCheckBox *c : w_->findChildren<QCheckBox *>())
+      if (c->text() == QLatin1String("Trees"))
+        box = c;
+    QVERIFY2(box, "no Trees checkbox in the Sim controls");
+    if (!box->isEnabled())
+      QSKIP("NAV_VEGETATION_TREES is set; the variable beats the checkbox");
+    const bool before = box->isChecked();
+    QCOMPARE(a_->treesShown(), before);
+    box->setChecked(!before);
+    QCOMPARE(a_->treesShown(), !before);
+    QCOMPARE(a_->downTreesShown(), !before);
+    QCOMPARE(QSettings().value("sim/vegetationTrees").toBool(), !before);
+    box->setChecked(before);
+    QCOMPARE(a_->treesShown(), before);
+    QCOMPARE(QSettings().value("sim/vegetationTrees").toBool(), before);
   }
 
   // Sim Stopped: every world change parks the vehicle on the new ground.

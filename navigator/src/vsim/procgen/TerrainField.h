@@ -148,6 +148,29 @@ ProcMesh meshFieldChunk(const TerrainField &f, int cx, int cy, float chunkM,
 float surfaceHeight(const TerrainField &f, float wx, float wy, float chunkM,
                     int res);
 
+// The surface of one chunk exactly as meshFieldChunk(f, cx, cy, chunkM, res)
+// draws it (slope cap included, same triangles), held for a whole chunk so many
+// points can rest on it for the price of one patch: vegetation uses it to stand
+// instances on what the pilot sees instead of the raw field, which the slope cap
+// can leave metres above the mesh. Valid for points within `margin` nodes of the
+// chunk (the margin lets a footprint cross the chunk edge).
+class SurfacePatch {
+public:
+  SurfacePatch(const TerrainField &f, int cx, int cy, float chunkM, int res,
+               int margin);
+  // Surface elevation [m] at world (wx, wy).
+  float at(float wx, float wy) const;
+  // Lowest surface elevation [m] over the disc of `radius` around (wx, wy):
+  // every mesh node inside it and a ring of points on its edge.
+  float lowestUnder(float wx, float wy, float radius) const;
+
+private:
+  float node(int i, int j) const;
+  std::vector<float> h_;
+  float x0_, y0_, step_;
+  int res_, margin_, gn_, off_;
+};
+
 // The one chunk lattice every procedural world is streamed on (ChunkStreamer's
 // defaults). Anything that must rest on the streamed surface without a streamer
 // at hand (preset obstacle layout) samples it via streamSurfaceHeight().
