@@ -57,8 +57,9 @@ constexpr int kWaterSegments = 56;
 constexpr float kWaterRimScale = 1.05f; // mesh reaches this far past the shore
 
 // Vertex: world x, y, z (NED, z = -level), water depth [m] under it, q (distance
-// over the local shore radius). Outside the shore depth is 0.
-constexpr int kWaterVertexFloats = 5;
+// over the local shore radius), metres to the shore (positive over water,
+// negative past it). Outside the shore depth is 0.
+constexpr int kWaterVertexFloats = 6;
 
 struct WaterMesh {
   std::vector<float> vertices; // kWaterVertexFloats per vertex

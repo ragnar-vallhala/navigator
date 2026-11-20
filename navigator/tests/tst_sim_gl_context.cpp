@@ -605,6 +605,9 @@ private slots:
       QVERIFY(std::fabs(depth - vsim::waterDepthAtQ(b, q)) < 1e-4f);
       maxQ = std::max(maxQ, q);
       const float d = std::hypot(v[0] - b.cx, v[1] - b.cy);
+      // Metres to the shore: positive over water, zero on it, negative past it.
+      if (q > 0.0f) // (a body's centre vertex only carries a nominal distance)
+        QVERIFY(std::fabs(v[5] - (b.shoreRadius(std::atan2(v[1] - b.cy, v[0] - b.cx)) - d)) < 2e-3f);
       QVERIFY(d <= b.shoreRadius(std::atan2(v[1] - b.cy, v[0] - b.cx)) *
                            vsim::kWaterRimScale + 1e-3f);
     }

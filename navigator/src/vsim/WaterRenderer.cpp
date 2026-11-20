@@ -34,7 +34,7 @@ void appendWaterBody(WaterMesh &m, const procgen::WaterBody &b) {
   // Centre vertex, then kWaterRings rings of kWaterSegments vertices. Ring r is
   // at q = r / (kWaterRings - 1) * kWaterRimScale so the last ring sits just past
   // the shore, where the depth is 0 and the ground is above the level.
-  m.vertices.insert(m.vertices.end(), {b.cx, b.cy, z, b.depthM, 0.0f});
+  m.vertices.insert(m.vertices.end(), {b.cx, b.cy, z, b.depthM, 0.0f, b.radiusM});
   for (int r = 1; r <= kWaterRings; ++r) {
     const float q = kWaterRimScale * float(r) / float(kWaterRings);
     for (int s = 0; s < kWaterSegments; ++s) {
@@ -42,7 +42,8 @@ void appendWaterBody(WaterMesh &m, const procgen::WaterBody &b) {
       const float R = b.shoreRadius(a);
       m.vertices.insert(m.vertices.end(),
                         {b.cx + std::cos(a) * R * q, b.cy + std::sin(a) * R * q,
-                         q > 1.0f ? zRim : z, waterDepthAtQ(b, q), q});
+                         q > 1.0f ? zRim : z, waterDepthAtQ(b, q), q,
+                         (1.0f - q) * R});
     }
   }
   auto idx = [&](int ring, int seg) {
@@ -62,12 +63,12 @@ namespace {
 
 const char *kWaterVS = R"GLSL(#version 330 core
 layout(location = 0) in vec3 a_pos;
-layout(location = 1) in vec2 a_dq; // depth, q
+layout(location = 1) in vec3 a_dq; // depth, q, metres to the shore
 uniform mat4 u_vp;
 uniform float u_time;
 uniform float u_wind;
 out vec3 v_pos;
-out vec2 v_dq;
+out vec3 v_dq;
 // Directional wave set shared with the fragment shader's normal: five sines,
 // wavelength [m], heading offset from the wind [rad], amplitude per metre of
 // wavelength. Up is -Z (NED), so the displacement is subtracted from z.
@@ -97,7 +98,7 @@ void main() {
 
 const char *kWaterFSHead = R"GLSL(#version 330 core
 in vec3 v_pos;
-in vec2 v_dq;
+in vec3 v_dq;
 out vec4 o_color;
 uniform float u_time;
 uniform float u_wind;
@@ -162,9 +163,11 @@ void main() {
   float spec = pow(max(dot(N, H), 0.0), 220.0);
   vec3 glint = sunLightColor() * spec * 1.4 * smoothstep(0.0, 0.08, sunUp);
 
-  // Shore foam: a thin bright band where the water gets shallow, broken up by
-  // moving noise, with a little more on the wave crests.
-  float edge = 1.0 - smoothstep(0.0, 0.07, depth);
+  // Shore foam: flecks along the waterline where the water gets shallow,
+  // broken up by two layers of drifting noise (none on the wave crests).
+  // Width in metres (not depth), so a shallow pond gets the same thin band as a
+  // deep one: foam only within ~1.6 m of the waterline.
+  float edge = 1.0 - smoothstep(0.0, 1.6, v_dq.z);
   float n1 = wNoise(v_pos.xy * 1.7 + vec2(u_time * 0.15, -u_time * 0.1));
   float n2 = wNoise(v_pos.xy * 4.3 - vec2(u_time * 0.2, u_time * 0.12));
   // Sparse patches (not a continuous ring): threshold the noise so the foam
@@ -231,7 +234,7 @@ void WaterRenderer::uploadMesh() {
   glEnableVertexAttribArray(0);
   glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
   glEnableVertexAttribArray(1);
-  glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride,
+  glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride,
                         reinterpret_cast<const void *>(3 * sizeof(float)));
   glBindVertexArray(0);
   indexCount_ = int(m.indices.size());
