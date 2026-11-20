@@ -109,6 +109,7 @@ private slots:
   void grassIsTintedPerPalette();
   void coniferShareFollowsPalette();
   void treeTintSpreads();
+  void rocksRestOnTheRenderedMesh();
   void emptyForNoChunk();
 };
 
@@ -138,17 +139,22 @@ void TstVegetation::seamlessAcrossChunks() {
     const VegParams p = vegParamsForPalette(pal);
     const float c = 128.0f;
     // One 256 m chunk vs its four 128 m quadrants.
+    // The mesh lattice is the same 2.56 m grid either way (50 cells per 128 m
+    // quadrant, 100 per 256 m chunk).
+    VegParams pq = p;
+    pq.meshRes = p.meshRes / 2;
     std::vector<VegInstance> parts;
     for (int j = 0; j <= 1; ++j)
       for (int i = 0; i <= 1; ++i) {
-        const auto s = scatterVegetation(f, i, j, c, p);
+        const auto s = scatterVegetation(f, i, j, c, pq);
         parts.insert(parts.end(), s.begin(), s.end());
       }
     const auto whole = scatterVegetation(f, 0, 0, 2.0f * c, p);
     QVERIFY(!whole.empty());
     QCOMPARE(parts.size(), whole.size());
     QVERIFY(keysOf(parts) == keysOf(whole));
-    // Heights are chunk-independent too.
+    // Heights are chunk-independent too (to float noise: each chunk samples
+    // the mesh lattice from its own origin).
     auto zs = [](std::vector<VegInstance> v) {
       std::sort(v.begin(), v.end(), [](const VegInstance &a, const VegInstance &b) {
         return std::tie(a.pos.x, a.pos.y, a.species) <
@@ -159,7 +165,11 @@ void TstVegetation::seamlessAcrossChunks() {
         z.push_back(i.pos.z);
       return z;
     };
-    QVERIFY(zs(parts) == zs(whole));
+    const std::vector<float> zp = zs(parts), zw = zs(whole);
+    QCOMPARE(zp.size(), zw.size());
+    for (std::size_t k = 0; k < zp.size(); ++k)
+      QVERIFY2(std::fabs(zp[k] - zw[k]) < 2e-3f,
+               qPrintable(QString("instance %1: %2 vs %3").arg(k).arg(zp[k]).arg(zw[k])));
   }
 }
 
@@ -532,6 +542,92 @@ void TstVegetation::grassIsTintedPerPalette() {
     seen[idx++] = vegPackHue(ground);
   }
   QVERIFY(seen[0] != seen[1] && seen[1] != seen[2] && seen[0] != seen[2]);
+}
+
+// Rocks stand on the terrain mesh the pilot sees (meshFieldChunk: slope cap
+// included, which the raw field can sit metres above on steep ground), on the
+// lowest point under their footprint. Checked with surfaceHeight(), the mesh's
+// own height function, over the rock's nominal footprint circle (half the span
+// times the instance scale; tolerance 1 cm for float noise).
+void TstVegetation::rocksRestOnTheRenderedMesh() {
+  struct World {
+    const char *name;
+    FieldParams fp;
+    int minRocks;
+  };
+  std::vector<World> worlds;
+  { // flat field, meadow palette (the flat palette scatters no rocks)
+    FieldParams f;
+    f.heightM = 1.2f;
+    f.mountainMix = 0.0f;
+    f.maxSlope = 0.3f;
+    f.palette = kPalMeadow;
+    worlds.push_back({"flat", f, 3});
+  }
+  { // the hills preset's relief
+    FieldParams f;
+    f.heightM = 55.0f;
+    f.featureM = 130.0f;
+    f.mountainMix = 0.35f;
+    f.mountainBias = 0.6f;
+    f.maxSlope = 0.5f;
+    f.palette = kPalHills;
+    f.reliefM = 0.25f;
+    worlds.push_back({"hills", f, 10});
+  }
+  { // the alpine preset's relief: steep, capped at 0.9
+    FieldParams f;
+    f.heightM = 110.0f;
+    f.featureM = 200.0f;
+    f.mountainMix = 0.85f;
+    f.mountainBias = 0.15f;
+    f.maxSlope = 0.9f;
+    f.palette = kPalAlpine;
+    f.reliefM = 0.3f;
+    f.flatRadiusM = 12.0f;
+    worlds.push_back({"alpine", f, 30});
+  }
+  const float K = kStreamChunkM;
+  for (World &w : worlds) {
+    w.fp.seed = 21u;
+    const TerrainField f(w.fp);
+    const VegParams p = vegParamsForPalette(w.fp.palette);
+    int rocks = 0, steep = 0;
+    for (int cy = -1; cy <= 0; ++cy)
+      for (int cx = -1; cx <= 0; ++cx)
+        for (const VegInstance &v : scatterVegetation(f, cx, cy, K, p)) {
+          if (v.species != kVegRock)
+            continue;
+          ++rocks;
+          const float base = -v.pos.z, r = kVegRockRadiusM * v.scale;
+          const float tc = surfaceHeight(f, v.pos.x, v.pos.y, K, kStreamChunkRes);
+          float lowest = tc;
+          for (int ring = 1; ring <= 2; ++ring)
+            for (int k = 0; k < 8; ++k) {
+              const float a = 0.785398f * static_cast<float>(k);
+              const float rr = r * 0.5f * static_cast<float>(ring);
+              lowest = std::min(lowest,
+                                surfaceHeight(f, v.pos.x + rr * std::cos(a),
+                                              v.pos.y + rr * std::sin(a), K,
+                                              kStreamChunkRes));
+            }
+          const QString tag = QString("%1 rock at %2,%3 scale %4: base %5, centre %6, lowest %7")
+                                  .arg(w.name).arg(v.pos.x).arg(v.pos.y).arg(v.scale)
+                                  .arg(base).arg(tc).arg(lowest);
+          // Rests in the ground at its centre (never above the mesh there)...
+          QVERIFY2(base <= tc - kVegRockSinkM + 0.01f, qPrintable(tag));
+          // ...is not buried past the cap (it must stay visible)...
+          QVERIFY2(tc - base <= kVegRockMaxSinkM * v.scale + kVegRockSinkM + 0.01f,
+                   qPrintable(tag));
+          // ...and hovers over its downhill toe by no more than the allowance.
+          QVERIFY2(base - lowest <= kVegRockMaxToeGapM * v.scale + 0.01f,
+                   qPrintable(tag));
+          steep += (tc - lowest > 0.1f * v.scale);
+        }
+    QVERIFY2(rocks >= w.minRocks, qPrintable(QString("%1: %2 rocks").arg(w.name).arg(rocks)));
+    if (QByteArray(w.name) == "alpine")
+      QVERIFY2(steep > 5, "the alpine sample must include sloped rocks");
+  }
 }
 
 void TstVegetation::emptyForNoChunk() {

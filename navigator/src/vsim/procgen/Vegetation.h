@@ -108,6 +108,14 @@ inline constexpr float kVegRockRadiusM = 0.5f * kVegRockSpanM;
 inline constexpr float kVegRockHeightM = 0.5f;
 // Rocks smaller than this scale are decoration only (no collider).
 inline constexpr float kVegRockColliderMinScale = 1.4f;
+// A rock rests on the lowest mesh point under its footprint, sunk this far so
+// no sliver of sky shows under its toe. On a slope it may sink at most
+// kVegRockMaxSinkM per unit scale below the surface at its centre (about 40% of
+// the flattest rock model's height), and is not placed where that leaves its
+// downhill toe more than kVegRockMaxToeGapM per unit scale in the air.
+inline constexpr float kVegRockSinkM = 0.03f;
+inline constexpr float kVegRockMaxSinkM = 0.20f;
+inline constexpr float kVegRockMaxToeGapM = 0.25f;
 
 // An area where nothing is placed (helipad, obstacle). A disc of radius rx, or
 // an axis-aligned rectangle of half-extents (rx, ry) when `rect` is set.
@@ -160,6 +168,9 @@ struct VegParams {
   float treeMinSpacingM = 2.5f; // closest two trunks may stand [m]
   std::vector<VegExclusion> exclusions;
   float clearAroundSpawnM = 8.0f; // nothing within this of the origin
+  // Grid cells per chunk side of the terrain mesh the instances stand on
+  // (ChunkStreamer::Config::resolution).
+  int meshRes = kStreamChunkRes;
   // The palette's own ground colour (TerrainField::color on level low ground);
   // grass tufts are tinted toward it so they sit in the ground they stand on.
   PgVec3 groundColor{0.06f, 0.15f, 0.09f};
