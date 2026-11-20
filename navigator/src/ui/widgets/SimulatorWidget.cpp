@@ -1150,6 +1150,7 @@ void SimulatorWidget::onStreamTick() {
         vsim::procgen::vegParamsForPalette(
             m_chunkStreamer.config().field.palette));
     vp->seed = m_chunkStreamer.config().field.seed ^ 0x5bd1e995u;
+    vp->meshRes = m_chunkStreamer.config().resolution;
     // Trees are always scattered; the renderer hides them while they are off
     // (VegetationRenderer::setTreesEnabled), so the Trees checkbox can bring
     // them back live without re-streaming the world.

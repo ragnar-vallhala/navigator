@@ -62,6 +62,24 @@ private slots:
     }
   }
 
+  // The scatter stands a rock's origin on the terrain, so every rock model's
+  // pivot must be its lowest point (the renderer adds no offset): within a
+  // centimetre once scaled to the 1.3 m span the renderer draws it at.
+  void rockPivotIsItsBase() {
+    int seen = 0;
+    for (const VegSpeciesAssets &s : assets_.species) {
+      if (s.category != QStringLiteral("rock"))
+        continue;
+      for (const VegVariant &v : s.variants) {
+        const float k = 1.3f / std::max(v.footprintX, v.footprintZ);
+        const QByteArray tag = v.name.toLatin1();
+        QVERIFY2(std::fabs(v.bboxMin.y()) * k < 0.01f, tag.constData());
+        ++seen;
+      }
+    }
+    QVERIFY(seen >= 4);
+  }
+
   void meshesAreValid() {
     for (const VegSpeciesAssets &s : assets_.species)
       for (const VegVariant &v : s.variants)
