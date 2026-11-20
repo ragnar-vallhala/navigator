@@ -22,6 +22,7 @@
 #include "../../vsim/FlightEventLog.h"
 #include "../../vsim/ThreadRetire.h"
 #include "../../vsim/procgen/Helipads.h"
+#include "../../vsim/VegetationRenderer.h"
 #include "../../vsim/VehicleJson.h"
 
 #include <QApplication>
@@ -332,6 +333,7 @@ void SimulatorWidget::buildUi() {
   auto *viewPanel = new SimViewPanel(*this, splitter);
   splitter->addWidget(viewPanel);
   applyTerrainQuality();
+  applyVegetationTrees();
 
   m_rightStack = new QStackedWidget(splitter);
   splitter->addWidget(m_rightStack);
@@ -1148,8 +1150,9 @@ void SimulatorWidget::onStreamTick() {
         vsim::procgen::vegParamsForPalette(
             m_chunkStreamer.config().field.palette));
     vp->seed = m_chunkStreamer.config().field.seed ^ 0x5bd1e995u;
-    if (!m_renderer->vegetationTreesEnabled())
-      vp->of(vsim::procgen::kVegTree).density = 0.0f; // trees switched off
+    // Trees are always scattered; the renderer hides them while they are off
+    // (VegetationRenderer::setTreesEnabled), so the Trees checkbox can bring
+    // them back live without re-streaming the world.
     vp->exclusions = vsim::vegExclusionsFor(
         m_helipads, m_worldEditor->config().obstacles);
     vegParams = std::move(vp);
@@ -1791,6 +1794,13 @@ void SimulatorWidget::applyTerrainQuality() {
     else
       r->setTerrainQualityAuto();
   }
+}
+
+void SimulatorWidget::applyVegetationTrees() {
+  const bool on = vsim::VegetationRenderer::treesEnabledByConfig();
+  for (vsim::SimRendererWidget *r : {m_renderer, m_downRenderer})
+    if (r)
+      r->setVegetationTreesEnabled(on);
 }
 
 void SimulatorWidget::pushRatesToSim() {

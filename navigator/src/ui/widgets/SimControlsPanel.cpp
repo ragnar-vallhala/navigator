@@ -18,6 +18,7 @@
 
 #include "FlowLayout.h"
 #include "SimPanelsCommon.h"
+#include "../../vsim/VegetationRenderer.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -525,6 +526,22 @@ void SimulatorWidget::buildSimControls(QWidget *host) {
   tqRow->addWidget(tqCombo);
   tqRow->addStretch();
   sv->addLayout(tqRow);
+
+  auto *treesChk = new QCheckBox(tr("Trees"), simBody);
+  treesChk->setChecked(vsim::VegetationRenderer::treesEnabledByConfig());
+  treesChk->setToolTip(
+      tr("Draw trees in the 3D views. Turn off on a slow graphics setup: "
+         "grass and ground cover stay. Applies immediately."));
+  if (!qEnvironmentVariable("NAV_VEGETATION_TREES").isEmpty()) {
+    treesChk->setEnabled(false); // the environment variable beats the setting
+    treesChk->setToolTip(
+        tr("Set by the NAV_VEGETATION_TREES environment variable."));
+  }
+  connect(treesChk, &QCheckBox::toggled, this, [this](bool on) {
+    QSettings().setValue(QStringLiteral("sim/vegetationTrees"), on);
+    applyVegetationTrees();
+  });
+  sv->addWidget(treesChk);
 
   m_logPathLabel = new ui::ElidedLabel(simBody);
   m_logPathLabel->setFullText(tr("Current log: (none)"));
