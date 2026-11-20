@@ -435,18 +435,25 @@ std::vector<VegInstance> scatterVegetation(const TerrainField &f, int cx, int cy
         // otherwise leave the downhill side in the air); the rest on the spot.
         float hz = surface.at(wx, wy);
         if (s == kVegRock) {
-          // A rock has one yaw and no tilt, so on a slope it can only rest on
-          // the lowest point under its footprint (the downhill toe); that
-          // buries the uphill side. Bury it by at most kVegRockMaxSinkM per
-          // unit scale (so it never vanishes into the slope) and leave a toe
-          // gap of at most kVegRockMaxToeGapM per unit scale: steeper ground
-          // takes no rock rather than one hovering over it.
-          const float lo =
-              surface.lowestUnder(wx, wy, kVegRockRadiusM * v.scale);
+          // The rock is tilted toward the slope under its footprint (most of
+          // the way: a boulder keeps some of its own lean), then rests on the
+          // lowest point under that tilted base. It is buried by at most
+          // kVegRockMaxSinkM per unit scale (so it never vanishes into the
+          // slope) and leaves a gap of at most kVegRockMaxToeGapM per unit
+          // scale at that lowest point: steeper or more broken ground takes
+          // no rock rather than one hovering over it.
+          const float rr = kVegRockRadiusM * v.scale;
+          float gx = 0.0f, gy = 0.0f;
+          surface.gradientAcross(wx, wy, rr, &gx, &gy);
+          gx = vegTiltValue(vegTiltCode(kVegRockTiltFollow * gx));
+          gy = vegTiltValue(vegTiltCode(kVegRockTiltFollow * gy));
+          const float lo = surface.lowestUnderTilted(wx, wy, rr, gx, gy);
           const float buriedMax = hz - kVegRockMaxSinkM * v.scale;
           if (buriedMax - lo > kVegRockMaxToeGapM * v.scale)
             continue;
           hz = std::max(lo, buriedMax) - kVegRockSinkM;
+          v.tiltX = gx;
+          v.tiltY = gy;
         }
         v.pos = PgVec3{wx, wy, -hz};
         v.species = static_cast<uint8_t>(s);

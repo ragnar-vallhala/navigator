@@ -93,7 +93,7 @@ const char *kVS = R"GLSL(
 layout(location = 0) in vec3 a_pos;
 layout(location = 1) in vec3 a_nrm;
 layout(location = 2) in vec2 a_uv;
-layout(location = 3) in vec4 i_posyaw;  // base (NED), yaw
+layout(location = 3) in vec4 i_posyaw;  // base (NED), yaw (+ 8 x tilt code, rocks)
 layout(location = 4) in vec4 i_misc;    // scale, tint, fade, grass paint (packed RGB hue)
 uniform mat4 u_vp;
 uniform float u_k;       // model unit -> metres at instance scale 1
@@ -110,9 +110,19 @@ flat out float v_paint;
 )GLSL";
 
 const char *kVSMain = R"GLSL(
+// Tilts a model-frame offset d so the up axis (0,0,-1) (NED) lands on u1.
+vec3 tiltTo(vec3 d, vec3 u1) {
+  vec3 v = cross(vec3(0.0, 0.0, -1.0), u1);
+  return d + cross(v, d) + cross(v, cross(v, d)) / (1.0 - u1.z);
+}
+
 void main() {
   float s = i_misc.x * u_k;
-  float cy = cos(i_posyaw.w), sy = sin(i_posyaw.w);
+  // Rocks carry their base tilt in the whole part of the yaw channel: yaw +
+  // 8 * (codeX + 64 * codeY), 0 = level (see vegTiltCode in procgen/Vegetation.h).
+  float tq = floor(i_posyaw.w * 0.125);
+  float yaw = i_posyaw.w - 8.0 * tq;
+  float cy = cos(yaw), sy = sin(yaw);
   mat2 R = mat2(cy, sy, -sy, cy);
   vec3 g = a_pos, gn = a_nrm;
   // Trees (the 0-0.02 sway band; shrubs, grass and rocks sway more or not at all)
@@ -127,6 +137,13 @@ void main() {
   vec3 n = gltfToNed(gn);
   p.xy = R * p.xy;
   n.xy = R * n.xy;
+  if (tq > 0.5) {
+    const float kTiltMax = 0.58; // = procgen::kVegTiltMax
+    vec2 tg = (vec2(mod(tq, 64.0), floor(tq / 64.0)) - 32.0) * (kTiltMax / 31.0);
+    vec3 u1 = normalize(vec3(-tg, -1.0));
+    p = tiltTo(p, u1);
+    n = tiltTo(n, u1);
+  }
   float h = clamp(a_pos.y / max(u_height, 1e-4), 0.0, 1.0);
   float phase = i_posyaw.x * 0.37 + i_posyaw.y * 0.23;
   float gust = sin(u_time * 1.7 + phase) + 0.5 * sin(u_time * 3.1 + phase * 1.7);
@@ -711,6 +728,9 @@ void VegetationRenderer::resolve(Chunk &c) {
     r.y = v.pos.y;
     r.z = v.pos.z + kSinkM;
     r.yaw = v.yaw;
+    if (v.tiltX != 0.0f || v.tiltY != 0.0f)
+      r.yaw += 8.0f * float(procgen::vegTiltCode(v.tiltX) +
+                            64 * procgen::vegTiltCode(v.tiltY));
     r.scale = v.scale;
     r.tint = std::clamp(v.tint, 0.0f, 1.0f);
     r.paint = float(v.paint);

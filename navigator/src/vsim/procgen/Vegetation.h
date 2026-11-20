@@ -39,6 +39,7 @@
 #include "ProcgenTypes.h"
 #include "TerrainField.h"
 
+#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -96,7 +97,23 @@ struct VegInstance {
   // Grass tufts: the palette's ground hue to tint toward, packed 0xRRGGBB with
   // the brightest channel at 255 (see vegPackHue); 0 = leave the colour alone.
   uint32_t paint = 0;
+  // Rocks: gradient (rise/run, NED x then y) of the plane the rock's base is
+  // tilted to, so it follows the slope under it instead of balancing on its
+  // downhill toe. Quantised to vegTiltCode steps; 0 = level.
+  float tiltX = 0.0f, tiltY = 0.0f;
 };
+
+// The tilt gradient is limited to +-kVegTiltMax (tan 30 deg) per axis and
+// stored in 31 steps each way, so the renderer packs it exactly.
+inline constexpr float kVegTiltMax = 0.58f;
+inline constexpr int kVegTiltZero = 32;
+inline int vegTiltCode(float g) {
+  const int c = kVegTiltZero + static_cast<int>(std::lround(g / kVegTiltMax * 31.0f));
+  return c < 1 ? 1 : (c > 63 ? 63 : c);
+}
+inline float vegTiltValue(int code) {
+  return static_cast<float>(code - kVegTiltZero) * kVegTiltMax / 31.0f;
+}
 
 // Packs the hue of a colour (brightest channel scaled to 255) as 0xRRGGBB.
 uint32_t vegPackHue(const PgVec3 &c);
@@ -109,13 +126,16 @@ inline constexpr float kVegRockHeightM = 0.5f;
 // Rocks smaller than this scale are decoration only (no collider).
 inline constexpr float kVegRockColliderMinScale = 1.4f;
 // A rock rests on the lowest mesh point under its footprint, sunk this far so
-// no sliver of sky shows under its toe. On a slope it may sink at most
-// kVegRockMaxSinkM per unit scale below the surface at its centre (about 40% of
-// the flattest rock model's height), and is not placed where that leaves its
-// downhill toe more than kVegRockMaxToeGapM per unit scale in the air.
+// no sliver of sky shows under its toe. It is tilted toward the slope under it
+// (kVegRockTiltFollow of the footprint's mean gradient, at most kVegTiltMax per
+// axis). It may sink at most kVegRockMaxSinkM per unit scale below the surface
+// at its centre (about 40% of the flattest rock model's height), and is not
+// placed where that leaves the lowest point of its tilted base more than
+// kVegRockMaxToeGapM per unit scale in the air.
 inline constexpr float kVegRockSinkM = 0.03f;
 inline constexpr float kVegRockMaxSinkM = 0.20f;
-inline constexpr float kVegRockMaxToeGapM = 0.25f;
+inline constexpr float kVegRockMaxToeGapM = 0.15f;
+inline constexpr float kVegRockTiltFollow = 0.85f;
 
 // An area where nothing is placed (helipad, obstacle). A disc of radius rx, or
 // an axis-aligned rectangle of half-extents (rx, ry) when `rect` is set.
