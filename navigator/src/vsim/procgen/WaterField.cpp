@@ -19,6 +19,9 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <mutex>
+#include <shared_mutex>
+#include <unordered_map>
 
 namespace vsim::procgen {
 
@@ -76,8 +79,25 @@ float WaterBody::shoreRadiusToward(float dx, float dy) const {
   return shoreRadius(std::atan2(dy, dx));
 }
 
+// Per-field cache of every cell's body (or its absence). The thread-local
+// entries above are a lock-free front for the common "same cell again" case;
+// this catches sweeps that cross many 170 m cells (minimap, wide chunks).
+struct WaterField::BodyCache {
+  struct Slot {
+    bool present = false;
+    WaterBody body;
+  };
+  std::shared_mutex mu;
+  std::unordered_map<uint64_t, Slot> map;
+  static uint64_t key(int ix, int iy) {
+    return (static_cast<uint64_t>(static_cast<uint32_t>(ix)) << 32) |
+           static_cast<uint32_t>(iy);
+  }
+};
+
 WaterField::WaterField(const WaterParams &p)
-    : p_(p), id_(gNextId.fetch_add(1, std::memory_order_relaxed)) {}
+    : p_(p), id_(gNextId.fetch_add(1, std::memory_order_relaxed)),
+      cache_(std::make_shared<BodyCache>()) {}
 
 bool WaterField::makeBody(const HeightSource &src, int ix, int iy,
                           WaterBody &b) const {
@@ -151,7 +171,25 @@ bool WaterField::bodyAt(const HeightSource &src, float wx, float wy,
   c.ix = ix;
   c.iy = iy;
   c.valid = true;
+  const uint64_t key = BodyCache::key(ix, iy);
+  {
+    std::shared_lock lock(cache_->mu);
+    const auto it = cache_->map.find(key);
+    if (it != cache_->map.end()) {
+      c.present = it->second.present;
+      c.body = it->second.body;
+      if (c.present)
+        out = c.body;
+      return c.present;
+    }
+  }
   c.present = makeBody(src, ix, iy, c.body);
+  {
+    std::unique_lock lock(cache_->mu);
+    if (cache_->map.size() > 8192) // bounded: a long flight sweeps many cells
+      cache_->map.clear();
+    cache_->map[key] = {c.present, c.body};
+  }
   if (c.present)
     out = c.body;
   return c.present;

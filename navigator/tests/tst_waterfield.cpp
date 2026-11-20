@@ -25,6 +25,7 @@
 #include "procgen/WaterField.h"
 
 #include <cmath>
+#include <thread>
 
 using namespace vsim::procgen;
 
@@ -48,6 +49,42 @@ std::vector<WaterBody> bodies(const TerrainField &f, float half = 1500.0f) {
 class TstWaterField : public QObject {
   Q_OBJECT
 private slots:
+  // The shared body cache must not change a single height, however many threads
+  // fill it and in whatever order (chunks are meshed on a thread pool).
+  void bodyCacheGivesTheSameHeightsOnAnyThread() {
+    const TerrainField ref(hills());
+    constexpr int kN = 40000;
+    std::vector<float> want(kN);
+    const auto at = [](int i) {
+      return std::pair{float((i * 37) % 3000) - 1500.0f, float((i * 91) % 3000) - 1500.0f};
+    };
+    {
+      // Reference: a fresh field per sample, so no cache is ever reused.
+      for (int i = 0; i < kN; i += 50) {
+        const TerrainField fresh(hills());
+        want[size_t(i)] = fresh.height(at(i).first, at(i).second);
+      }
+    }
+    const TerrainField shared(hills());
+    std::vector<std::thread> pool;
+    std::vector<int> bad(4, 0);
+    for (int t = 0; t < 4; ++t)
+      pool.emplace_back([&, t] {
+        for (int n = 0; n < kN; ++n) {
+          const int i = (t % 2 == 0) ? n : kN - 1 - n; // opposite sweep orders
+          const float h = shared.height(at(i).first, at(i).second);
+          if (i % 50 == 0 && h != want[size_t(i)])
+            ++bad[size_t(t)];
+        }
+      });
+    for (auto &th : pool)
+      th.join();
+    for (int t = 0; t < 4; ++t)
+      QCOMPARE(bad[size_t(t)], 0);
+    QCOMPARE(shared.height(at(123).first, at(123).second),
+             ref.height(at(123).first, at(123).second));
+  }
+
   void hillsWorldHasPonds() {
     int n = 0;
     for (uint32_t seed : {7u, 11u, 23u})
