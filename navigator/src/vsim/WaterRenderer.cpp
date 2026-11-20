@@ -164,10 +164,12 @@ void main() {
 
   // Shore foam: a thin bright band where the water gets shallow, broken up by
   // moving noise, with a little more on the wave crests.
-  float edge = 1.0 - smoothstep(0.0, 0.12, depth);
+  float edge = 1.0 - smoothstep(0.0, 0.07, depth);
   float n1 = wNoise(v_pos.xy * 1.7 + vec2(u_time * 0.15, -u_time * 0.1));
   float n2 = wNoise(v_pos.xy * 4.3 - vec2(u_time * 0.2, u_time * 0.12));
-  float foam = clamp(edge * (0.15 + 1.1 * n1 * n2) - 0.18, 0.0, 1.0);
+  // Sparse patches (not a continuous ring): threshold the noise so the foam
+  // breaks into drifting flecks along the waterline.
+  float foam = edge * smoothstep(0.50, 0.82, n1 * 0.6 + n2 * 0.5);
   vec3 foamCol = (ambientLight(vec3(0.0, 0.0, -1.0)) * u_ambstr + sunLightColor() * (0.55 * sunUp)) * 0.95 + 0.12;
 
   vec3 col = mix(body, refl, F) + glint;
