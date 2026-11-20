@@ -110,17 +110,20 @@ SPECIES = [
          # whorls of a few long, upward-curving branches with sky between them
          cards=dict(bark='pine_sapling_medium_bark', twig='pine_sapling_medium_twig', key='black',
                     crop=(30, 40, 235, 455), grade=(0.85, 1.20, 1.35), thick=1.6, de_yellow=0.8,
-                    bark_tint=(0.50, 0.41, 0.34),
+                    bark_tint=(0.40, 0.395, 0.41),
                     variants=[
-                        dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.30, R=3.0, len=1.25,
+                        dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.25, R=3.0, len=1.25,
                              wid=1.5, droop=(10, 5), curve=0.32, r0=0.34, r1=0.08, trunk_top=0.9, jit=0.015, sag=0.06, az=0.38,
-                             lower=0.6, lowlen=0.15, bark_u=3.0, bark_v=1.2),
-                        dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.28, R=3.0, len=1.25,
+                             lower=0.6, lowlen=0.15, bark_u=3.0, bark_v=1.2,
+                             spacing_jit=0.35, lowbr=(9, 5, 3), lowy=(0.06, 0.30), lowdroop=34),
+                        dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.23, R=3.0, len=1.25,
                              wid=1.5, droop=(12, 6), curve=0.34, r0=0.34, r1=0.08, trunk_top=0.9, jit=0.015, sag=0.06, az=0.38,
-                             lower=0.6, lowlen=0.15, bark_u=3.0, bark_v=1.2),
-                        dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.32, R=3.2, len=1.25,
+                             lower=0.6, lowlen=0.15, bark_u=3.0, bark_v=1.2,
+                             spacing_jit=0.35, lowbr=(9, 5, 3), lowy=(0.06, 0.30), lowdroop=34),
+                        dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.27, R=3.2, len=1.25,
                              wid=1.5, droop=(8, 4), curve=0.30, r0=0.34, r1=0.08, trunk_top=0.9, jit=0.015, sag=0.06, az=0.38,
-                             lower=0.6, lowlen=0.15, bark_u=3.0, bark_v=1.2)])),
+                             lower=0.6, lowlen=0.15, bark_u=3.0, bark_v=1.2,
+                             spacing_jit=0.35, lowbr=(9, 5, 3), lowy=(0.06, 0.30), lowdroop=34)])),
     dict(id='jacaranda_tree', gltf='jacaranda_tree_1k.gltf', category='tree',
          title='Jacaranda tree (broadleaf)', pivot='base',
          variants=['jacaranda_tree_LOD0', 'jacaranda_tree_LOD0_wide'],
@@ -830,6 +833,9 @@ def card_conifer_mesh(cv, lod, rng):
 
     for j in range(ntier):
         t = j / max(ntier - 1, 1)
+        if cv.get('spacing_jit', 0.0) > 0.0 and 0 < j < ntier - 1:
+            # irregular whorl spacing: each whorl moves up to a fraction of the gap
+            t += rng.uniform(-1.0, 1.0) * cv['spacing_jit'] / (ntier - 1)
         y = y_lo + (y_hi - y_lo) * t
         R = cv["R"] * (1.0 - t * 0.9) ** cv.get("taper", 1.0) + 0.55
         # coarser LODs have fewer, so larger, cards: the crown keeps its mass
@@ -847,6 +853,18 @@ def card_conifer_mesh(cv, lod, rng):
             root = out * (trunk_r(yj) * 0.6) + np.array([0.0, yj, 0.0])
             un = out * 0.45 + np.array([0.0, 0.9, 0.0])
             add_card(root, out, un / np.linalg.norm(un), lj, W * lj / L, droop, cv.get('sag', 0.14), nalong, cv.get('curve', 0.0))
+    # a few long, low, drooping branches so the bottom third is not a bare pole
+    for i in range(cv.get('lowbr', (0, 0, 0))[lod]):
+        nlow = cv['lowbr'][lod]
+        th = 2 * np.pi * (i + rng.uniform(0.0, 0.8)) / nlow + 0.9 * i
+        out = np.array([np.cos(th), 0.0, np.sin(th)])
+        yb = H * (cv['lowy'][0] + (cv['lowy'][1] - cv['lowy'][0]) * (i + rng.uniform(0.1, 0.9)) / nlow)
+        fill = min((cv['cards'][0] / ncard) ** 0.5 * (cv['tiers'][0] / ntier) ** 0.3, 1.8)
+        Lb = cv['R'] * cv['len'] * 1.0 * fill ** 0.5 * rng.uniform(0.85, 1.1)
+        root = out * (trunk_r(yb) * 0.6) + np.array([0.0, yb, 0.0])
+        un = out * 0.45 + np.array([0.0, 0.9, 0.0])
+        add_card(root, out, un / np.linalg.norm(un), Lb, Lb * cv['wid'] * 0.9, np.tan(np.radians(cv['lowdroop'])),
+                 cv.get('sag', 0.14), nalong, 0.12)
     # leader: two crossed upright cards
     for ph in (0.0, np.pi / 2):
         out = np.array([np.cos(ph), 0.0, np.sin(ph)])
