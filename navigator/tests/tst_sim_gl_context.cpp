@@ -655,7 +655,14 @@ private slots:
 
     // And off again: the surface disappears, the plain frame returns.
     rig.r->setWaterQuality(vsim::terrain::Quality::Low);
-    QVERIFY(meanDiff(signature(low), signature(rig.r->grabFrame())) < 8.0f);
+    // Judge only the band of the frame where the pond sits (the sky and other
+    // animated content above it may change between frames).
+    const QImage off = rig.r->grabFrame();
+    const auto band = [](const QImage &im) {
+      return im.copy(0, im.height() * 36 / 100, im.width(), im.height() * 30 / 100);
+    };
+    QVERIFY2(meanDiff(signature(band(low)), signature(band(off))) < 8.0f,
+             "the water is still drawn after switching to Low");
   }
 };
 
