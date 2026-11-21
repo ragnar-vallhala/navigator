@@ -195,7 +195,9 @@ SimulatorWidget::SimulatorWidget(QWidget *parent) : QWidget(parent) {
     for (int f = 0; f < 5; ++f)
       if (m_rcAxisCombo[f])
         m_rc->setMapping(f, m_rcAxisCombo[f]->currentData().toInt(),
-                         m_rcInvert[f]->isChecked());
+                         m_rcInvert[f]->isChecked(),
+                         f == RcBridge::Throttle && m_rcThrottleHalf &&
+                             m_rcThrottleHalf->isChecked());
     m_rc->start();
   } else {
     delete m_rc;
@@ -1948,9 +1950,13 @@ void SimulatorWidget::pushRcMapping(int func) {
     return;
   const int axis = m_rcAxisCombo[func]->currentData().toInt();
   const bool inv = m_rcInvert[func]->isChecked();
+  const bool half = func == RcBridge::Throttle && m_rcThrottleHalf &&
+                    m_rcThrottleHalf->isChecked();
   if (m_rc)
-    m_rc->setMapping(func, axis, inv);
+    m_rc->setMapping(func, axis, inv, half);
   QSettings s;
+  if (func == RcBridge::Throttle)
+    s.setValue(kRcThrottleHalfKey, half);
   s.setValue(QString(kRcMapAxisKey) + QString::number(func), axis);
   s.setValue(QString(kRcMapInvKey) + QString::number(func), inv);
 }
@@ -2002,6 +2008,8 @@ void SimulatorWidget::applyRcSource() {
       m_rcAxisCombo[f]->setEnabled(!uart);
     if (m_rcInvert[f])
       m_rcInvert[f]->setEnabled(!uart);
+    if (f == RcBridge::Throttle && m_rcThrottleHalf)
+      m_rcThrottleHalf->setEnabled(!uart);
   }
 
   // Push to the bridge (no-op until it exists; the ctor calls this again).
@@ -2186,7 +2194,8 @@ void SimulatorWidget::startInAppSim() {
                     .arg(Units::toAngle(yaw), 6, 'f', dec)
                     .arg(Units::altSuffix(), Units::angleSuffix()));
             updateHud(snap);
-            m_propAudio.setMotors(snap.motor_omega);
+            if (m_sim) // a pose queued before Stop must not restart the props
+              m_propAudio.setMotors(snap.motor_omega);
           });
   connect(m_sim, &vsim::SimWorker::logLine, this,
           [this](const QString &s) { appendLog("vsim", s); });
@@ -2302,7 +2311,8 @@ void SimulatorWidget::attachExternalSim() {
                       .arg(Units::toAngle(yaw), 6, 'f', dec)
                       .arg(Units::altSuffix(), Units::angleSuffix()));
             updateHud(snap);
-            m_propAudio.setMotors(snap.motor_omega);
+            if (m_sim) // a pose queued before Stop must not restart the props
+              m_propAudio.setMotors(snap.motor_omega);
           });
   connect(m_sim, &vsim::SimWorker::logLine, this,
           [this](const QString &s) { appendLog("attach", s); });
@@ -2361,7 +2371,7 @@ void SimulatorWidget::stopInAppSim() {
   m_retrier.cancelAll(); // nothing left to ACK
   if (m_retryTimer)
     m_retryTimer->stop();
-  m_propAudio.setMotors({0.0f, 0.0f, 0.0f, 0.0f}); // silence once stopped
+  m_propAudio.silence(); // ramp down and release the stream once stopped
   m_simStartBtn->setEnabled(!startBlocked());
   if (m_simAttachBtn)
     m_simAttachBtn->setEnabled(true);

@@ -153,6 +153,12 @@ target_include_directories(tst_start_gate PRIVATE ${SRC}/ui/widgets)
 navigator_test(tst_custom_vehicle_warning tst_custom_vehicle_warning.cpp)
 target_include_directories(tst_custom_vehicle_warning PRIVATE ${SRC}/ui/widgets)
 
+# ---- Prop audio: stale-feed gate (silence after Stop) ----------------------
+navigator_test(tst_prop_audio_gate
+    tst_prop_audio_gate.cpp
+    ${SRC}/audio/PropAudio.cpp)
+target_include_directories(tst_prop_audio_gate PRIVATE ${SRC}/audio)
+
 # ---- C++ autotune engine (Space + orchestration, synthetic rollout) -------
 # Where the autotune backend is looked for (installed app has no repo to walk up to).
 navigator_test(tst_autotune_backend_locator

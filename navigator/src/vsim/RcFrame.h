@@ -16,6 +16,7 @@
  */
 #pragma once
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <string>
@@ -69,6 +70,31 @@ inline int resolveArm(bool noSignal, bool enabled, bool hasSource,
   if (!enabled || !hasSource || armOverride < 0)
     return mapped;
   return armOverride ? 2000 : 1000;
+}
+
+// Joystick axis (-32767..32767) to a channel in microseconds, 1000..2000.
+inline int axisToUs(int v, bool invert) {
+  if (invert)
+    v = -v;
+  return std::clamp(1500 + (v * 500) / 32767, 1000, 2000);
+}
+
+// The firmware refuses to arm with throttle at or above 1100 us (10 percent).
+// Anything within the bottom 5 percent of the range is sent as exactly 1000,
+// so a stick deadzone or an imperfect rest position cannot block arming.
+constexpr int kThrottleDeadUs = 1050;
+
+// Throttle channel. halfRange is for a stick that rests at centre (a spring-
+// loaded gamepad axis): only the upper half of the travel is used, centre and
+// below give 1000, full up gives 2000. Otherwise the whole travel is used, as
+// for a ratcheted RC throttle that rests fully down.
+inline int throttleToUs(int v, bool invert, bool halfRange) {
+  if (invert)
+    v = -v;
+  const int us = halfRange ? 1000 + (std::max(v, 0) * 1000) / 32767
+                           : 1500 + (v * 500) / 32767;
+  const int c = std::clamp(us, 1000, 2000);
+  return c < kThrottleDeadUs ? 1000 : c;
 }
 
 // One 20 ms wire frame: "roll,pitch,thr,yaw,arm,ch6\n", or the feeder's

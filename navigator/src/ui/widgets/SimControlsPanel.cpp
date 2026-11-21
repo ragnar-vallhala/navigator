@@ -436,6 +436,21 @@ void SimulatorWidget::buildSimControls(QWidget *host) {
               this, [this, f] { pushRcMapping(f); });
       connect(inv, &QCheckBox::toggled, this,
               [this, f] { pushRcMapping(f); });
+      if (f == RcBridge::Throttle) {
+        // A spring-centred gamepad stick sends ~1500 us at rest, but arming
+        // needs throttle below 1100 us. This uses only the upper half.
+        m_rcThrottleHalf = new QCheckBox(tr("centre = min"), simBody);
+        m_rcThrottleHalf->setToolTip(
+            tr("Tick when the throttle stick springs back to centre: only "
+               "the upper half of the travel is used, so centre and below "
+               "give minimum throttle and the vehicle can arm. Leave "
+               "unticked for a throttle that rests fully down."));
+        m_rcThrottleHalf->setChecked(
+            st.value(kRcThrottleHalfKey, false).toBool());
+        mapGrid->addWidget(m_rcThrottleHalf, f, 3);
+        connect(m_rcThrottleHalf, &QCheckBox::toggled, this,
+                [this, f] { pushRcMapping(f); });
+      }
     }
     sv->addLayout(mapGrid);
 

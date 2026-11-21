@@ -35,6 +35,13 @@ private slots:
   void armOverrideAppliesWhenLive();
   void deviceLossErrnoClassification();
   void uartLineClassification();
+  void fullRangeThrottleUnchanged();
+  void centredThrottleCannotArmInFullRange();
+  void halfRangeCentreAndBelowAreMinimum();
+  void halfRangeFullUpIsMaximum();
+  void throttleDeadzoneSnapsToMin();
+  void throttleInvertAppliesFirst();
+  void axisToUsEndpoints();
 };
 
 void TstRcFrame::normalFrameIsCsv() {
@@ -107,6 +114,62 @@ void TstRcFrame::uartLineClassification() {
   QCOMPARE(rcframe::classifyLine("  NO_SIGNAL"), Line::NoSignal);
   QCOMPARE(rcframe::classifyLine("boot v1.2"), Line::Junk);
   QCOMPARE(rcframe::classifyLine(""), Line::Junk);
+}
+
+// Firmware arms only below this throttle value (us).
+static constexpr int kArmMaxUs = 1100;
+
+void TstRcFrame::fullRangeThrottleUnchanged() {
+  // A throttle that rests fully down, as before: -32767 -> 1000, 0 -> 1500.
+  QCOMPARE(rcframe::throttleToUs(-32767, false, false), 1000);
+  QCOMPARE(rcframe::throttleToUs(0, false, false), 1500);
+  QCOMPARE(rcframe::throttleToUs(32767, false, false), 2000);
+  QCOMPARE(rcframe::throttleToUs(16383, false, false), 1749); // integer truncation
+}
+
+void TstRcFrame::centredThrottleCannotArmInFullRange() {
+  // The reported failure: a spring-centred stick gives 1500 us, never below
+  // the 1100 us arm limit. Half-range mode fixes exactly this.
+  QVERIFY(rcframe::throttleToUs(0, false, false) >= kArmMaxUs);
+  QVERIFY(rcframe::throttleToUs(0, false, true) < kArmMaxUs);
+}
+
+void TstRcFrame::halfRangeCentreAndBelowAreMinimum() {
+  for (int v : {0, -1, -1000, -20000, -32767})
+    QCOMPARE(rcframe::throttleToUs(v, false, true), 1000);
+}
+
+void TstRcFrame::halfRangeFullUpIsMaximum() {
+  QCOMPARE(rcframe::throttleToUs(32767, false, true), 2000);
+  const int mid = rcframe::throttleToUs(16383, false, true);
+  QVERIFY(mid > 1450 && mid < 1550);
+  QVERIFY(rcframe::throttleToUs(8000, false, true) <
+          rcframe::throttleToUs(24000, false, true)); // monotonic
+}
+
+void TstRcFrame::throttleDeadzoneSnapsToMin() {
+  // 1000 + 4% of the range is inside the dead band, 1000 + 6% is not.
+  QCOMPARE(rcframe::throttleToUs(1300, false, true), 1000); // ~1040 us
+  QVERIFY(rcframe::throttleToUs(2300, false, true) > 1050);  // ~1070 us
+  // Full range: a stick resting a little above the bottom still arms.
+  QCOMPARE(rcframe::throttleToUs(-30500, false, false), 1000); // ~1035 us
+}
+
+void TstRcFrame::throttleInvertAppliesFirst() {
+  // Inverted axis: stick fully up reads -32767 and means minimum throttle.
+  QCOMPARE(rcframe::throttleToUs(32767, true, false), 1000);
+  QCOMPARE(rcframe::throttleToUs(-32767, true, false), 2000);
+  QCOMPARE(rcframe::throttleToUs(-32767, true, true), 2000);
+  QCOMPARE(rcframe::throttleToUs(32767, true, true), 1000);
+}
+
+void TstRcFrame::axisToUsEndpoints() {
+  // Non-throttle channels keep the plain mapping, deadzone-free.
+  QCOMPARE(rcframe::axisToUs(-32767, false), 1000);
+  QCOMPARE(rcframe::axisToUs(0, false), 1500);
+  QCOMPARE(rcframe::axisToUs(32767, false), 2000);
+  QCOMPARE(rcframe::axisToUs(-30500, false), 1035); // not snapped
+  QCOMPARE(rcframe::axisToUs(32767, true), 1000);
 }
 
 QTEST_MAIN(TstRcFrame)
