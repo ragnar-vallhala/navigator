@@ -105,6 +105,12 @@ uniform float u_wind;
 uniform vec3 u_wcol;
 uniform sampler2D u_rip;   // prop-wash ripple heights [m], R16F
 uniform vec4 u_ripwin;     // window origin xy, size [m]; w = 1 when live
+uniform mat4 u_vp;
+uniform mat4 u_invvp;
+uniform sampler2D u_scene;  // opaque scene so far (resolved copy)
+uniform sampler2D u_sdepth; // its depth
+uniform vec4 u_ssr;         // x = on, y = near, z = far, w = max march [m]
+uniform vec2 u_vsize;       // copy size [px]
 )GLSL";
 
 const char *kWaterFSMain = R"GLSL(
@@ -134,6 +140,67 @@ vec2 waveGrad(vec2 p, float t, float wind, float fp) {
          cos(k * dot(d, p) - sqrt(9.81 * k) * t * 1.3 + 3.0 * float(i));
   }
   return g;
+}
+// Ray-marches the reflected ray through the resolved scene depth. Returns the
+// scene colour it meets in rgb and a confidence in a (0 = nothing found: the
+// caller keeps the sky). Ground under the water is ignored (a ray above the
+// surface cannot hit it), hits must pass a thickness test that grows with the
+// step, and the result fades out toward the screen edge and with distance.
+float ssrLinear(float d) {
+  float n = u_ssr.y, f = u_ssr.z;
+  return 2.0 * n * f / (f + n - (2.0 * d - 1.0) * (f - n));
+}
+vec4 ssrTrace(vec3 P, vec3 R, float jitter, vec2 slope) {
+  float t = 0.35 + 0.5 * jitter, dt = 0.5 + 0.4 * jitter, prevT = 0.0;
+  for (int i = 0; i < 22; ++i) {
+    if (t > u_ssr.w) break;
+    vec4 c = u_vp * vec4(P + R * t, 1.0);
+    if (c.w < u_ssr.y) break;
+    vec3 nd = c.xyz / c.w;
+    if (abs(nd.x) > 1.0 || abs(nd.y) > 1.0 || nd.z > 1.0) break;
+    ivec2 ip = clamp(ivec2((nd.xy * 0.5 + 0.5) * u_vsize), ivec2(0), ivec2(u_vsize) - 1);
+    float d = texelFetch(u_sdepth, ip, 0).r;
+    if (d < 0.99999) {
+      float diff = c.w - ssrLinear(d);
+      if (diff > 0.0 && diff < 0.3 + 1.4 * dt) {
+        // Crossed the surface between prevT and t: bisect to the hit.
+        float lo = prevT, hi = t;
+        for (int k = 0; k < 4; ++k) {
+          float mid = 0.5 * (lo + hi);
+          vec4 cm = u_vp * vec4(P + R * mid, 1.0);
+          ivec2 im = clamp(ivec2((cm.xy / cm.w * 0.5 + 0.5) * u_vsize), ivec2(0), ivec2(u_vsize) - 1);
+          if (cm.w > ssrLinear(texelFetch(u_sdepth, im, 0).r)) hi = mid; else lo = mid;
+        }
+        vec4 ch = u_vp * vec4(P + R * hi, 1.0);
+        vec2 uvh = ch.xy / ch.w * 0.5 + 0.5;
+        ivec2 ih = clamp(ivec2(uvh * u_vsize), ivec2(0), ivec2(u_vsize) - 1);
+        float dh = texelFetch(u_sdepth, ih, 0).r;
+        vec4 wp = u_invvp * vec4(uvh * 2.0 - 1.0, dh * 2.0 - 1.0, 1.0);
+        wp /= wp.w;
+        // World is NED: a smaller z is higher. The lake bed (below the surface)
+        // must not reflect, but the bank at the waterline sits within a few cm of
+        // the level and the waves move P by about as much, so allow 12 cm of slack.
+        if (dh < 0.99999 && wp.z < P.z + 0.12) {
+          vec2 e = abs(uvh * 2.0 - 1.0);
+          float conf = (1.0 - smoothstep(0.80, 1.0, max(e.x, e.y))) *
+                       (1.0 - smoothstep(0.5 * u_ssr.w, u_ssr.w, hi));
+          // The ray was traced on a flat mirror (a coherent edge); the waves
+          // only bend where the colour is taken from: the hit point moves with
+          // the surface slope times its distance, as a rippled mirror smears.
+          vec4 cd = u_vp * vec4(P + R * hi + vec3(slope * (0.9 * min(hi, 40.0)), 0.0), 1.0);
+          if (cd.w > u_ssr.y) {
+            vec2 ud = cd.xy / cd.w * 0.5 + 0.5;
+            ih = clamp(ivec2(ud * u_vsize), ivec2(0), ivec2(u_vsize) - 1);
+          }
+          return vec4(texelFetch(u_scene, ih, 0).rgb, conf);
+        }
+      }
+    }
+    prevT = t;
+    t += dt;
+    dt *= 1.27;
+  }
+  return vec4(0.0);
 }
 float wHash(vec2 p) { p = fract(p * vec2(123.34, 345.45)); p += dot(p, p + 34.345); return fract(p.x * p.y); }
 float wNoise(vec2 p) {
@@ -176,6 +243,18 @@ void main() {
   vec3 R = reflect(-V, N);
   R.z = min(R.z, -0.03);                        // the sky, never the ground
   vec3 refl = skyColor(R);
+  // Screen-space reflection of the terrain and trees. Skipped where the Fresnel
+  // weight is negligible (looking steeply down), faded in smoothly above that.
+  if (u_ssr.x > 0.5 && F > 0.035) {
+    float jit = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    // Trace the flat mirror; the wave slope (g) distorts the lookup afterwards.
+    // (Tracing the wavy normal bends a grazing ray by about as much as the
+    // strip a bank occupies, so hits would come and go as ragged islands.)
+    vec3 Rt = reflect(-V, vec3(0.0, 0.0, -1.0));
+    Rt.z = min(Rt.z, -0.03);
+    vec4 s = ssrTrace(v_pos, Rt, jit, g);
+    refl = mix(refl, s.rgb * 0.92, s.a * smoothstep(0.035, 0.07, F));
+  }
 
   // Body: absorption tints with depth from a lit shallow colour to a dark deep
   // one (the palette's pond colour), lit by sky ambient and a little sun scatter.
@@ -310,6 +389,93 @@ void WaterRenderer::bindRipples(const WaterRipples *r) {
   p.setUniformValue("u_ripwin", QVector4D(r->originX(), r->originY(), r->sizeM(), 1.0f));
 }
 
+// Copies the opaque scene drawn so far (colour + depth, resolving MSAA) into
+// single-sample textures the shader can read. The destination depth format has
+// to match the source's, so it is chosen from the source framebuffer's own depth
+// and stencil sizes. Returns false (and disables the feature) on any GL error.
+bool WaterRenderer::captureScene(unsigned srcFbo, int w, int h) {
+  if (ssrBroken_ || w <= 0 || h <= 0)
+    return false;
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFbo);
+  if (!sceneFbo_ || w != sceneW_ || h != sceneH_) {
+    // Match the source's depth format (the default framebuffer names its
+    // attachments GL_DEPTH / GL_STENCIL, an FBO GL_DEPTH_ATTACHMENT / ...).
+    GLint ds = 0, ss = 0;
+    glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, srcFbo ? GL_DEPTH_ATTACHMENT : GL_DEPTH,
+                                          GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, &ds);
+    glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, srcFbo ? GL_STENCIL_ATTACHMENT : GL_STENCIL,
+                                          GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE, &ss);
+    GLenum fmt = ds >= 32 ? (ss > 0 ? GL_DEPTH32F_STENCIL8 : GL_DEPTH_COMPONENT32F)
+                 : ds >= 24 ? (ss > 0 ? GL_DEPTH24_STENCIL8 : GL_DEPTH_COMPONENT24)
+                            : GL_DEPTH_COMPONENT16;
+    if (glGetError() != GL_NO_ERROR || ds <= 0) {
+      glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFbo);
+      ssrBroken_ = true;
+      return false;
+    }
+    freeScene();
+    GLint prevTex = 0; // the allocation below must not leave a texture bound on the active unit
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex);
+    sceneDepthFmt_ = fmt;
+    const bool packed = fmt == GL_DEPTH24_STENCIL8 || fmt == GL_DEPTH32F_STENCIL8;
+    glGenTextures(1, &sceneColor_);
+    glBindTexture(GL_TEXTURE_2D, sceneColor_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glGenTextures(1, &sceneDepth_);
+    glBindTexture(GL_TEXTURE_2D, sceneDepth_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GLint(fmt), w, h, 0, packed ? GL_DEPTH_STENCIL : GL_DEPTH_COMPONENT,
+                 fmt == GL_DEPTH24_STENCIL8 ? GL_UNSIGNED_INT_24_8
+                 : fmt == GL_DEPTH32F_STENCIL8 ? GL_FLOAT_32_UNSIGNED_INT_24_8_REV
+                 : fmt == GL_DEPTH_COMPONENT32F ? GL_FLOAT
+                 : fmt == GL_DEPTH_COMPONENT16 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT,
+                 nullptr);
+    for (const unsigned t : {sceneColor_, sceneDepth_}) {
+      glBindTexture(GL_TEXTURE_2D, t);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+    glBindTexture(GL_TEXTURE_2D, GLuint(prevTex));
+    glGenFramebuffers(1, &sceneFbo_);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, sceneFbo_);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sceneColor_, 0);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, packed ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT,
+                           GL_TEXTURE_2D, sceneDepth_, 0);
+    sceneW_ = w;
+    sceneH_ = h;
+    if (glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE ||
+        glGetError() != GL_NO_ERROR) {
+      glBindFramebuffer(GL_FRAMEBUFFER, srcFbo);
+      freeScene();
+      ssrBroken_ = true;
+      return false;
+    }
+  }
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, sceneFbo_);
+  glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+  const bool ok = glGetError() == GL_NO_ERROR;
+  glBindFramebuffer(GL_FRAMEBUFFER, srcFbo); // back to where the frame is drawn
+  if (!ok) {
+    freeScene();
+    ssrBroken_ = true;
+    return false;
+  }
+  ++sceneCaptures_;
+  return true;
+}
+
+void WaterRenderer::freeScene() {
+  if (sceneFbo_)
+    glDeleteFramebuffers(1, &sceneFbo_);
+  if (sceneColor_)
+    glDeleteTextures(1, &sceneColor_);
+  if (sceneDepth_)
+    glDeleteTextures(1, &sceneDepth_);
+  sceneFbo_ = sceneColor_ = sceneDepth_ = 0;
+  sceneW_ = sceneH_ = 0;
+}
+
 void WaterRenderer::draw(const WaterFrame &f) {
   if (bodies_.empty() || !prog_)
     return;
@@ -317,6 +483,7 @@ void WaterRenderer::draw(const WaterFrame &f) {
     uploadMesh();
   if (indexCount_ <= 0)
     return;
+  ssrActive_ = f.ssr && captureScene(f.sceneFbo, f.viewW, f.viewH);
   prog_->bind();
   QOpenGLShaderProgram &p = *prog_;
   f.atmo.forEachUniform([&p](const char *name, auto... v) {
@@ -339,6 +506,26 @@ void WaterRenderer::draw(const WaterFrame &f) {
   p.setUniformValue("u_wind", f.wind);
   p.setUniformValue("u_wcol", f.waterColor);
   bindRipples(f.ripples);
+  {
+    constexpr int kSceneUnit = 5, kDepthUnit = 4;
+    // Near / far from the projection: m22 = -(f+n)/(f-n), m23 = -2fn/(f-n).
+    const float *m = f.proj.constData();
+    const float n = m[14] / (m[10] - 1.0f), fr = m[14] / (m[10] + 1.0f);
+    p.setUniformValue("u_ssr", QVector4D(ssrActive_ ? 1.0f : 0.0f, n, fr, 140.0f));
+    p.setUniformValue("u_scene", kSceneUnit);
+    p.setUniformValue("u_sdepth", kDepthUnit);
+    p.setUniformValue("u_vsize", QVector2D(float(f.viewW), float(f.viewH)));
+    p.setUniformValue("u_invvp", (f.proj * f.view).inverted());
+    if (ssrActive_) {
+      GLint prevUnit = GL_TEXTURE0;
+      glGetIntegerv(GL_ACTIVE_TEXTURE, &prevUnit);
+      glActiveTexture(GL_TEXTURE0 + kSceneUnit);
+      glBindTexture(GL_TEXTURE_2D, sceneColor_);
+      glActiveTexture(GL_TEXTURE0 + kDepthUnit);
+      glBindTexture(GL_TEXTURE_2D, sceneDepth_);
+      glActiveTexture(GLenum(prevUnit));
+    }
+  }
 
   GLboolean blend = glIsEnabled(GL_BLEND), cull = glIsEnabled(GL_CULL_FACE);
   GLboolean depthMask = GL_TRUE;
@@ -369,6 +556,9 @@ void WaterRenderer::releaseGL() {
     glDeleteTextures(1, &ripTex_);
     ripTex_ = 0;
   }
+  freeScene();
+  ssrActive_ = false;
+  ssrBroken_ = false; // a new context gets a fresh try
   ripWasOn_ = false;
   prog_.reset();
   indexCount_ = 0;
