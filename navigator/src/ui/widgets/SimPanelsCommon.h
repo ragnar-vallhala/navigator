@@ -252,6 +252,7 @@ inline constexpr const char *kRcUartPathDefault = "/dev/ttyUSB0";
 inline constexpr const char *kRcBaudKey = "simulator/rcBaud";
 inline constexpr const char *kRcMapAxisKey = "simulator/rcMapAxis"; // + func
 inline constexpr const char *kRcMapInvKey = "simulator/rcMapInv";   // + func
+inline constexpr const char *kRcThrottleHalfKey = "simulator/rcThrottleHalf";
 
 // Default joystick axis for each function (roll,pitch,throttle,yaw,arm).
 inline constexpr int kRcDefaultAxis[5] = {0, 1, 2, 3, 4};

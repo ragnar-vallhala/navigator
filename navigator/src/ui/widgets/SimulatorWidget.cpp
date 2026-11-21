@@ -194,7 +194,9 @@ SimulatorWidget::SimulatorWidget(QWidget *parent) : QWidget(parent) {
     for (int f = 0; f < 5; ++f)
       if (m_rcAxisCombo[f])
         m_rc->setMapping(f, m_rcAxisCombo[f]->currentData().toInt(),
-                         m_rcInvert[f]->isChecked());
+                         m_rcInvert[f]->isChecked(),
+                         f == RcBridge::Throttle && m_rcThrottleHalf &&
+                             m_rcThrottleHalf->isChecked());
     m_rc->start();
   } else {
     delete m_rc;
@@ -1955,9 +1957,13 @@ void SimulatorWidget::pushRcMapping(int func) {
     return;
   const int axis = m_rcAxisCombo[func]->currentData().toInt();
   const bool inv = m_rcInvert[func]->isChecked();
+  const bool half = func == RcBridge::Throttle && m_rcThrottleHalf &&
+                    m_rcThrottleHalf->isChecked();
   if (m_rc)
-    m_rc->setMapping(func, axis, inv);
+    m_rc->setMapping(func, axis, inv, half);
   QSettings s;
+  if (func == RcBridge::Throttle)
+    s.setValue(kRcThrottleHalfKey, half);
   s.setValue(QString(kRcMapAxisKey) + QString::number(func), axis);
   s.setValue(QString(kRcMapInvKey) + QString::number(func), inv);
 }
@@ -2009,6 +2015,8 @@ void SimulatorWidget::applyRcSource() {
       m_rcAxisCombo[f]->setEnabled(!uart);
     if (m_rcInvert[f])
       m_rcInvert[f]->setEnabled(!uart);
+    if (f == RcBridge::Throttle && m_rcThrottleHalf)
+      m_rcThrottleHalf->setEnabled(!uart);
   }
 
   // Push to the bridge (no-op until it exists; the ctor calls this again).

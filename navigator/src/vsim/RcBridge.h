@@ -102,7 +102,9 @@ public:
   // Live; safe from the GUI thread.
   enum Func { Roll = 0, Pitch = 1, Throttle = 2, Yaw = 3, Arm = 4 };
   static constexpr int kButtonBase = 1000;
-  void setMapping(int func, int source, bool invert);
+  // halfRange (throttle only): the stick rests at centre, so use only the
+  // upper half of the travel (centre = 1000 us, full up = 2000 us).
+  void setMapping(int func, int source, bool invert, bool halfRange = false);
 
   // Software arm override for TXs with no usable arm switch.
   // v: -1 = use the mapped source; 0 = force disarmed; 1 = force armed.
@@ -162,6 +164,7 @@ private:
   std::atomic<int> acro_{0};               // 0 = angle mode (ch6 low), 1 = acro
   std::atomic<int> mapAxis_[5];  // func → source code (axis idx or 1000+btn)
   std::atomic<int> mapInv_[5];   // func → invert (0/1)
+  std::atomic<int> mapHalf_[5];  // func → half-range (0/1, throttle only)
   std::array<int, 16> axis_{};   // raw -32767..32767
   std::array<int, 16> button_{}; // 0/1
 };
