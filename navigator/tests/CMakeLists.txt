@@ -159,7 +159,19 @@ target_include_directories(tst_start_gate PRIVATE ${SRC}/ui/widgets)
 navigator_test(tst_custom_vehicle_warning tst_custom_vehicle_warning.cpp)
 target_include_directories(tst_custom_vehicle_warning PRIVATE ${SRC}/ui/widgets)
 
+# ---- Prop audio: stale-feed gate (silence after Stop) ----------------------
+navigator_test(tst_prop_audio_gate
+    tst_prop_audio_gate.cpp
+    ${SRC}/audio/PropAudio.cpp)
+target_include_directories(tst_prop_audio_gate PRIVATE ${SRC}/audio)
+
 # ---- C++ autotune engine (Space + orchestration, synthetic rollout) -------
+# Where the autotune backend is looked for (installed app has no repo to walk up to).
+navigator_test(tst_autotune_backend_locator
+    tst_autotune_backend_locator.cpp
+    ${SRC}/autotune/BackendLocator.cpp ${SRC}/autotune/BackendLocator.h)
+target_include_directories(tst_autotune_backend_locator PRIVATE ${SRC}/autotune)
+
 navigator_test(tst_autotune_engine
     tst_autotune_engine.cpp
     ${SRC}/autotune/AutotuneEngine.cpp
@@ -632,6 +644,7 @@ if(TARGET Navigator AND NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_ab
   set_tests_properties(tst_world_change_floor PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
       TIMEOUT 600)
+
 
   # ---- Per-run log files of the real SimulatorWidget ------------------------
   # One file pair per Start (unique stamp), none left by a failed Start. Same

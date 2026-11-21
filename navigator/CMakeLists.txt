@@ -228,6 +228,7 @@ set(GCS_SITL_SOURCES
     src/autotune/RtosEval.cpp
     src/autotune/SysId.cpp
     src/autotune/AutotuneWorker.cpp
+    src/autotune/BackendLocator.cpp
     src/ui/widgets/SimulatorWidget.cpp
     src/ui/widgets/SimViewPanel.cpp
     src/ui/widgets/SimVehiclePanel.cpp
@@ -278,6 +279,7 @@ set(GCS_SITL_HEADERS
     src/autotune/AutotuneEngine.h
     src/autotune/Rollout.h
     src/autotune/RtosEval.h
+    src/autotune/BackendLocator.h
     src/autotune/SysId.h
     src/autotune/AutotuneWorker.h
     src/ui/widgets/SimulatorWidget.h

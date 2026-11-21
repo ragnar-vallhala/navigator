@@ -19,6 +19,7 @@
 #include <cmath>
 #include "GlAvailability.h"
 #include "SimPanelsCommon.h"
+#include "../../autotune/BackendLocator.h"
 #include "../../vsim/FlightEventLog.h"
 #include "../../vsim/ThreadRetire.h"
 #include "../../vsim/procgen/Helipads.h"
@@ -494,19 +495,11 @@ void SimulatorWidget::startAutotune() {
   if (m_tuneSysIdBw)
     p.sysIdBwFrac = m_tuneSysIdBw->value();
   p.rtosRateCost = m_tuneCostFn && m_tuneCostFn->currentIndex() == 1;
-  for (const QString &cand :
-       {root + "/build_sitl_rtos/vayu_sitl_rtos",
-        root + "/sim/host/build_sitl_rtos/vayu_sitl_rtos"}) {
-    if (QFileInfo::exists(cand)) {
-      p.rtosBin = cand;
-      break;
-    }
-  }
+  const autotune::BackendLookup lk = autotune::findRtosBackend(
+      qEnvironmentVariable("VAYU_SITL_RTOS"), QCoreApplication::applicationDirPath(), root);
+  p.rtosBin = lk.found;
   if (p.rtosBin.isEmpty()) {
-    m_tuneLog->appendPlainText(
-        tr("[error] autotune backend not found. Build it with:\n"
-           "  cmake -S sim/host -B build_sitl_rtos -DVAYU_SITL_RTOS_BUILD=ON\n"
-           "  cmake --build build_sitl_rtos --target vayu_sitl_rtos"));
+    m_tuneLog->appendPlainText(autotune::backendNotFoundMessage(lk.tried));
     return;
   }
 
@@ -2203,7 +2196,8 @@ void SimulatorWidget::startInAppSim() {
                     .arg(Units::toAngle(yaw), 6, 'f', dec)
                     .arg(Units::altSuffix(), Units::angleSuffix()));
             updateHud(snap);
-            m_propAudio.setMotors(snap.motor_omega);
+            if (m_sim) // a pose queued before Stop must not restart the props
+              m_propAudio.setMotors(snap.motor_omega);
           });
   connect(m_sim, &vsim::SimWorker::logLine, this,
           [this](const QString &s) { appendLog("vsim", s); });
@@ -2319,7 +2313,8 @@ void SimulatorWidget::attachExternalSim() {
                       .arg(Units::toAngle(yaw), 6, 'f', dec)
                       .arg(Units::altSuffix(), Units::angleSuffix()));
             updateHud(snap);
-            m_propAudio.setMotors(snap.motor_omega);
+            if (m_sim) // a pose queued before Stop must not restart the props
+              m_propAudio.setMotors(snap.motor_omega);
           });
   connect(m_sim, &vsim::SimWorker::logLine, this,
           [this](const QString &s) { appendLog("attach", s); });
@@ -2378,7 +2373,7 @@ void SimulatorWidget::stopInAppSim() {
   m_retrier.cancelAll(); // nothing left to ACK
   if (m_retryTimer)
     m_retryTimer->stop();
-  m_propAudio.setMotors({0.0f, 0.0f, 0.0f, 0.0f}); // silence once stopped
+  m_propAudio.silence(); // ramp down and release the stream once stopped
   m_simStartBtn->setEnabled(!startBlocked());
   if (m_simAttachBtn)
     m_simAttachBtn->setEnabled(true);
