@@ -22,6 +22,9 @@
 
 #include <QtTest>
 
+#include <string>
+#include <vector>
+
 class TstRcFrame : public QObject {
   Q_OBJECT
 private slots:
@@ -42,7 +45,39 @@ private slots:
   void throttleDeadzoneSnapsToMin();
   void throttleInvertAppliesFirst();
   void axisToUsEndpoints();
+  void strictFrameAcceptsRealLines();
+  void strictFrameRejectsCorruptLines();
+  void strictFrameRejectsEveryDroppedByte();
+  void assemblerIsChunkingInvariant();
+  void assemblerHandlesCrLfAndBlankLines();
+  void assemblerDropsOverlongLineAndResyncs();
+  void escapeRawIsPrintable();
 };
+
+static std::vector<std::string> feedAll(const std::string &stream,
+                                        size_t chunk, int *dropped = nullptr) {
+  rcframe::LineAssembler a;
+  std::vector<std::string> out;
+  if (dropped)
+    *dropped = 0;
+  for (size_t i = 0; i < stream.size(); i += chunk) {
+    for (size_t j = i; j < std::min(stream.size(), i + chunk); ++j) {
+      std::string line;
+      switch (a.push(stream[j], &line)) {
+      case rcframe::Feed::Line:
+        out.push_back(line);
+        break;
+      case rcframe::Feed::Dropped:
+        if (dropped)
+          ++*dropped;
+        break;
+      case rcframe::Feed::None:
+        break;
+      }
+    }
+  }
+  return out;
+}
 
 void TstRcFrame::normalFrameIsCsv() {
   QCOMPARE(QString::fromStdString(
@@ -170,6 +205,101 @@ void TstRcFrame::axisToUsEndpoints() {
   QCOMPARE(rcframe::axisToUs(32767, false), 2000);
   QCOMPARE(rcframe::axisToUs(-30500, false), 1035); // not snapped
   QCOMPARE(rcframe::axisToUs(32767, true), 1000);
+}
+
+void TstRcFrame::strictFrameAcceptsRealLines() {
+  int v[8] = {};
+  // What the Arduino bridge prints: 5 to 8 channels.
+  QCOMPARE(rcframe::parseStrictFrame("1500,1500,1000,1500,2000", v), 5);
+  QCOMPARE(v[4], 2000);
+  QCOMPARE(rcframe::parseStrictFrame("1500,1498,1000,1502,1000,1000", v), 6);
+  QCOMPARE(v[3], 1502);
+  QCOMPARE(rcframe::parseStrictFrame(
+               "1500,1500,1000,1500,1000,1000,1500,1500", v), 8);
+  // Whitespace around fields is fine; the pulse range 800..2200 is accepted.
+  QCOMPARE(rcframe::parseStrictFrame(" 1500 , 1500,1000 ,1500,1000", v), 5);
+  QCOMPARE(rcframe::parseStrictFrame("800,2200,1000,1500,1000", v), 5);
+}
+
+void TstRcFrame::strictFrameRejectsCorruptLines() {
+  int v[8] = {};
+  for (const char *bad : {
+           "",                                  // empty
+           "1500,1500,1000",                    // truncated: 3 fields
+           "1500,1500,1000,1500",               // truncated: 4 fields
+           "1500,1500,1000,1500,2",             // last field cut short
+           "00,1500,1000,1500,2000,1000",       // started mid-line
+           "500,1500,1000,1500,2000,1000",      // lost a leading digit
+           "1500,1500,100,1500,2000,1000",      // lost a digit mid-line
+           "150015001000,1500,2000",            // lost a comma
+           "1500,,1000,1500,2000",              // empty field
+           "1500,1500,1000,1500,2000,",         // trailing comma
+           "1500,15x0,1000,1500,2000",          // stray character
+           "-1500,1500,1000,1500,2000",         // negative
+           "1500;1500;1000;1500;2000",          // wrong separator
+           "1500,1500,1000,1500,2000,1000,1500,1500,1500", // 9 fields
+           "99999999,1500,1000,1500,2000",      // absurd
+           "799,1500,1000,1500,2000",           // just below the pulse range
+           "1500,1500,1000,1500,2201",          // just above it
+       })
+    QCOMPARE(rcframe::parseStrictFrame(bad, v), 0);
+}
+
+void TstRcFrame::strictFrameRejectsEveryDroppedByte() {
+  // Delete each single character of a good frame in turn: whatever that does
+  // to a field, the result must never be accepted as a different frame.
+  const std::string good = "1500,1498,1050,1502,2000,1000";
+  int ref[8] = {};
+  QCOMPARE(rcframe::parseStrictFrame(good, ref), 6);
+  for (size_t i = 0; i < good.size(); ++i) {
+    std::string bad = good;
+    bad.erase(i, 1);
+    int v[8] = {};
+    const int n = rcframe::parseStrictFrame(bad, v);
+    QVERIFY2(n == 0, bad.c_str()); // all fields are 4 digits: a drop breaks one
+  }
+}
+
+void TstRcFrame::assemblerIsChunkingInvariant() {
+  const std::string stream =
+      "1500,1500,1000,1500,2000,1000\n1501,1499,1001,1500,2000,1000\n"
+      "NO_SIGNAL\n1502,1500,1000,1500,2000,1000\n";
+  const auto whole = feedAll(stream, stream.size());
+  QCOMPARE((int)whole.size(), 4);
+  for (size_t chunk : {size_t(1), size_t(2), size_t(7), size_t(13), size_t(64)})
+    QVERIFY(feedAll(stream, chunk) == whole);
+}
+
+void TstRcFrame::assemblerHandlesCrLfAndBlankLines() {
+  const auto l = feedAll("\r\n1500,1500,1000,1500,2000\r\n\n\r\nNO_SIGNAL\r\n", 3);
+  QCOMPARE((int)l.size(), 2);
+  QCOMPARE(QString::fromStdString(l[1]), QStringLiteral("NO_SIGNAL"));
+}
+
+void TstRcFrame::assemblerDropsOverlongLineAndResyncs() {
+  // A burst of junk longer than the limit, then good lines: the junk is
+  // dropped whole (once) and the next line parses.
+  const std::string junk(rcframe::kMaxLine + 40, '7');
+  const std::string stream = "1500,1500,1000,1500,2000\n" + junk +
+                             "\n1501,1500,1000,1500,2000\n";
+  int dropped = 0;
+  const auto l = feedAll(stream, 5, &dropped);
+  QCOMPARE(dropped, 1);
+  QCOMPARE((int)l.size(), 2);
+  QCOMPARE(QString::fromStdString(l[1]),
+           QStringLiteral("1501,1500,1000,1500,2000"));
+  // Exactly kMaxLine characters is still a line.
+  const std::string edge(rcframe::kMaxLine, '7');
+  int d2 = 0;
+  QCOMPARE((int)feedAll(edge + "\n", 4, &d2).size(), 1);
+  QCOMPARE(d2, 0);
+}
+
+void TstRcFrame::escapeRawIsPrintable() {
+  QCOMPARE(QString::fromStdString(rcframe::escapeRaw("1500,\x01\xff\t")),
+           QStringLiteral("1500,\\x01\\xff\\x09"));
+  const std::string cut = rcframe::escapeRaw(std::string(500, 'a'), 20);
+  QCOMPARE((int)cut.size(), 23); // 20 chars + "..."
 }
 
 QTEST_MAIN(TstRcFrame)

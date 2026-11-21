@@ -20,6 +20,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <string>
+#include <utility>
 
 // Pure helpers for the RcBridge wire format and failsafe policy (no I/O, no
 // threads), so the policy can be unit-tested without a pty or a joystick.
@@ -107,6 +108,109 @@ inline std::string formatFrame(bool noSignal, int roll, int pitch, int thr,
   const int n = std::snprintf(buf, sizeof buf, "%d,%d,%d,%d,%d,%d\n", roll,
                               pitch, thr, yaw, arm, ch6);
   return n > 0 ? std::string(buf, (size_t)n) : std::string();
+}
+
+// ---- UART CSV reader ------------------------------------------------------
+
+// Longest line the reader keeps. A real frame is ~40 characters (8 channels).
+constexpr size_t kMaxLine = 128;
+
+// Result of feeding one byte to LineAssembler.
+enum class Feed { None, Line, Dropped };
+
+// Splits a byte stream into lines on '\n' or '\r', however the bytes arrive
+// (whole lines, single bytes, any chunking). A line longer than kMaxLine is
+// dropped whole (reported once, at its terminator) instead of being truncated
+// and parsed, so the reader resyncs on the next newline.
+struct LineAssembler {
+  std::string buf;
+  bool overflow = false;
+
+  Feed push(char c, std::string *line) {
+    if (c == '\n' || c == '\r') {
+      if (overflow) {
+        overflow = false;
+        buf.clear();
+        return Feed::Dropped;
+      }
+      if (buf.empty())
+        return Feed::None; // blank line, or the '\n' of "\r\n"
+      *line = std::move(buf);
+      buf.clear();
+      return Feed::Line;
+    }
+    if (overflow)
+      return Feed::None;
+    if (buf.size() >= kMaxLine) {
+      overflow = true;
+      buf.clear();
+      return Feed::None;
+    }
+    buf += c;
+    return Feed::None;
+  }
+
+  void reset() {
+    buf.clear();
+    overflow = false;
+  }
+};
+
+// Strict parse of one channel line: 5..8 decimal fields separated by commas
+// (spaces allowed around them), each 800..2200 us, nothing else. Returns the
+// field count, or 0 if the line is not a whole, well-formed frame. Every valid
+// channel is four digits, so a dropped, doubled or shifted byte almost always
+// pushes a field out of range: such a frame is rejected, never clamped into a
+// wrong stick position (a one-frame arm or throttle glitch).
+inline int parseStrictFrame(const std::string &l, int out[8]) {
+  size_t i = 0, n = 0;
+  auto skipWs = [&] {
+    while (i < l.size() && (l[i] == ' ' || l[i] == '\t'))
+      ++i;
+  };
+  while (i < l.size()) {
+    skipWs();
+    const size_t st = i;
+    long v = 0;
+    while (i < l.size() && l[i] >= '0' && l[i] <= '9') {
+      v = v * 10 + (l[i] - '0');
+      if (v > 99999)
+        return 0;
+      ++i;
+    }
+    if (i == st || v < 800 || v > 2200 || n >= 8)
+      return 0;
+    out[n++] = (int)v;
+    skipWs();
+    if (i < l.size()) {
+      if (l[i] != ',')
+        return 0;
+      ++i;
+      if (i == l.size())
+        return 0; // trailing comma
+    }
+  }
+  return n >= 5 ? (int)n : 0;
+}
+
+// A raw line made safe for a text log: printable ASCII as is, everything else
+// as \xNN, and cut at maxLen characters.
+inline std::string escapeRaw(const std::string &s, size_t maxLen = 160) {
+  std::string o;
+  char b[5];
+  for (unsigned char c : s) {
+    if (o.size() >= maxLen) {
+      o += "...";
+      break;
+    }
+    if (c >= 0x20 && c < 0x7f) {
+      o += (char)c;
+    } else {
+      std::snprintf(b, sizeof b, "\\x%02x", c);
+      o += b;
+    }
+  }
+  return o;
 }
 
 // One line from a UART transmitter bridge: a channel frame (starts with a

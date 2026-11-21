@@ -74,6 +74,12 @@ target_link_libraries(tst_xfer_uploader PRIVATE navlink_codec)
 # ---- RC bridge failsafe policy (NO_SIGNAL on link loss, arm gating) --------
 navigator_test(tst_rc_frame tst_rc_frame.cpp)
 target_include_directories(tst_rc_frame PRIVATE ${SRC}/vsim)
+# RcBridge's UART reader end to end over a pty (POSIX only).
+if(NOT WIN32)
+  navigator_test(tst_rc_uart_bridge
+      tst_rc_uart_bridge.cpp ${SRC}/vsim/RcBridge.cpp ${SRC}/vsim/RcBridge.h)
+  target_include_directories(tst_rc_uart_bridge PRIVATE ${SRC}/vsim)
+endif()
 
 # ---- CMD_SET_PID command codec (AT-1 foundation) --------------------------
 navigator_test(tst_command_codec

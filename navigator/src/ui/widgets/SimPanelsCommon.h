@@ -250,6 +250,7 @@ inline constexpr const char *kRcPathDefault = "/dev/input/js0";
 inline constexpr const char *kRcUartPathDefault = "/dev/ttyUSB0";
 #endif
 inline constexpr const char *kRcBaudKey = "simulator/rcBaud";
+inline constexpr const char *kRcUartLogKey = "simulator/rcUartLog";
 inline constexpr const char *kRcMapAxisKey = "simulator/rcMapAxis"; // + func
 inline constexpr const char *kRcMapInvKey = "simulator/rcMapInv";   // + func
 inline constexpr const char *kRcThrottleHalfKey = "simulator/rcThrottleHalf";

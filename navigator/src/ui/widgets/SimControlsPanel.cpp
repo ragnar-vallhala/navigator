@@ -347,6 +347,22 @@ void SimulatorWidget::buildSimControls(QWidget *host) {
                 m_rc->setUartBaud(b);
             });
 
+    // Timestamped raw-line log of the UART stream, for diagnosing a real
+    // transmitter that arms slowly or flakily (UART source only).
+    m_rcUartLog = new QCheckBox(tr("Log UART"), simBody);
+    m_rcUartLog->setToolTip(
+        tr("Write every raw UART line with a timestamp (accepted, rejected, "
+           "gaps, arm changes, per-second rates) to a file under the app data "
+           "folder, rc_uart/. The path is shown in the log when it starts."));
+    m_rcUartLog->setChecked(st.value(kRcUartLogKey, false).toBool());
+    if (m_rc)
+      m_rc->setUartLog(m_rcUartLog->isChecked());
+    connect(m_rcUartLog, &QCheckBox::toggled, this, [this](bool on) {
+      QSettings().setValue(kRcUartLogKey, on);
+      if (m_rc)
+        m_rc->setUartLog(on);
+    });
+
     // Explicit Connect for the UART source. The sim does NOT open the serial
     // device until this is pressed, so it can't fight the board telemetry for
     // the port. Disconnected by default; only meaningful for the UART source.
@@ -383,7 +399,8 @@ void SimulatorWidget::buildSimControls(QWidget *host) {
     });
     sv->addLayout(rcRow);
     const QList<QWidget *> rcWidgets{m_rcEnable,  m_rcSource,  m_rcPath,
-                                     m_rcBaud,    m_rcConnect, m_acroChk};
+                                     m_rcBaud,    m_rcConnect, m_rcUartLog,
+                                     m_acroChk};
     for (QWidget *w : rcWidgets)
       rcRow->addWidget(w);
 

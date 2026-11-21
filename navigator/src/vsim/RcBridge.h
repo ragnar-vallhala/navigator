@@ -68,6 +68,10 @@ public:
     QMutexLocker lk(&cfg_mtx_);
     uart_baud_ = b;
   }
+  // Write a timestamped log of every raw UART line (accepted, rejected,
+  // junk), gaps, arm changes and a per-second summary (frames in, bytes,
+  // forwarded rate) to <AppData>/rc_uart/. Only while the Uart source is live.
+  void setUartLog(bool on) { uartLog_.store(on, std::memory_order_release); }
 
   // When disabled, the bridge streams a neutral/idle frame (throttle low,
   // everything else centered) instead of the joystick — so toggling RC on
@@ -160,6 +164,7 @@ private:
   std::atomic<bool> enabled_{true};
   std::atomic<bool> linkLost_{false};
   std::atomic<bool> uartConnected_{false}; // Uart source opened only when true
+  std::atomic<bool> uartLog_{false};       // raw UART line log on/off
   std::atomic<int> armOverride_{-1};       // -1 use mapping, 0 disarm, 1 arm
   std::atomic<int> acro_{0};               // 0 = angle mode (ch6 low), 1 = acro
   std::atomic<int> mapAxis_[5];  // func → source code (axis idx or 1000+btn)
