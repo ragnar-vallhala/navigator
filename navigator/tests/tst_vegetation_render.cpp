@@ -846,14 +846,18 @@ private slots:
     qInfo("SHAPE %s v%d %.0f m %.0f deg: height %d/%d x%.2f, widest %d/%d x%.2f, area x%.2f, neck x%.2f, upper bulge x%.2f; bands top to bottom imp/ref:%s",
           kind ? "pine" : "fir", variant, double(dist), double(elev), imp.height(), ref.height(), hRatio, imp.maxSpan(),
           ref.maxSpan(), wRatio, area, waist, over, qPrintable(rows));
-    // Bounds sit between the current shader and the first iris version (the top
-    // tile replacing the side tiles in a disc), which bulges and fills the crown
-    // out at 20 and 30 degrees; at 45 degrees a fir becomes a rounder, shorter
-    // crown than the mesh's cone (the spire is lost), which the loose bounds record.
+    // Bounds sit between the current shader and two earlier ones: the top tile
+    // replacing the side tiles in a disc (bulges and fills the crown out at 20
+    // and 30 degrees), and its successor that faded the side tiles out under the
+    // disc (at 45 degrees a fir became a flat-topped ball, height x0.58 of the
+    // mesh, with no spire). A pine's impostor is 15 to 30 percent shorter than
+    // its mesh even without the top tile (its thin trunk and tip fall below the
+    // coverage threshold), so its height bound is looser than the fir's.
     const bool high = elev >= 40.0f;
-    QVERIFY2(hRatio >= (high ? 0.5 : 0.6), qPrintable(QString("spire or trunk lost: height x%1").arg(hRatio)));
-    QVERIFY2(wRatio <= 1.4, qPrintable(QString("flat saucer: widest row x%1").arg(wRatio)));
-    QVERIFY2(area <= (high ? 1.9 : 1.4), qPrintable(QString("crown filled out: area x%1").arg(area)));
+    const double minHeight = kind == 0 ? 0.75 : 0.62;
+    QVERIFY2(hRatio >= minHeight, qPrintable(QString("spire or trunk lost: height x%1").arg(hRatio)));
+    QVERIFY2(wRatio <= 1.5, qPrintable(QString("flat saucer: widest row x%1").arg(wRatio)));
+    QVERIFY2(area <= (high ? 1.5 : 1.4), qPrintable(QString("crown filled out: area x%1").arg(area)));
     if (elev >= 20.0f)
       QVERIFY2(waist >= 0.5, qPrintable(QString("neck under the crown: x%1").arg(waist)));
     if (elev >= 20.0f && !high)

@@ -286,6 +286,7 @@ uniform float u_tile;    // first atlas tile of this variant
 out vec2 v_uv0;
 out vec2 v_uv1;
 out vec2 v_uvT;          // the top-down tile
+out float v_cy;         // the quad's own up coordinate, -1 (foot) .. 1 (tip)
 out vec2 v_tc;           // position in the top tile, -1..1 (outside the tile: nothing there)
 out float v_w;
 flat out float v_top;    // weight of the top-down tile
@@ -342,7 +343,8 @@ void main() {
   float e = asin(sinE);
   v_top = smoothstep(@TOP_FROM@, @TOP_TO@, e);
   float cxe = vv.x * c.x;
-  float cyv = c.y / max(sqrt(sinE), 0.6);
+  float cyv = (c.y + @DOWN@ * smoothstep(@DNA@, @DNB@, e) * cosE) / max(sqrt(sinE), 0.6); // the footprint lies below the crown's middle: a tall crown seen from above leans over it
+  v_cy = c.y;
   v_tc = vec2(-hl.x * cxe - hl.y * cyv, hl.y * cxe - hl.x * cyv);
   v_uvT = tileUv(u_tile + @ATLAS_AZ@, 0.5 + 0.48 * v_tc);
   v_el = vec2(sinE, cosE);
@@ -358,6 +360,7 @@ const char *kBillFSHead = R"GLSL(
 in vec2 v_uv0;
 in vec2 v_uv1;
 in vec2 v_uvT;
+in float v_cy;
 in vec2 v_tc;
 in float v_w;
 flat in float v_top;
@@ -411,7 +414,13 @@ void main() {
     // The side tiles stay inside the disc (so the top tile's holes show the crown
     // behind them instead of the sky) and fade out as the elevation climbs.
     float keep = 1.0 - smoothstep(@KEEP0@, @KEEP1@, lin);
-    float gOut = 1.0 - smoothstep(@OUT0@, @OUT1@, lin);
+    // Above the crown's middle the side tiles keep the spire and the outline
+    // (the tip of a cone still shows from 45 degrees) and go only at the end of
+    // the ramp; the trunk and foot below fade as before.
+    float up = smoothstep(@SPY0@, @SPY1@, v_cy);
+    float gTip = 1.0 - smoothstep(@SPO0@, @SPO1@, lin);
+    float gOut = mix(1.0 - smoothstep(@OUT0@, @OUT1@, lin), gTip, up);
+    keep = mix(keep, gTip, up);
     float sCov = a * mix(gOut, keep, mT) >= 0.35 ? 1.0 : 0.0;
     float sFol = (sCov > 0.5 && fol > 0.5) ? 1.0 : 0.0; // bark under the crown from above is hidden by it
     float tCov = (mT >= 0.5 && ct.a >= @TOP_THR@) ? 1.0 : 0.0;
@@ -577,6 +586,10 @@ static QByteArray billboardFragmentMain() {
   src.replace("@OUT0@", QByteArray::number(double(kVegTopOut0), 'f', 3));
   src.replace("@OUT1@", QByteArray::number(double(kVegTopOut1), 'f', 3));
   src.replace("@KEEP0@", QByteArray::number(double(kVegTopKeep0), 'f', 3));
+  src.replace("@SPY0@", QByteArray::number(double(kVegTopSpireY0), 'f', 3));
+  src.replace("@SPY1@", QByteArray::number(double(kVegTopSpireY1), 'f', 3));
+  src.replace("@SPO0@", QByteArray::number(double(kVegTopSpireOut0), 'f', 3));
+  src.replace("@SPO1@", QByteArray::number(double(kVegTopSpireOut1), 'f', 3));
   src.replace("@KEEP1@", QByteArray::number(double(kVegTopKeep1), 'f', 3));
   return src;
 }
@@ -586,6 +599,9 @@ QByteArray vegBillboardVertexSource() {
   src.replace("@ATLAS_TILES@", QByteArray::number(double(kAtlasTiles), 'f', 1));
   src.replace("@ATLAS_AZ@", QByteArray::number(double(kAtlasAzimuths), 'f', 1));
   src.replace("@TOP_FROM@", QByteArray::number(double(kVegTopFromDeg * kPi / 180.0f), 'f', 5));
+  src.replace("@DNA@", QByteArray::number(double(kVegTopDownFromDeg * kPi / 180.0f), 'f', 5));
+  src.replace("@DNB@", QByteArray::number(double(kVegTopDownToDeg * kPi / 180.0f), 'f', 5));
+  src.replace("@DOWN@", QByteArray::number(double(kVegTopDown), 'f', 3));
   src.replace("@TOP_TO@", QByteArray::number(double(kVegTopToDeg * kPi / 180.0f), 'f', 5));
   return src;
 }

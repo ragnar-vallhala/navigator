@@ -153,6 +153,18 @@ constexpr float kVegTopOut0 = 0.6f;
 constexpr float kVegTopOut1 = 0.85f;
 constexpr float kVegTopKeep0 = 0.5f;
 constexpr float kVegTopKeep1 = 0.9f;
+// From kVegTopDownFromDeg to kVegTopDownToDeg of elevation the top tile slides
+// down by kVegTopDown (quad half-widths, times the cosine of the elevation): the
+// footprint of a tall crown lies under its middle, and the cone's tip stays above.
+constexpr float kVegTopDown = 0.3f;
+constexpr float kVegTopDownFromDeg = 30.0f;
+constexpr float kVegTopDownToDeg = 45.0f;
+// The part of the side tile above kVegTopSpireY0..1 (the quad's own -1..1 up
+// axis) is that tip: it keeps its weight, disc or not, until kVegTopSpireOut0..1.
+constexpr float kVegTopSpireY0 = 0.0f;
+constexpr float kVegTopSpireY1 = 0.35f;
+constexpr float kVegTopSpireOut0 = 0.9f;
+constexpr float kVegTopSpireOut1 = 1.0f;
 
 // Vertex shader source of the billboard program, with the atlas layout filled
 // in from the constants above (exposed so a test can check it).
