@@ -115,15 +115,15 @@ SPECIES = [
                         dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.25, R=3.0, len=1.25,
                              wid=1.5, droop=(10, 5), curve=0.32, r0=0.34, r1=0.08, trunk_top=0.9, jit=0.015, sag=0.06, az=0.38,
                              lower=0.6, lowlen=0.15, bark_u=3.0, bark_v=1.2,
-                             spacing_jit=0.35, lowbr=(9, 5, 3), lowy=(0.06, 0.30), lowdroop=34),
+                             spacing_jit=0.35, alongs=(2, 2, 2), lowbr=(9, 9, 5), lowy=(0.06, 0.30), lowdroop=34),
                         dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.23, R=3.0, len=1.25,
                              wid=1.5, droop=(12, 6), curve=0.34, r0=0.34, r1=0.08, trunk_top=0.9, jit=0.015, sag=0.06, az=0.38,
                              lower=0.6, lowlen=0.15, bark_u=3.0, bark_v=1.2,
-                             spacing_jit=0.35, lowbr=(9, 5, 3), lowy=(0.06, 0.30), lowdroop=34),
+                             spacing_jit=0.35, alongs=(2, 2, 2), lowbr=(9, 9, 5), lowy=(0.06, 0.30), lowdroop=34),
                         dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.27, R=3.2, len=1.25,
                              wid=1.5, droop=(8, 4), curve=0.30, r0=0.34, r1=0.08, trunk_top=0.9, jit=0.015, sag=0.06, az=0.38,
                              lower=0.6, lowlen=0.15, bark_u=3.0, bark_v=1.2,
-                             spacing_jit=0.35, lowbr=(9, 5, 3), lowy=(0.06, 0.30), lowdroop=34)])),
+                             spacing_jit=0.35, alongs=(2, 2, 2), lowbr=(9, 9, 5), lowy=(0.06, 0.30), lowdroop=34)])),
     dict(id='jacaranda_tree', gltf='jacaranda_tree_1k.gltf', category='tree',
          title='Jacaranda tree (broadleaf)', pivot='base',
          variants=['jacaranda_tree_LOD0', 'jacaranda_tree_LOD0_wide'],
@@ -784,7 +784,7 @@ def card_conifer_mesh(cv, lod, rng):
     H = cv['H']
     ntier = cv['tiers'][lod]
     ncard = cv['cards'][lod]
-    nalong = (2, 1, 1)[lod]
+    nalong = cv.get('alongs', (2, 1, 1))[lod]
     sides = (8, 6, 4)[lod]
     y_lo, y_hi = cv['y0'] * H, 0.93 * H
     r0, r1 = cv['r0'], cv['r1']

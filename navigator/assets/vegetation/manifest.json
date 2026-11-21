@@ -276,8 +276,8 @@
       },
       {
        "file": "pine_sapling_medium_card_a_lod1.vmesh",
-       "triangles": 204,
-       "vertices": 282,
+       "triangles": 400,
+       "vertices": 441,
        "tiers": 6,
        "bboxMin": [
         -7.047243118286133,
@@ -292,8 +292,8 @@
       },
       {
        "file": "pine_sapling_medium_card_a_lod2.vmesh",
-       "triangles": 92,
-       "vertices": 131,
+       "triangles": 180,
+       "vertices": 203,
        "tiers": 3,
        "bboxMin": [
         -9.194268226623535,
@@ -346,8 +346,8 @@
       },
       {
        "file": "pine_sapling_medium_card_b_lod1.vmesh",
-       "triangles": 208,
-       "vertices": 288,
+       "triangles": 408,
+       "vertices": 450,
        "tiers": 6,
        "bboxMin": [
         -6.89979887008667,
@@ -362,8 +362,8 @@
       },
       {
        "file": "pine_sapling_medium_card_b_lod2.vmesh",
-       "triangles": 92,
-       "vertices": 131,
+       "triangles": 180,
+       "vertices": 203,
        "tiers": 3,
        "bboxMin": [
         -8.131806373596191,
@@ -416,8 +416,8 @@
       },
       {
        "file": "pine_sapling_medium_card_c_lod1.vmesh",
-       "triangles": 208,
-       "vertices": 288,
+       "triangles": 408,
+       "vertices": 450,
        "tiers": 6,
        "bboxMin": [
         -7.257437705993652,
@@ -432,8 +432,8 @@
       },
       {
        "file": "pine_sapling_medium_card_c_lod2.vmesh",
-       "triangles": 100,
-       "vertices": 143,
+       "triangles": 196,
+       "vertices": 221,
        "tiers": 3,
        "bboxMin": [
         -8.78503131866455,
