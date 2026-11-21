@@ -171,18 +171,18 @@ struct Rig {
 // apart sideways (so about as far from a camera behind them), each with its own
 // yaw. Several trees keep the pixel counts of far rows large enough to compare.
 constexpr int kStandTrees = 4;
-World standWorld(int kind) {
+World standWorld(int kind, int trees = kStandTrees, int variant = 0) {
   World w = buildWorld(kPalForest, -1, 0);
   for (auto &v : w.veg)
     v.clear();
   for (size_t i = 0; i < w.cells.size(); ++i)
     if (w.cells[i].first == 0 && w.cells[i].second == 0)
-      for (int n = 0; n < kStandTrees; ++n) {
-        const float y = -30.0f + 20.0f * float(n);
+      for (int n = 0; n < trees; ++n) {
+        const float y = trees == 1 ? 0.0f : -30.0f + 20.0f * float(n);
         VegInstance t;
         t.species = kVegTree;
         t.kind = uint8_t(kind);
-        t.variant = 0;
+        t.variant = uint8_t(variant);
         t.scale = 1.0f;
         t.yaw = 0.3f + 1.3f * float(n);
         t.tint = 0.5f;
@@ -262,6 +262,89 @@ TreePixels standView(SimRendererWidget *r, const World &w, float d, float elev, 
     on = r->grabFrame();
   r->setVegetationForcedLod(-1);
   return treeAdded(on, off);
+}
+
+// The outline of what the trees add to a frame: per image row, the span between
+// the leftmost and rightmost pixel that has a covered neighbour on its row (a
+// stray dot does not count).
+struct Outline {
+  int top = -1, bottom = -1; // first and last covered row
+  std::vector<int> span;     // per row
+  int height() const { return top < 0 ? 0 : bottom - top + 1; }
+  int maxSpan() const { return span.empty() ? 0 : *std::max_element(span.begin(), span.end()); }
+  // The widest row of band `i` of `n` equal bands from the top (an envelope, so
+  // the gaps between a pine's tiers do not read as a neck).
+  int band(int i, int n) const {
+    if (top < 0) return 0;
+    const int h = height();
+    int m = 0;
+    for (int y = top + i * h / n; y < top + (i + 1) * h / n; ++y)
+      m = std::max(m, span[size_t(y)]);
+    return m;
+  }
+};
+
+Outline outlineOf(const QImage &onIn, const QImage &offIn) {
+  const QImage on = onIn.convertToFormat(QImage::Format_RGB32);
+  const QImage off = offIn.convertToFormat(QImage::Format_RGB32);
+  const int W = on.width(), H = on.height();
+  std::vector<unsigned char> cov(size_t(W) * size_t(H), 0), tmp(cov.size(), 0);
+  for (int y = 0; y < H; ++y)
+    for (int x = 0; x < W; ++x) {
+      const QRgb a = on.pixel(x, y), b = off.pixel(x, y);
+      cov[size_t(y) * size_t(W) + size_t(x)] =
+          std::abs(qRed(a) - qRed(b)) + std::abs(qGreen(a) - qGreen(b)) + std::abs(qBlue(a) - qBlue(b)) > 24 ? 1 : 0;
+    }
+  // A closing (dilate, then erode, 5x5): the sparse needle cards and the
+  // impostor's holes fill in, the silhouette stays.
+  auto pass = [&](const std::vector<unsigned char> &in, std::vector<unsigned char> &out, bool dilate) {
+    for (int y = 0; y < H; ++y)
+      for (int x = 0; x < W; ++x) {
+        bool any = false, all = true;
+        for (int dy = -2; dy <= 2; ++dy)
+          for (int dx = -2; dx <= 2; ++dx) {
+            const int xx = x + dx, yy = y + dy;
+            const bool v = xx >= 0 && yy >= 0 && xx < W && yy < H && in[size_t(yy) * size_t(W) + size_t(xx)];
+            any = any || v;
+            all = all && v;
+          }
+        out[size_t(y) * size_t(W) + size_t(x)] = (dilate ? any : all) ? 1 : 0;
+      }
+  };
+  pass(cov, tmp, true);
+  pass(tmp, cov, false);
+  Outline o;
+  o.span.assign(size_t(H), 0);
+  for (int y = 0; y < H; ++y) {
+    int lo = -1, hi = -1, n = 0;
+    for (int x = 0; x < W; ++x)
+      if (cov[size_t(y) * size_t(W) + size_t(x)]) {
+        if (lo < 0) lo = x;
+        hi = x;
+        ++n;
+      }
+    if (n >= 3) {
+      o.span[size_t(y)] = hi - lo + 1;
+      if (o.top < 0) o.top = y;
+      o.bottom = y;
+    }
+  }
+  return o;
+}
+
+Outline soloOutline(SimRendererWidget *r, const World &w, float d, float elev, int lod) {
+  aimAtStand(r, w, d, elev);
+  r->setVegetationEnabled(false);
+  const QImage off = r->grabFrame();
+  r->setVegetationEnabled(true);
+  r->setVegetationForcedLod(lod);
+  QImage on = settledFrame(r);
+  for (int i = 0; i < 40 && (lod == 3 || (lod == -1 && d > 135.0f)) &&
+                  r->vegetationStats().impostors == 0;
+       ++i)
+    on = r->grabFrame();
+  r->setVegetationForcedLod(-1);
+  return outlineOf(on, off);
 }
 
 } // namespace
@@ -706,6 +789,75 @@ private slots:
     QVERIFY2(p90.foliage > 100, "nothing drawn from straight above");
     QVERIFY2(std::abs(double(p90.foliage) / p899.foliage - 1.0) <= 0.05,
              qPrintable(QString("90 deg %1 vs 89.9 deg %2").arg(p90.foliage).arg(p899.foliage)));
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // A lone conifer keeps its shape from above: the impostor's outline against
+  // the same tree drawn as a mesh at the same pose. A top tile that replaces the
+  // side tiles turns the crown into a flat saucer (too wide), loses the spire and
+  // trunk (too short) and leaves a neck under the saucer (too thin). Ratios of two
+  // renders at the same resolution, so they hold across rasterisers.
+  void impostorKeepsTheTreesShapeFromAbove_data() {
+    QTest::addColumn<int>("kind");
+    QTest::addColumn<float>("dist");
+    QTest::addColumn<float>("elev");
+    QTest::addColumn<int>("variant");
+    for (int kind : {0, 1})
+      for (int var : {0, 2}) // variant 1 is the same shape as 0, and a fir has one
+        if (kind == 1 || var == 0)
+          for (float d : {100.0f, 160.0f})
+          for (float e : {10.0f, 20.0f, 30.0f, 45.0f})
+            QTest::newRow(qPrintable(QString("%1 v%2 %3 m %4 deg").arg(kind ? "pine" : "fir").arg(var).arg(double(d)).arg(double(e))))
+                << kind << d << e << var;
+  }
+  void impostorKeepsTheTreesShapeFromAbove() {
+    QFETCH(int, kind);
+    QFETCH(float, dist);
+    QFETCH(float, elev);
+    QFETCH(int, variant);
+    World w = standWorld(kind, 1, variant);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    // The impostor: forced at 100 m, where the mesh would be drawn; natural at 160 m.
+    const Outline imp = soloOutline(rig.r, w, dist, elev, dist < 135.0f ? 3 : -1);
+    if (rig.r->vegetationStats().impostorVariants == 0)
+      QSKIP("no impostor atlas on this context");
+    const Outline ref = soloOutline(rig.r, w, dist, elev, 1);
+    QVERIFY2(ref.height() > 20 && imp.height() > 0, "tree not found");
+    const double hRatio = double(imp.height()) / double(ref.height());
+    const double wRatio = double(imp.maxSpan()) / double(std::max(1, ref.maxSpan()));
+    // Six bands from the top, widest row of each (imp/ref).
+    QString rows;
+    int sumI = 0, sumR = 0;
+    double waist = 9.0, over = 0.0;
+    for (int i = 0; i < 6; ++i) {
+      const int bi = imp.band(i, 6), br = ref.band(i, 6);
+      rows += QString(" %1/%2").arg(bi).arg(br);
+      sumI += bi;
+      sumR += br;
+      if (i >= 1 && i <= 3) { // below the tip, the crown's upper half
+        waist = std::min(waist, double(bi) / double(std::max(1, br)));
+        over = std::max(over, double(bi) / double(std::max(1, br)));
+      }
+    }
+    const double area = double(sumI) / double(std::max(1, sumR));
+    qInfo("SHAPE %s v%d %.0f m %.0f deg: height %d/%d x%.2f, widest %d/%d x%.2f, area x%.2f, neck x%.2f, upper bulge x%.2f; bands top to bottom imp/ref:%s",
+          kind ? "pine" : "fir", variant, double(dist), double(elev), imp.height(), ref.height(), hRatio, imp.maxSpan(),
+          ref.maxSpan(), wRatio, area, waist, over, qPrintable(rows));
+    // Bounds sit between the current shader and the first iris version (the top
+    // tile replacing the side tiles in a disc), which bulges and fills the crown
+    // out at 20 and 30 degrees; at 45 degrees a fir becomes a rounder, shorter
+    // crown than the mesh's cone (the spire is lost), which the loose bounds record.
+    const bool high = elev >= 40.0f;
+    QVERIFY2(hRatio >= (high ? 0.5 : 0.6), qPrintable(QString("spire or trunk lost: height x%1").arg(hRatio)));
+    QVERIFY2(wRatio <= 1.4, qPrintable(QString("flat saucer: widest row x%1").arg(wRatio)));
+    QVERIFY2(area <= (high ? 1.9 : 1.4), qPrintable(QString("crown filled out: area x%1").arg(area)));
+    if (elev >= 20.0f)
+      QVERIFY2(waist >= 0.5, qPrintable(QString("neck under the crown: x%1").arg(waist)));
+    if (elev >= 20.0f && !high)
+      QVERIFY2(over <= 2.2, qPrintable(QString("bulb on the crown: upper bands x%1").arg(over)));
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
 
