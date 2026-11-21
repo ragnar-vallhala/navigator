@@ -1034,9 +1034,7 @@ private slots:
             imp.stipple(), mesh.stipple(), worst, worstD);
       if (rig.r->vegetationStats().impostorVariants == 0)
         QSKIP("no impostor atlas on this context");
-      // The island tree's impostor holds 2.6 to 5.6 times the foliage of its mesh,
-      // which no cross-fade hides, so it gets more room.
-      if (worst > (kind == 3 ? 1.5 * ref + 0.12 : 1.2 * ref + 0.22))
+      if (worst > 1.2 * ref + 0.22)
         failures += QString("[%1 deg: %2 at %3 m vs layers %4] ").arg(double(e)).arg(worst, 0, 'f', 3).arg(worstD).arg(ref, 0, 'f', 3);
     }
     QVERIFY2(failures.isEmpty(), qPrintable(failures));

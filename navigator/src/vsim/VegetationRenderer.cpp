@@ -1295,7 +1295,7 @@ void VegetationRenderer::bakeImpostors(VariantGpu &v) {
       glBindTexture(GL_TEXTURE_2D, mat.tex[2]);
       progBake_->setUniformValue("u_cutout", vm.cutout() ? 1.0f : 0.0f);
       progBake_->setUniformValue("u_albedoMul", QVector3D(1.0f, 1.0f, 1.0f));
-      progBake_->setUniformValue("u_cutoff", vm.alphaCutoff);
+      progBake_->setUniformValue("u_cutoff", vm.impostorCutoff);
       glDrawElements(GL_TRIANGLES, GLsizei(sm.indexCount), GL_UNSIGNED_INT,
                      reinterpret_cast<void *>(uintptr_t(sm.firstIndex) * 4));
     }
