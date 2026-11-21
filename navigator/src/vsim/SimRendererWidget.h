@@ -412,6 +412,9 @@ public:
   // Test hook: pretend the cached size is stale (what a resize that never
   // reached resizeGL leaves behind); the next frame must repair it.
   void setCachedViewportForTest(QSize s) { fbW_ = s.width(); fbH_ = s.height(); }
+  // Test hook: stop the wind / wave / cloud clock so two frames of the same
+  // scene are identical and a feature toggle can be compared pixel for pixel.
+  void freezeAnimationForTest(bool on) { animFrozenForTest_ = on; }
   // Test/tool hook: the free-roam camera at `pos` (NED) looking along compass
   // `heading` [rad, 0 = north, clockwise] tilted `down` [rad] below the horizon.
   void setCameraPoseForTest(const QVector3D &pos, float heading, float down) {
@@ -651,6 +654,7 @@ private:
   // Animation clock (advances per paint); drives the sky glow AND, when built,
   // the grass wind — kept general so it survives with grass compiled out.
   float floraTime_ = 0.0f;
+  bool animFrozenForTest_ = false;
 
 #ifdef VAYU_SIM_GRASS
   // Flora shader: instanced grass/flower blades, wind + distance fade + fog.
