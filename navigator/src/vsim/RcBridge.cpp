@@ -37,6 +37,12 @@
 #include <algorithm>
 #include <string>
 
+#include <QDateTime>
+#include <QDir>
+#include <QElapsedTimer>
+#include <QFile>
+#include <QStandardPaths>
+
 namespace {
 
 // ---- the input device: the only I/O that differs by platform -------------
@@ -156,26 +162,6 @@ int openUart(const char *path, int baud) {
   return fd;
 }
 #endif
-
-// Parse a CSV line of microsecond channel values. Assigns the first up-to-6
-// fields to roll/pitch/throttle/yaw/arm/ch6 (clamped 1000..2000); leaves any
-// missing trailing channels untouched so a short frame holds the last value.
-// ch6 is the acro/angle flight-mode switch (firmware: > 1500 = acro).
-void parseCsvFrame(const std::string &line, int *roll, int *pitch, int *thr,
-                   int *yaw, int *arm, int *ch6) {
-  int *out[6] = {roll, pitch, thr, yaw, arm, ch6};
-  const char *p = line.c_str();
-  for (int i = 0; i < 6 && *p; ++i) {
-    char *end = nullptr;
-    const long v = std::strtol(p, &end, 10);
-    if (end == p)
-      break; // no number here
-    *out[i] = std::clamp((int)v, 1000, 2000);
-    p = end;
-    while (*p == ',' || *p == ' ' || *p == '\t')
-      ++p;
-  }
-}
 
 } // namespace
 
@@ -308,7 +294,7 @@ void RcBridge::run() {
   bool src_lost = false;
   constexpr int kReopenMs = 500;
   int reopen_wait_ms = 0;
-  std::string uline; // UART CSV line accumulator
+  rcframe::LineAssembler uasm; // UART CSV line accumulator
   // Last UART-parsed channels, held between frames.
   int u_roll = 1500, u_pitch = 1500, u_thr = 1000, u_yaw = 1500, u_arm = 1500;
   int u_ch6 = 1000; // transmitter's ch6 (acro switch); 1000 = stabilise default
@@ -318,6 +304,110 @@ void RcBridge::run() {
   constexpr int kUartStaleMs = 500;
   int uart_quiet_ms = 0;
   bool uart_nosig = false;
+
+  // Optional timestamped raw-line log of the UART stream (setUartLog), for
+  // finding out why a real transmitter arms slowly or flakily. Times are ms
+  // since the thread started and have the 20 ms resolution of the read tick.
+  QElapsedTimer clk;
+  clk.start();
+  QFile ulogFile;
+  bool ulogCapped = false; // hit the size cap: stay closed until switched off
+  long st_ok = 0, st_rej = 0, st_junk = 0, st_drop = 0, st_nosig = 0;
+  long st_bytes = 0, st_fwd = 0;
+  int st_maxgap = 0;
+  qint64 lastGoodMs = -1, nextStatMs = 1000;
+  int lastArmSent = -1;
+  bool wasStale = false;
+  constexpr qint64 kUartLogCap = 32LL * 1024 * 1024;
+  constexpr int kGapLogMs = 60; // a frame is due every ~20 ms
+
+  auto ulog = [&](const char *kind, const std::string &text) {
+    if (!ulogFile.isOpen())
+      return;
+    const QByteArray ln = QByteArray::number(clk.elapsed()) + '\t' + kind +
+                          '\t' + QByteArray::fromStdString(text) + '\n';
+    ulogFile.write(ln);
+    if (ulogFile.size() > kUartLogCap) {
+      ulogFile.write("# size cap reached, logging stopped\n");
+      ulogFile.close();
+      ulogCapped = true;
+      emit logLine(QStringLiteral("RC: UART log hit its size cap, stopped"));
+    }
+  };
+  auto closeUlog = [&] {
+    if (ulogFile.isOpen())
+      ulogFile.close();
+  };
+  auto openUlog = [&](const QString &path, int baud) {
+    QDir d(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
+           QStringLiteral("/rc_uart"));
+    d.mkpath(QStringLiteral("."));
+    ulogFile.setFileName(
+        d.filePath(QStringLiteral("rc_uart_%1.log")
+                       .arg(QDateTime::currentDateTime().toString(
+                           QStringLiteral("yyyyMMdd_HHmmss")))));
+    if (!ulogFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+      ulogCapped = true; // do not retry every tick
+      emit logLine(QStringLiteral("RC: cannot write UART log %1")
+                       .arg(ulogFile.fileName()));
+      return;
+    }
+    ulogFile.write(QStringLiteral("# rc uart log, started %1, %2 @ %3\n"
+                                  "# ms\tkind\ttext   (kinds: OK REJECT "
+                                  "JUNK DROP NOSIG GAP STALE ARM STAT)\n")
+                       .arg(QDateTime::currentDateTime().toString(Qt::ISODate),
+                            path)
+                       .arg(baud)
+                       .toUtf8());
+    emit logLine(
+        QStringLiteral("RC: UART raw log -> %1").arg(ulogFile.fileName()));
+    lastGoodMs = -1;
+    nextStatMs = clk.elapsed() + 1000;
+  };
+
+  // One complete line from the transmitter bridge.
+  auto handleUartLine = [&](const std::string &line) {
+    switch (rcframe::classifyLine(line)) {
+    case rcframe::Line::NoSignal:
+      uart_nosig = true;
+      ++st_nosig;
+      ulog("NOSIG", "");
+      break;
+    case rcframe::Line::Frame: {
+      int v[8];
+      const int n = rcframe::parseStrictFrame(line, v);
+      if (n == 0) { // truncated, shifted or out of range: not a frame
+        ++st_rej;
+        ulog("REJECT", rcframe::escapeRaw(line));
+        break;
+      }
+      u_roll = std::clamp(v[0], 1000, 2000);
+      u_pitch = std::clamp(v[1], 1000, 2000);
+      u_thr = std::clamp(v[2], 1000, 2000);
+      u_yaw = std::clamp(v[3], 1000, 2000);
+      u_arm = std::clamp(v[4], 1000, 2000);
+      if (n >= 6)
+        u_ch6 = std::clamp(v[5], 1000, 2000);
+      uart_nosig = false;
+      uart_quiet_ms = 0;
+      ++st_ok;
+      const qint64 now = clk.elapsed();
+      if (lastGoodMs >= 0) {
+        const int gap = (int)(now - lastGoodMs);
+        st_maxgap = std::max(st_maxgap, gap);
+        if (gap > kGapLogMs)
+          ulog("GAP", std::to_string(gap) + " ms since the previous frame");
+      }
+      lastGoodMs = now;
+      ulog("OK", rcframe::escapeRaw(line));
+      break;
+    }
+    case rcframe::Line::Junk:
+      ++st_junk;
+      ulog("JUNK", rcframe::escapeRaw(line));
+      break;
+    }
+  };
 
   auto mark_lost = [&](const QString &why) {
     if (src_lost)
@@ -366,6 +456,21 @@ void RcBridge::run() {
             ? kSrcNone
             : sel;
 
+    // Raw-line log: open while the Uart source is live and the user wants it.
+    if (!(uartLog_.load(std::memory_order_acquire) && want == Uart)) {
+      closeUlog();
+      ulogCapped = false;
+    } else if (!ulogFile.isOpen() && !ulogCapped) {
+      QString lp;
+      int lb;
+      {
+        QMutexLocker lk(&cfg_mtx_);
+        lp = uart_path_;
+        lb = uart_baud_;
+      }
+      openUlog(lp, lb);
+    }
+
     // (Re)open the input device when the effective source changes. master_fd_
     // (the pty the firmware reads) stays put, so switching source is seamless.
     if (want != cur_src) {
@@ -373,7 +478,7 @@ void RcBridge::run() {
       src_lost = false;
       uart_nosig = false;
       uart_quiet_ms = 0;
-      uline.clear();
+      uasm.reset();
       QString path;
       int baud;
       {
@@ -398,6 +503,8 @@ void RcBridge::run() {
               QString("RC: cannot open UART %1 (%2) — NO_SIGNAL, retrying")
                   .arg(path, ioError()));
         } else {
+          uasm.reset();
+          lastGoodMs = -1;
           emit logLine(QString("RC: UART %1 @ %2 → %3")
                            .arg(path)
                            .arg(baud)
@@ -448,7 +555,9 @@ void RcBridge::run() {
           src_lost = false;
           uart_nosig = true; // no signal until the first valid frame
           uart_quiet_ms = 0;
-          uline.clear();
+          uasm.reset();
+          lastGoodMs = -1;
+          ulog("OPEN", "port back");
           emit logLine(QString("RC: UART %1 back").arg(path));
         }
       }
@@ -457,27 +566,19 @@ void RcBridge::run() {
         long r;
         uart_quiet_ms += 20;
         while ((r = readSome(fd, b, sizeof(b))) > 0) {
+          st_bytes += r;
           for (long i = 0; i < r; ++i) {
-            const char c = b[i];
-            if (c == '\n' || c == '\r') {
-              if (!uline.empty()) {
-                switch (rcframe::classifyLine(uline)) {
-                case rcframe::Line::NoSignal:
-                  uart_nosig = true;
-                  break;
-                case rcframe::Line::Frame:
-                  parseCsvFrame(uline, &u_roll, &u_pitch, &u_thr, &u_yaw,
-                                &u_arm, &u_ch6);
-                  uart_nosig = false;
-                  uart_quiet_ms = 0;
-                  break;
-                case rcframe::Line::Junk:
-                  break;
-                }
-                uline.clear();
-              }
-            } else if (uline.size() < 128) {
-              uline += c;
+            std::string line;
+            switch (uasm.push(b[i], &line)) {
+            case rcframe::Feed::None:
+              break;
+            case rcframe::Feed::Dropped:
+              ++st_drop;
+              ulog("DROP", "line longer than 128 chars discarded");
+              break;
+            case rcframe::Feed::Line:
+              handleUartLine(line);
+              break;
             }
           }
         }
@@ -609,6 +710,34 @@ void RcBridge::run() {
     if (noSignal)
       arm = 1500; // readout only; not sent
 
+    if (want == Uart && ulogFile.isOpen()) {
+      ++st_fwd;
+      if (arm != lastArmSent) {
+        ulog("ARM", std::to_string(lastArmSent) + " -> " + std::to_string(arm) +
+                        " thr=" + std::to_string(thr) +
+                        (noSignal ? " (no signal, not sent)" : ""));
+        lastArmSent = arm;
+      }
+      const bool stale = uart_quiet_ms >= kUartStaleMs;
+      if (stale != wasStale) {
+        ulog("STALE", stale ? "no valid frame for 500 ms" : "frames resumed");
+        wasStale = stale;
+      }
+      const qint64 tNow = clk.elapsed();
+      if (tNow >= nextStatMs) {
+        char sb[160];
+        std::snprintf(sb, sizeof sb,
+                      "ok=%ld rej=%ld junk=%ld drop=%ld nosig=%ld bytes=%ld "
+                      "fwd=%ld maxgap=%d ms thr=%d arm=%d",
+                      st_ok, st_rej, st_junk, st_drop, st_nosig, st_bytes,
+                      st_fwd, st_maxgap, thr, arm);
+        ulog("STAT", sb);
+        st_ok = st_rej = st_junk = st_drop = st_nosig = st_bytes = st_fwd = 0;
+        st_maxgap = 0;
+        nextStatMs = tNow + 1000;
+      }
+    }
+
     // CSV frame: roll,pitch,throttle,yaw,arm,ch6  (feeder fills 7..13 = 1500).
     // ch6 carries the acro/angle flight-mode toggle (firmware: > 1500 = acro).
     // In UART mode the transmitter's physical ch6 switch is authoritative (just
@@ -634,6 +763,7 @@ void RcBridge::run() {
     msleep(20); // ~50 Hz
   }
 
+  closeUlog();
   close_src();
   emit logLine(QStringLiteral("RC: stopped"));
 }
