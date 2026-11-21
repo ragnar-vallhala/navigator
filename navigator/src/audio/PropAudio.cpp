@@ -29,7 +29,11 @@
 namespace {
 constexpr int kRate = 44100;
 constexpr int kFrames = 441;         // ~10 ms per write (paces the loop)
-constexpr float kFullOmega = 900.0f; // rad/s mapped to full loudness
+int64_t nowMs() {
+  using namespace std::chrono;
+  return duration_cast<milliseconds>(steady_clock::now().time_since_epoch())
+      .count();
+}
 } // namespace
 
 PropAudio::PropAudio() {
@@ -52,6 +56,13 @@ void PropAudio::setEnabled(bool on) {
 void PropAudio::setMotors(const std::array<float, 4> &w) {
   for (int i = 0; i < 4; ++i)
     omega_[i].store(w[i], std::memory_order_relaxed);
+  lastSetMs_.store(nowMs(), std::memory_order_release);
+}
+
+void PropAudio::silence() {
+  for (auto &o : omega_)
+    o.store(0.0f, std::memory_order_relaxed);
+  lastSetMs_.store(0, std::memory_order_release); // ancient => stale => silent
 }
 
 void PropAudio::run() {
@@ -61,9 +72,20 @@ void PropAudio::run() {
   float master = 0.0f;       // smoothed master gain (anti-click)
   uint32_t rng = 0x1234567u; // cheap LCG for the noise floor
   int16_t buf[kFrames];
+  int64_t silentSince = nowMs(); // when the target gain last became zero
 
   while (alive_.load(std::memory_order_acquire)) {
-    if (!enabled_.load(std::memory_order_acquire)) {
+    const bool on = enabled_.load(std::memory_order_acquire);
+    const int64_t tNow = nowMs();
+    const int64_t age = tNow - lastSetMs_.load(std::memory_order_acquire);
+    float wNow[4];
+    for (int i = 0; i < 4; ++i)
+      wNow[i] = std::max(0.0f, omega_[i].load(std::memory_order_relaxed));
+    const float tg = propaudio::targetGain(
+        {wNow[0], wNow[1], wNow[2], wNow[3]}, age);
+    if (tg > 0.0f)
+      silentSince = tNow;
+    if (!propaudio::streamWanted(on, tNow - silentSince)) {
       // Release the device while muted so we don't hold an audio sink idle.
       if (s) {
         pa_simple_free(s);
@@ -78,24 +100,30 @@ void PropAudio::run() {
       ss.format = PA_SAMPLE_S16LE;
       ss.rate = kRate;
       ss.channels = 1;
+      // Small server-side buffer: whatever is queued keeps playing after we
+      // stop writing, so a default multi-second buffer would drone on.
+      pa_buffer_attr attr;
+      attr.maxlength = static_cast<uint32_t>(-1);
+      attr.tlength = kRate / 10 * 2; // ~100 ms of S16 mono
+      attr.prebuf = static_cast<uint32_t>(-1);
+      attr.minreq = static_cast<uint32_t>(-1);
+      attr.fragsize = static_cast<uint32_t>(-1);
       s = pa_simple_new(nullptr, "Vayu GCS", PA_STREAM_PLAYBACK, nullptr,
-                        "props", &ss, nullptr, nullptr, nullptr);
+                        "props", &ss, nullptr, &attr, nullptr);
       if (!s) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
         continue;
       }
     }
 
+    // A stale feed plays as zero rpm so the props spool down and stop.
     float w[4];
     float wmax = 0.0f;
     for (int i = 0; i < 4; ++i) {
-      w[i] = omega_[i].load(std::memory_order_relaxed);
-      if (w[i] < 0.0f)
-        w[i] = 0.0f;
-      if (w[i] > wmax)
-        wmax = w[i];
+      w[i] = age > propaudio::kStaleMs ? 0.0f : wNow[i];
+      wmax = std::max(wmax, w[i]);
     }
-    const float targetGain = std::min(1.0f, wmax / kFullOmega);
+    const float targetGain = tg;
 
     for (int f = 0; f < kFrames; ++f) {
       master += (targetGain - master) * 0.0008f; // ~28 ms time constant
