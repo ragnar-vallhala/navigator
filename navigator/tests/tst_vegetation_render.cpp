@@ -969,6 +969,34 @@ private slots:
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
 
+  // A jacaranda's coarser mesh LODs keep its crown mass: from 50 to 130 m they
+  // show about what the full mesh shows (ratios of renders on one rasteriser,
+  // so it holds on any of them). LOD2 drew 0.57 to 0.65 of LOD0 before its
+  // leaf budget was raised, against 1.25 for the impostor, so a tree handing
+  // over between them doubled its foliage and the dithered cross-fade showed
+  // a dot grid.
+  void jacarandaLod2KeepsItsFoliage() {
+    World w = standWorld(2);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    QString failures;
+    for (float d : {50.0f, 100.0f, 130.0f})
+      for (float e : {0.0f, 20.0f, 45.0f}) {
+        const TreePixels l0 = standView(rig.r, w, d, e, 0);
+        const TreePixels l2 = standView(rig.r, w, d, e, 2);
+        const double ratio = l0.foliage ? double(l2.foliage) / l0.foliage : 0.0;
+        qInfo("jacaranda LOD2 %.0f m %.0f deg: LOD0 %d px, LOD2 %d px, x%.3f", double(d), double(e), l0.foliage, l2.foliage, ratio);
+        if (l0.foliage < 150)
+          failures += QString("[reference too small at %1 m] ").arg(double(d));
+        else if (ratio < 0.78 || ratio > 1.40)
+          failures += QString("[%1 m %2 deg: LOD2 x%3] ").arg(double(d)).arg(double(e)).arg(ratio, 0, 'f', 2);
+      }
+    QVERIFY2(failures.isEmpty(), qPrintable(failures));
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
   // The top-down tile exists for every variant and the whole bake is repeatable:
   // two renderers baking the same forest give the same atlas (a hash of every
   // tile's colour and mask, read back), and the top tiles are not empty.
