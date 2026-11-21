@@ -76,6 +76,34 @@ Soup heightField(float cx, float cy, float half, int n) {
   return s;
 }
 
+// The terrain field's own ground (NED, up = -z) around (cx, cy) as a triangle
+// soup, so a test sees the banks and hills the water sits in.
+template <class Field>
+Soup fieldPatch(const Field &f, float cx, float cy, float half, int n) {
+  auto h = [&](float x, float y) { return -f.height(x, y); };
+  Soup s;
+  const float st = 2.0f * half / float(n);
+  auto vert = [&](float x, float y) {
+    const float e = 0.5f;
+    const QVector3D dx(2 * e, 0, h(x + e, y) - h(x - e, y));
+    const QVector3D dy(0, 2 * e, h(x, y + e) - h(x, y - e));
+    QVector3D nn = QVector3D::crossProduct(dy, dx).normalized();
+    if (nn.z() > 0)
+      nn = -nn;
+    s.pos.push_back({x, y, h(x, y)});
+    s.nrm.push_back(nn);
+    s.col.push_back({0.22f, 0.42f, 0.16f});
+  };
+  for (int i = 0; i < n; ++i)
+    for (int j = 0; j < n; ++j) {
+      const float x0 = cx - half + float(i) * st, y0 = cy - half + float(j) * st;
+      const float x1 = x0 + st, y1 = y0 + st;
+      for (auto [x, y] : {std::pair{x0, y0}, {x1, y0}, {x1, y1}, {x0, y0}, {x1, y1}, {x0, y1}})
+        vert(x, y);
+    }
+  return s;
+}
+
 // A small wedge-shaped "airframe" so the imported-mesh path is exercised.
 Soup droneBox() {
   Soup s;
@@ -739,8 +767,10 @@ private slots:
 
   // Screen-space reflections: the opaque scene is copied each frame (High only),
   // the copy never raises a GL error, and turning it off or dropping to Low
-  // stops the copying. The frame itself must differ with it on (the bank shows
-  // in the water), by more than the water's own animation does between frames.
+  // stops the copying. The clock is frozen, so two SSR-off frames are identical
+  // and the frame with it on must differ from them (the bank shows in the
+  // water). (Without the freeze the waves move a phase step per grab, which
+  // swamped the reflection and made this depend on test order.)
   void waterReflectsTheBankWhenSsrIsOn() {
     vsim::procgen::FieldParams fp;
     fp.seed = 7u;
@@ -756,12 +786,18 @@ private slots:
     Rig rig;
     QVERIFY(rig.showDocked());
     rig.r->setTerrainField(field);
-    rig.r->setCameraPoseForTest({b.cx - b.radiusM * 0.5f, b.cy, -(b.level + 1.2f)}, 0.0f, 0.04f);
+    // On the water near the south shore, looking north across it at the far bank.
+    rig.r->setCameraPoseForTest({b.cx - b.radiusM * 0.8f, b.cy, -(b.level + 1.2f)}, 0.0f, 0.04f);
     rig.r->setWaterQuality(vsim::terrain::Quality::High);
+    rig.r->freezeAnimationForTest(true);
+    {
+      const Soup g = fieldPatch(*field, b.cx, b.cy, 80.0f, 80);
+      rig.r->setWorldChunk(0x200000001LL, g.pos, g.nrm, g.col);
+    }
 
     const auto bandDiff = [](const QImage &x, const QImage &y) {
       qint64 sum = 0;
-      for (int py = x.height() * 45 / 100; py < x.height() * 75 / 100; ++py)
+      for (int py = 0; py < x.height(); ++py)
         for (int px = 0; px < x.width(); ++px)
           sum += qAbs(qGray(x.pixel(px, py)) - qGray(y.pixel(px, py)));
       return sum;
@@ -773,7 +809,7 @@ private slots:
     QVERIFY(!rig.r->waterRenderer()->ssrActive());
     QCOMPARE(rig.r->waterRenderer()->sceneCaptures(), 0);
     const QImage off2 = rig.r->grabFrame();
-    const qint64 baseline = bandDiff(off1, off2);
+    QCOMPARE(bandDiff(off1, off2), qint64(0)); // nothing else moves between grabs
 
     rig.r->setWaterSsr(true);
     const QImage on = rig.r->grabFrame();
@@ -782,8 +818,7 @@ private slots:
     QVERIFY(!rig.r->waterRenderer()->ssrBroken());
     QCOMPARE(rig.r->glErrorCount(), 0);
     const qint64 withSsr = bandDiff(off2, on);
-    QVERIFY2(withSsr > baseline + 1000,
-             qPrintable(QString("ssr=%1 baseline=%2").arg(withSsr).arg(baseline)));
+    QVERIFY2(withSsr > 1000, qPrintable(QString("ssr diff=%1").arg(withSsr)));
 
     // Low draws no water, so nothing is copied.
     const int caps = rig.r->waterRenderer()->sceneCaptures();
