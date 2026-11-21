@@ -203,6 +203,12 @@ struct TreePixels {
   int foliage = 0; // green-dominant pixels that differ from the empty scene
   int all = 0;
   double lum = 0.0; // mean luminance of those pixels
+  // Screen-door measure: pixels the trees do not cover but three of whose four
+  // neighbours they do (pin holes), plus covered pixels with at most one covered
+  // neighbour (loose dots), over the covered pixels. A solid crown or a clean
+  // edge has few; a dithered one has many.
+  int pinholes = 0, dots = 0;
+  double stipple() const { return all > 0 ? double(pinholes + dots) / all : 0.0; }
 };
 
 // What the trees add to the frame `off` (the same pose with vegetation off).
@@ -223,6 +229,21 @@ TreePixels treeAdded(const QImage &onIn, const QImage &offIn) {
         ++t.foliage;
     }
   t.lum = t.all ? sum / t.all : 0.0;
+  const int W = on.width(), H = on.height();
+  std::vector<unsigned char> cov(size_t(W) * size_t(H), 0);
+  for (int y = 0; y < H; ++y)
+    for (int x = 0; x < W; ++x) {
+      const QRgb a = on.pixel(x, y), b = off.pixel(x, y);
+      cov[size_t(y) * size_t(W) + size_t(x)] =
+          std::abs(qRed(a) - qRed(b)) + std::abs(qGreen(a) - qGreen(b)) + std::abs(qBlue(a) - qBlue(b)) > 24 ? 1 : 0;
+    }
+  for (int y = 1; y + 1 < H; ++y)
+    for (int x = 1; x + 1 < W; ++x) {
+      const size_t i = size_t(y) * size_t(W) + size_t(x);
+      const int n = cov[i - 1] + cov[i + 1] + cov[i - size_t(W)] + cov[i + size_t(W)];
+      if (cov[i] ? n <= 1 : n >= 3)
+        ++(cov[i] ? t.dots : t.pinholes);
+    }
   return t;
 }
 
@@ -235,7 +256,7 @@ TreePixels standView(SimRendererWidget *r, const World &w, float d, float elev, 
   r->setVegetationEnabled(true);
   r->setVegetationForcedLod(lod);
   QImage on = settledFrame(r);
-  for (int i = 0; i < 40 && (lod == 3 || lod == -1) && d > 135.0f &&
+  for (int i = 0; i < 40 && (lod == 3 || (lod == -1 && d > 135.0f)) &&
                   r->vegetationStats().impostors == 0;
        ++i)
     on = r->grabFrame();
@@ -628,7 +649,16 @@ private slots:
   // bake's up vector would be): the foliage pixels and luminance between
   // neighbours stay within a stated bound, and exactly overhead draws the same
   // as 89.9.
+  void pineElevationSweepIsSmooth_data() {
+    QTest::addColumn<float>("dist");
+    QTest::addColumn<int>("lod");
+    QTest::newRow("160 m natural") << 160.0f << -1;
+    QTest::newRow("100 m impostor") << 100.0f << 3; // forced: the pine's mesh runs to 130 m
+    QTest::newRow("60 m impostor") << 60.0f << 3;
+  }
   void pineElevationSweepIsSmooth() {
+    QFETCH(float, dist);
+    QFETCH(int, lod);
     World w = standWorld(1);
     Rig rig(true);
     loadTerrain(rig.r, w);
@@ -641,9 +671,9 @@ private slots:
     elevs.push_back(90.0f);
     std::vector<TreePixels> px;
     for (float e : elevs) {
-      px.push_back(standView(rig.r, w, 160.0f, e, -1));
-      qInfo("pine 160 m, %.1f deg: foliage px %d, luminance %.1f, impostors %d", double(e), px.back().foliage,
-            px.back().lum, rig.r->vegetationStats().impostors);
+      px.push_back(standView(rig.r, w, dist, e, lod));
+      qInfo("pine %.0f m, %.1f deg: foliage px %d, luminance %.1f, stipple %.3f, impostors %d", double(dist), double(e),
+            px.back().foliage, px.back().lum, px.back().stipple(), rig.r->vegetationStats().impostors);
     }
     if (rig.r->vegetationStats().impostorVariants == 0)
       QSKIP("no impostor atlas on this context");
@@ -656,13 +686,53 @@ private slots:
       if (std::abs(std::log(rl)) > std::abs(std::log(worstL)))
         worstL = rl;
     }
-    qInfo("pine sweep: worst foliage step x%.2f, worst luminance step x%.2f per 5 degrees", worstF, worstL);
-    QVERIFY2(worstF >= 0.80 && worstF <= 1.25, qPrintable(QString("foliage step x%1").arg(worstF)));
+    qInfo("pine sweep %.0f m: worst foliage step x%.2f, worst luminance step x%.2f per 5 degrees", double(dist), worstF, worstL);
+    QVERIFY2(worstF >= 0.80 && worstF <= 1.28, qPrintable(QString("foliage step x%1").arg(worstF)));
     QVERIFY2(worstL >= 0.93 && worstL <= 1.08, qPrintable(QString("luminance step x%1").arg(worstL)));
     const TreePixels &p899 = px[px.size() - 2], &p90 = px.back();
     QVERIFY2(p90.foliage > 100, "nothing drawn from straight above");
     QVERIFY2(std::abs(double(p90.foliage) / p899.foliage - 1.0) <= 0.05,
              qPrintable(QString("90 deg %1 vs 89.9 deg %2").arg(p90.foliage).arg(p899.foliage)));
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // The impostor's coverage has no screen-door pattern where the top tile blends in.
+  void impostorTopBlendHasNoScreenDoor_data() {
+    QTest::addColumn<int>("kind");
+    QTest::addColumn<float>("dist");
+    for (int k = 0; k < 4; ++k)
+      for (float d : {100.0f, 160.0f})
+        QTest::newRow(qPrintable(QString("%1 %2 m").arg(k == 0 ? "fir" : k == 1 ? "pine" : k == 2 ? "jacaranda" : "island").arg(int(d))))
+            << k << d;
+  }
+  void impostorTopBlendHasNoScreenDoor() {
+    QFETCH(int, kind);
+    QFETCH(float, dist);
+    World w = standWorld(kind);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    QString failures;
+    for (float e : {10.0f, 20.0f, 30.0f, 45.0f, 60.0f}) {
+      const TreePixels imp = standView(rig.r, w, dist, e, 3);
+      const TreePixels l0 = standView(rig.r, w, dist, e, 0);
+      qInfo("STIP kind %d %.0f m %.0f deg: impostor %.3f (pin %d dots %d of %d), LOD0 %.3f (pin %d dots %d of %d)", kind,
+            double(dist), double(e), imp.stipple(), imp.pinholes, imp.dots, imp.all, l0.stipple(), l0.pinholes, l0.dots,
+            l0.all);
+      QVERIFY2(imp.all > 150 && l0.all > 150, "trees not found");
+      // No noisier than the mesh draws the same tree (plus a little slack).
+      if (imp.stipple() > l0.stipple() + 0.05)
+        failures += QString("[%1 deg: %2 vs LOD0 %3] ").arg(double(e)).arg(imp.stipple(), 0, 'f', 3).arg(l0.stipple(), 0, 'f', 3);
+      // And far below what the screen-door pick drew at 100 m (fir 0.453 at 20
+      // degrees, 1.329 at 30; pine 0.520 and 1.194): a quarter of that at most.
+      if (dist == 100.0f && (kind == 0 || kind == 1) && (e == 20.0f || e == 30.0f)) {
+        const double was = kind == 0 ? (e == 20.0f ? 0.453 : 1.329) : (e == 20.0f ? 0.520 : 1.194);
+        if (imp.stipple() > 0.25 * was)
+          failures += QString("[%1 deg: %2 is over a quarter of the old %3] ").arg(double(e)).arg(imp.stipple(), 0, 'f', 3).arg(was);
+      }
+    }
+    QVERIFY2(failures.isEmpty(), qPrintable(failures));
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
 

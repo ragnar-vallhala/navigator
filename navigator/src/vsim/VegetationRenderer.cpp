@@ -382,10 +382,15 @@ void main() {
   vec4 c0 = texture(u_atlas, v_uv0), c1 = texture(u_atlas, v_uv1);
   vec4 m0 = texture(u_atlasMask, v_uv0), m1 = texture(u_atlasMask, v_uv1);
   // Coverage, premultiplied colour, foliage share and bark occlusion of the side
-  // views (the two nearest azimuths); a v_top share of the pixels (screen-door,
-  // Bayer) show the top-down view instead. A dither rather than an alpha mix: a
-  // mix would make every top-only texel pass the coverage test at once when the
-  // weight crosses it, a step in the pixels the tree covers.
+  // views (the two nearest azimuths), then of the top-down view where it takes
+  // over. The top view takes over from the crown's centre outward: inside a
+  // radius that grows with v_top it replaces the side views, outside it they
+  // stay (a short soft band mixes the two). Each pixel is thus one tile or a
+  // short mix, with one coverage test on the result: no screen-door dither (the
+  // top tile's coverage is mostly holes where the side tile's is solid, so a
+  // per-pixel pick shows as noise), and no step either, since the area the tree
+  // covers grows with the radius instead of the top tile's whole footprint
+  // appearing at once.
   float a = mix(c0.a, c1.a, v_w);
   vec3 rgbA = c0.rgb * c0.a * (1.0 - v_w) + c1.rgb * c1.a * v_w;
   float mfol = mix(m0.a, m1.a, v_w);
@@ -395,13 +400,18 @@ void main() {
     float in_t = max(abs(v_tc.x), abs(v_tc.y)) <= 1.0 ? 1.0 : 0.0; // the rotated quad's corners
     vec4 ct = texture(u_atlas, v_uvT) * in_t;
     vec4 mt = texture(u_atlasMask, v_uvT) * in_t;
-    if (v_top > bayer4(gl_FragCoord.xy + vec2(2.0, 1.0))) {
-      a = ct.a;
-      rgbA = ct.rgb * ct.a;
-      mfol = mt.a;
-      aoSum = mt.g;
-      thr = @TOP_THR@;
-    }
+    // The covered area should grow in equal proportions per degree of elevation, so
+    // the radius follows sqrt(exp) of the elevation (v_top is a smoothstep of it).
+    float lin = 0.5 - sin(asin(clamp(1.0 - 2.0 * v_top, -1.0, 1.0)) / 3.0);
+    float tn = clamp(lin / @FULL@, 0.0, 1.0);
+    float grow = (exp(@GROW@ * tn) - 1.0) / (exp(@GROW@) - 1.0);
+    float reach = @REACH@ * sqrt(grow) + @REST@ * smoothstep(@FULL@ - 0.1, 1.0, lin);
+    float mT = 1.0 - smoothstep(reach - @SOFT@, reach, length(v_tc));
+    a = mix(a, ct.a, mT);
+    rgbA = mix(rgbA, ct.rgb * ct.a, mT);
+    mfol = mix(mfol, mt.a, mT);
+    aoSum = mix(aoSum, mt.g, mT);
+    thr = mix(thr, @TOP_THR@, mT);
   }
   if (a < thr) discard;
   float b = bayer4(gl_FragCoord.xy);
@@ -555,6 +565,11 @@ void restoreCoverage(QImage &img, int cutoff255, double target) {
 static QByteArray billboardFragmentMain() {
   QByteArray src(kBillFSMain);
   src.replace("@TOP_THR@", QByteArray::number(double(kVegTopCoverage), 'f', 3));
+  src.replace("@REACH@", QByteArray::number(double(kVegTopReach), 'f', 3));
+  src.replace("@FULL@", QByteArray::number(double(kVegTopFull), 'f', 3));
+  src.replace("@GROW@", QByteArray::number(double(kVegTopGrow), 'f', 3));
+  src.replace("@REST@", QByteArray::number(double(kVegTopRest), 'f', 3));
+  src.replace("@SOFT@", QByteArray::number(double(kVegTopSoft), 'f', 3));
   return src;
 }
 

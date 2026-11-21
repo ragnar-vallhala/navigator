@@ -125,9 +125,9 @@ VegLodChoice vegChooseLod(const VegSpeciesInfo &s, float dist, bool impostorRead
 constexpr int kVegAtlasTiles = 10;
 constexpr int kVegAtlasAzimuths = 8;
 constexpr int kVegAtlasViews = kVegAtlasAzimuths + 1;
-// The share of the billboard's pixels that show the top-down tile rises
-// smoothly with the camera's elevation about the crown: 0 on the horizon, 1 at
-// kVegTopToDeg and above. It starts at 0 and finishes early because a real crown
+// The weight of the top-down tile in the billboard rises smoothly with the
+// camera's elevation about the crown: 0 on the horizon, 1 at kVegTopToDeg and
+// above. It starts at 0 and finishes early because a real crown
 // (horizontal needle cards, round broadleaf) already shows most of its top from
 // 30 to 40 degrees up. The top tile keeps texels above kVegTopCoverage (the side
 // tiles 0.35): from above a mip-blurred crown is a solid disc and would
@@ -135,6 +135,17 @@ constexpr int kVegAtlasViews = kVegAtlasAzimuths + 1;
 constexpr float kVegTopFromDeg = 0.0f;
 constexpr float kVegTopToDeg = 55.0f;
 constexpr float kVegTopCoverage = 0.6f;
+// The top tile takes over from the crown's centre outward: inside a radius that
+// grows with the elevation it replaces the side tiles (quad half-widths: a crown
+// fills about 0.7, the tile's corner is at 1.41), over a soft band kVegTopSoft
+// wide. The covered area grows in equal proportions per degree (kVegTopGrow
+// shapes it) until the crown is filled at kVegTopFull of the ramp, then the radius
+// grows by kVegTopRest more to clear what is left of the side tiles.
+constexpr float kVegTopReach = 0.8f;
+constexpr float kVegTopGrow = 1.0f;
+constexpr float kVegTopFull = 0.9f;
+constexpr float kVegTopRest = 0.8f;
+constexpr float kVegTopSoft = 0.15f;
 
 // Vertex shader source of the billboard program, with the atlas layout filled
 // in from the constants above (exposed so a test can check it).
