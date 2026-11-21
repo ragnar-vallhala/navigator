@@ -108,6 +108,36 @@ private slots:
     QVERIFY(checked >= 2);
   }
 
+  // The packed tilt (yaw + 8 x code) is decoded by the mesh vertex shader only;
+  // the billboard shader reads that channel as a plain yaw. That is correct as
+  // long as no species that carries a tilt (rocks) is ever drawn as an
+  // impostor, and only trees are: a later change that gives a rock an impostor
+  // must teach the billboard vertex shader the tilt first.
+  void onlyTreesTakeImpostors() {
+    int n = 0;
+    const VegSpeciesInfo *tab = vegSpeciesTable(&n);
+    int rocks = 0, impostors = 0;
+    for (int i = 0; i < n; ++i) {
+      if (tab[i].cat == kVegRock) {
+        QVERIFY2(!tab[i].impostor, tab[i].id);
+        QCOMPARE(tab[i].fallbackMax, tab[i].maxDist);
+        // Past its last mesh LOD a rock is culled, never billboarded.
+        for (float d : {5.0f, 60.0f, 140.0f, 255.0f}) {
+          const VegLodChoice c = vegChooseLod(tab[i], d, true);
+          for (int k = 0; k < c.n; ++k)
+            QVERIFY2(c.lod[k] <= 2, tab[i].id);
+        }
+        ++rocks;
+      }
+      if (tab[i].impostor) {
+        QCOMPARE(int(tab[i].cat), int(kVegTree));
+        ++impostors;
+      }
+    }
+    QVERIFY(rocks >= 3);
+    QVERIFY(impostors >= 4);
+  }
+
   void rockColliderRadiusIsHalfTheRenderedSpan() {
     VegAssets assets;
     QString err;

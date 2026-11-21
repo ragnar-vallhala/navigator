@@ -272,7 +272,7 @@ void main() {
 // from the baked atlas with a blend of the two nearest azimuth tiles.
 const char *kBillVS = R"GLSL(
 #version 330 core
-layout(location = 3) in vec4 i_posyaw;
+layout(location = 3) in vec4 i_posyaw;  // base (NED), plain yaw: only trees are billboarded, never a tilted rock
 layout(location = 4) in vec4 i_misc;
 uniform mat4 u_vp;
 uniform vec3 u_eye;
