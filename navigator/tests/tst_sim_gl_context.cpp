@@ -667,6 +667,75 @@ private slots:
     QVERIFY2(meanDiff(signature(band(low)), signature(band(off))) < 8.0f,
              "the water is still drawn after switching to Low");
   }
+
+  // Prop wash: a spinning drone low over a pond stirs the ripple sim and the
+  // renderer uploads it; a calm pond uploads nothing; Low runs no sim at all.
+  void propWashRipplesThePond() {
+    vsim::procgen::FieldParams fp;
+    fp.seed = 7u;
+    fp.palette = vsim::procgen::kPalHills;
+    fp.heightM = 70.0f;
+    fp.flatRadiusM = 12.0f;
+    auto field = std::make_shared<const vsim::procgen::TerrainField>(fp);
+    const auto bodies =
+        field->water().bodiesIn(field->heightSource(), -1500, -1500, 1500, 1500);
+    QVERIFY(!bodies.empty());
+    const vsim::procgen::WaterBody b = bodies.front();
+
+    Rig rig;
+    QVERIFY(rig.showDocked());
+    rig.r->setTerrainField(field);
+    rig.r->setCameraPoseForTest({b.cx - b.radiusM - 12.0f, b.cy, -(b.level + 3.5f)},
+                                0.0f, 0.22f);
+    rig.r->setWaterQuality(vsim::terrain::Quality::High);
+    const auto ripples = rig.r->ripples();
+
+    // Drone far away: the sim stays unbound and nothing is uploaded.
+    rig.r->grabFrame();
+    QVERIFY(rig.r->waterRenderer()->glReady());
+    QVERIFY(!ripples->bound());
+    QCOMPARE(rig.r->waterRenderer()->rippleUploads(), 0);
+
+    // Hovering 0.4 m above the pond centre with the motors up.
+    vsim::SimSnapshot s;
+    s.pos_w = {b.cx, b.cy, -(b.level + 0.4f)};
+    s.motor_duty = {0.6f, 0.6f, 0.6f, 0.6f};
+    s.motor_omega = {2000.0f, 2000.0f, 2000.0f, 2000.0f};
+    rig.r->setSnapshot(s);
+    rig.r->grabFrame(); // binds the pond and sets the rotors
+    QVERIFY(ripples->bound());
+    QCOMPARE(ripples->centreX(), b.cx);
+    ripples->stepFixed(120);
+    QVERIFY2(ripples->maxAbsHeight() > 0.003f,
+             qPrintable(QString("max=%1").arg(ripples->maxAbsHeight())));
+    rig.r->grabFrame();
+    QCOMPARE(rig.r->glErrorCount(), 0);
+    const int ups = rig.r->waterRenderer()->rippleUploads();
+    QVERIFY2(ups >= 1, "the ripple field was never uploaded");
+
+    // Motors off: it settles, and once it has the uploads stop.
+    s.motor_duty = {0, 0, 0, 0};
+    rig.r->setSnapshot(s);
+    rig.r->grabFrame();
+    ripples->stepFixed(60 * 40);
+    rig.r->grabFrame(); // the last frame uploads the settled field
+    rig.r->grabFrame();
+    QVERIFY(!ripples->active());
+    const int settled = rig.r->waterRenderer()->rippleUploads();
+    rig.r->grabFrame();
+    QCOMPARE(rig.r->waterRenderer()->rippleUploads(), settled);
+    QCOMPARE(rig.r->glErrorCount(), 0);
+
+    // Low draws no water, so the sim is not fed or stepped.
+    s.motor_duty = {0.6f, 0.6f, 0.6f, 0.6f};
+    rig.r->setSnapshot(s);
+    rig.r->setWaterQuality(vsim::terrain::Quality::Low);
+    const uint64_t steps = ripples->stepCount();
+    rig.r->grabFrame();
+    rig.r->grabFrame();
+    QCOMPARE(ripples->stepCount(), steps);
+    QCOMPARE(rig.r->waterRenderer()->rippleUploads(), settled);
+  }
 };
 
 QTEST_MAIN(TstSimGlContext)

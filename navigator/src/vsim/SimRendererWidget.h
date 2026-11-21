@@ -323,6 +323,15 @@ public:
     return waterQualitySet_ ? waterQuality_ : terrainDefault_;
   }
   const WaterRenderer *waterRenderer() const { return water_.get(); }
+  // The prop-wash ripple sim. Both views of the simulator page hold the same
+  // one (SimViewPanel), so it is stepped once per moment; without it the widget
+  // makes a private one on first use. GUI thread only.
+  void setRipples(std::shared_ptr<WaterRipples> r) { ripples_ = std::move(r); }
+  const std::shared_ptr<WaterRipples> &ripples() {
+    if (!ripples_)
+      ripples_ = std::make_shared<WaterRipples>();
+    return ripples_;
+  }
   // World-space XY the terrain streamer should centre on: the free-fly camera
   // when roaming (sim stopped), otherwise the drone. Lets endless terrain follow
   // both WASD navigation and actual flight.
@@ -748,6 +757,8 @@ private:
   vsim::terrain::Quality waterQuality_ = vsim::terrain::Quality::High;
   bool waterQualitySet_ = false; // false: use terrainDefault_ (from GL_RENDERER)
   void drawWater(const QMatrix4x4 &view);
+  void updateRipples();
+  std::shared_ptr<WaterRipples> ripples_; // shared with the other view when set
   bool vegEnabled_ = true;
   void drawVegetation(const QMatrix4x4 &view);
   std::map<qint64, std::unique_ptr<Mesh>> worldChunks_;
