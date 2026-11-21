@@ -112,12 +112,7 @@ constexpr uint8_t kJsAxis = 0x02;
 
 #endif
 
-int axisToUs(int v, bool invert) {
-  if (invert)
-    v = -v;
-  const int us = 1500 + (v * 500) / 32767;
-  return std::clamp(us, 1000, 2000);
-}
+using rcframe::axisToUs;
 
 #ifndef _WIN32
 speed_t baudConst(int b) {
@@ -189,14 +184,16 @@ RcBridge::RcBridge(QObject *parent) : QThread(parent) {
   for (int f = 0; f < 5; ++f) {
     mapAxis_[f] = f;
     mapInv_[f] = 0;
+    mapHalf_[f] = 0;
   }
 }
 
-void RcBridge::setMapping(int func, int axis, bool invert) {
+void RcBridge::setMapping(int func, int axis, bool invert, bool halfRange) {
   if (func < 0 || func >= 5)
     return;
   mapAxis_[func].store(axis, std::memory_order_relaxed);
   mapInv_[func].store(invert ? 1 : 0, std::memory_order_relaxed);
+  mapHalf_[func].store(halfRange ? 1 : 0, std::memory_order_relaxed);
 }
 
 RcBridge::~RcBridge() {
@@ -578,6 +575,9 @@ void RcBridge::run() {
           return on ? 2000 : 1000;
         }
         const int raw = (src >= 0 && src < (int)axis_.size()) ? axis_[src] : 0;
+        if (f == Throttle)
+          return rcframe::throttleToUs(
+              raw, inv, mapHalf_[f].load(std::memory_order_relaxed) != 0);
         return axisToUs(raw, inv);
       };
       roll = en ? chan(0) : 1500;

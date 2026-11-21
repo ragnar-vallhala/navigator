@@ -506,6 +506,7 @@ private:
   QLabel *m_flightModeLabel = nullptr; // shows effective mode + source
   QComboBox *m_rcAxisCombo[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
   QCheckBox *m_rcInvert[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
+  QCheckBox *m_rcThrottleHalf = nullptr; // throttle stick rests at centre
   QCheckBox *m_swArm = nullptr; // software arm (no hardware switch)
   void pushRcMapping(int func); // combo/invert → bridge + persist
   // Apply the selected RC source (joystick vs UART CSV) to the bridge and the
