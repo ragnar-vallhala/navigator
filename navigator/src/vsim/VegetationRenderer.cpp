@@ -42,10 +42,10 @@ constexpr float kLodBand = 0.07f;  // cross-fade half width, fraction of the edg
 // distance otherwise). Fog is nearly opaque by ~500 m, so nothing goes farther.
 const VegSpeciesInfo kTable[] = {
     // id                       cat            size  span   lod ends         max   fb    sway  imp
-    {"fir_tree_01",             procgen::kVegTree,  procgen::kVegTreeKinds[0].heightM, false, {30, 70, 130}, 560, 300, 0.012f, true, true},
-    {"pine_sapling_medium",     procgen::kVegTree,  procgen::kVegTreeKinds[1].heightM, false, {30, 70, 130}, 560, 300, 0.012f, true, true},
-    {"jacaranda_tree",          procgen::kVegTree,  procgen::kVegTreeKinds[2].heightM, false, {30, 70, 130}, 560, 300, 0.008f, true},
-    {"island_tree_01",          procgen::kVegTree,  procgen::kVegTreeKinds[3].heightM, false, {30, 70, 130}, 560, 300, 0.008f, true},
+    {"fir_tree_01",             procgen::kVegTree,  procgen::kVegTreeKinds[0].heightM, false, {30, 70, 130}, 560, 300, 0.012f, true, 0.6f},
+    {"pine_sapling_medium",     procgen::kVegTree,  procgen::kVegTreeKinds[1].heightM, false, {30, 70, 130}, 560, 300, 0.012f, true, 0.75f},
+    {"jacaranda_tree",          procgen::kVegTree,  procgen::kVegTreeKinds[2].heightM, false, {30, 70, 130}, 560, 300, 0.008f, true, 1.7f},
+    {"island_tree_01",          procgen::kVegTree,  procgen::kVegTreeKinds[3].heightM, false, {30, 70, 130}, 560, 300, 0.008f, true, 1.95f},
     {"shrub_03",                procgen::kVegBush,  1.0f, false, {25, 60, 110}, 170, 170, 0.030f, false},
     {"shrub_04",                procgen::kVegBush,  1.3f, true,  {25, 60, 110}, 170, 170, 0.030f, false},
     {"weed_plant_02",           procgen::kVegBush,  0.8f, true,  {20, 45, 80},  110, 110, 0.050f, false},
@@ -339,7 +339,7 @@ in vec3 v_world;
 out vec4 o_color;
 uniform sampler2D u_atlas;   // display-referred colour, coverage in alpha
 uniform sampler2D u_atlasMask; // alpha: foliage share of the covered texels
-uniform float u_barkLit;      // 1: light bark like the conifer mesh trunk
+uniform float u_barkGain;     // per-species trunk brightness, measured against the mesh
 )GLSL";
 
 const char *kBillFSMain = R"GLSL(
@@ -358,7 +358,13 @@ void main() {
   if (!keep) discard;
   vec3 rgb = (c0.rgb * c0.a * (1.0 - v_w) + c1.rgb * c1.a * v_w) / max(a, 1e-3);
   // Foliage takes the crown tint; bark keeps its colour, as on the meshes.
-  float fol = clamp(mix(texture(u_atlasMask, v_uv0).a, texture(u_atlasMask, v_uv1).a, v_w) / max(a, 1e-3), 0.0, 1.0);
+  vec4 m0 = texture(u_atlasMask, v_uv0), m1 = texture(u_atlasMask, v_uv1);
+  float mfol = mix(m0.a, m1.a, v_w);
+  float fol = clamp(mfol / max(a, 1e-3), 0.0, 1.0);
+  // Mean ambient occlusion of the bark texels (stored in the mask's green, where
+  // the bake keeps it out of the bark albedo so the lighting below can apply it
+  // the way the mesh shader does).
+  float barkAo = clamp(mix(m0.g, m1.g, v_w) / max(a - mfol, 0.02), 0.0, 1.0);
   vec3 toFrag = v_world - u_campos;
   float dist = length(toFrag);
   vec3 sun = normalize(u_sundir);
@@ -377,12 +383,10 @@ void main() {
   vec3 Lb = vec3(0.0);
   for (int i = 0; i < 3; ++i) {
     vec3 nb = i == 0 ? nb0 : (i == 1 ? nb1 : nb2);
-    // 0.92: the mesh's ambient AO floor (0.6 + 0.4 * ao) averages about that on bark
-    Lb += (i == 0 ? 0.4 : 0.3) * (ambientLit(nb) * 1.3 * 0.92 + sunLightColor() * wrapDiffuse(nb, sun));
+    Lb += (i == 0 ? 0.4 : 0.3) * (ambientLit(nb) * 1.3 * (0.6 + 0.4 * barkAo) + sunLightColor() * wrapDiffuse(nb, sun));
   }
   vec3 barkTint = tintMul(v_tint);
-  vec3 barkLit = rgb * barkTint * L; // broadleaf trunks: their old lighting, unchanged
-  if (u_barkLit > 0.5) barkLit = rgb * barkTint * vec3(1.0, 0.90, 0.78) * Lb;
+  vec3 barkLit = rgb * barkTint * vec3(1.0, 0.90, 0.78) * Lb * u_barkGain;
   vec3 lit = mix(barkLit, rgb * foliageTint(v_tint) * L, fol);
   o_color = vec4(applyAerialPerspective(lit, toFrag, dist), 1.0);
 }
@@ -416,8 +420,11 @@ void main() {
   vec4 d = texture(u_diffuse, v_uv);
   if (u_cutout > 0.5 && d.a < u_cutoff) discard;
   float ao = texture(u_arm, v_uv).r;
-  o_color = vec4(srgbEnc(d.rgb) * u_albedoMul * mix(0.55, 1.0, ao), 1.0);
-  o_mask = vec4(0.0, 0.0, 0.0, u_cutout > 0.5 ? 1.0 : 0.0);
+  // Foliage bakes its occlusion into the albedo; bark keeps its albedo plain and
+  // stores the occlusion in the mask's green for the billboard's trunk lighting.
+  bool fol = u_cutout > 0.5;
+  o_color = vec4(srgbEnc(d.rgb) * u_albedoMul * (fol ? mix(0.55, 1.0, ao) : 1.0), 1.0);
+  o_mask = vec4(0.0, fol ? 0.0 : ao, 0.0, fol ? 1.0 : 0.0);
 }
 )GLSL";
 
@@ -1285,7 +1292,7 @@ void VegetationRenderer::drawImpostors(VariantGpu &v, const std::vector<float> &
   progBillboard_->setUniformValue(loc_.half, v.billH);
   progBillboard_->setUniformValue(loc_.tile, float(v.tile));
   progBillboard_->setUniformValue("u_k", v.k);
-  progBillboard_->setUniformValue("u_barkLit", kTable[v.info].coniferBark ? 1.0f : 0.0f);
+  progBillboard_->setUniformValue("u_barkGain", kTable[v.info].barkGain);
   glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, n);
   ++stats_.drawCalls;
   stats_.impostors += int(n);

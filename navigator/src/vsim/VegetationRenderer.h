@@ -100,7 +100,7 @@ struct VegSpeciesInfo {
   float fallbackMax;         // same, when no impostor is available
   float sway;                // wind bend at the top, fraction of height
   bool impostor;             // gets a baked billboard beyond LOD2
-  bool coniferBark = false;  // impostor bark lit like the conifer mesh trunk
+  float barkGain = 1.0f;     // impostor trunk brightness against the mesh trunk (tests measure it)
 };
 const VegSpeciesInfo *vegSpeciesTable(int *count);
 // Model units to metres at instance scale 1 for one variant of a species.
