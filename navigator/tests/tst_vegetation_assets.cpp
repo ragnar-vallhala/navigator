@@ -165,6 +165,7 @@ private slots:
         QVERIFY2(varies, tag);
         if (m.cutout()) {
           QVERIFY2(m.alphaCutoff > 0.0f && m.alphaCutoff < 1.0f, tag);
+          QVERIFY2(m.impostorCutoff >= m.alphaCutoff && m.impostorCutoff < 1.0f, tag);
           int opaque = 0, clear = 0;
           for (int y = 0; y < m.alpha.height(); y += 5)
             for (int x = 0; x < m.alpha.width(); x += 5)

@@ -50,6 +50,9 @@ struct VegMaterial {
   QImage arm;     // linear, Format_RGBA8888
   QImage alpha;   // linear coverage, Format_Grayscale8; null when opaque
   float alphaCutoff = 0.5f;
+  // The cut-off the impostor bake uses; the manifest sets it where the bake of
+  // a sparse crown comes out denser than the mesh (see build_vegetation.py).
+  float impostorCutoff = 0.5f;
   bool doubleSided = true;
   bool cutout() const { return !alphaPath.isEmpty(); }
 };

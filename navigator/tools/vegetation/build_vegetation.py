@@ -142,8 +142,14 @@ SPECIES = [
          derive={'island_tree_01_LOD0_slim': dict(src='island_tree_01_LOD0', rot=1.9, sx=0.88, sy=1.1, sz=1.08)},
          budget=lod_budgets(BIG_BROADLEAF),
          mats={'island_tree_01': dict(weight=0.10, cutout=False, cull=False, size=512),
+               # impostor_cutoff: the island's sparse crown bakes denser than its mesh
+               # shows it from 50 m out (the bake keeps leaf texels the mesh's alpha
+               # test drops once the leaf texture is minified), so its impostor
+               # holds 1.5 to 3 times the mesh's pixels; a higher cut-off in the bake
+               # alone brings it down. The mesh LODs keep the 0.5.
                'island_tree_01_leaves': dict(weight=0.78, cutout=True, key_black=True, cull=True, grade=GRADE_LEAF,
-                                             size=1024, scale_cap=(3.5, 4.5, 6.0), tris_per_comp=2),
+                                             size=1024, scale_cap=(3.5, 4.5, 6.0), tris_per_comp=2,
+                                             impostor_cutoff=0.7),
                'island_tree_01_branches': dict(weight=0.12, cutout=False, cull=True, size=512,
                                                scale_cap=(2.0, 2.5, 3.0), tris_per_comp=12)}),
     dict(id='shrub_03', gltf='shrub_03_1k.gltf', category='shrub', title='Shrub 03',
@@ -1015,6 +1021,8 @@ def process_species(sp, raw_dir, out_dir, log):
             alphaMode='MASK' if alpha_file else 'OPAQUE', alphaCutoff=0.5 if alpha_file else None,
             sourceAlphaMode=info['alphaMode'], doubleSided=True, wrap='repeat',
             textureSize=cfg['size'], alphaCoverage=coverage))
+        if alpha_file and cfg.get('impostor_cutoff'):
+            materials[-1]['impostorCutoff'] = cfg['impostor_cutoff']
         log('  material %s: tex %d, alpha=%s coverage=%s' % (name, cfg['size'], alpha_file, coverage))
     variants = []
     for vname in sp['variants']:

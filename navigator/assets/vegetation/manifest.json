@@ -696,7 +696,8 @@
      "doubleSided": true,
      "wrap": "repeat",
      "textureSize": 1024,
-     "alphaCoverage": 0.25102710723876953
+     "alphaCoverage": 0.25102710723876953,
+     "impostorCutoff": 0.7
     },
     {
      "name": "island_tree_01_branches",

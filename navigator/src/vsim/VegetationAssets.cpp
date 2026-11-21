@@ -185,6 +185,7 @@ bool loadVegetationAssets(VegAssets &out, QString *error, const QString &root,
       if (!alpha.isEmpty() && mo.value("alphaMode").toString() == "MASK") {
         m.alphaPath = dir + alpha;
         m.alphaCutoff = float(mo.value("alphaCutoff").toDouble(0.5));
+        m.impostorCutoff = float(mo.value("impostorCutoff").toDouble(double(m.alphaCutoff)));
       }
       if (withImages && !loadVegetationMaterialImages(m, error))
         return false;
