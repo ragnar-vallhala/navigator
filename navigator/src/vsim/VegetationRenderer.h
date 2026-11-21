@@ -111,7 +111,8 @@ int vegPickVariant(const procgen::VegInstance &v, int poolSize);
 
 // What to draw at distance d: up to two entries (a cross-fade), lod 0..2 = mesh
 // LOD, 3 = impostor. fade encodes the dither test (see the shader): in (0,1]
-// keep where fade > threshold; in [2,3] keep where fade-2 < threshold.
+// keep where fade > threshold; in [2,3] keep where fade-2 < threshold. The
+// renderer turns a pair into overlapping layers (4 + s and 2 + s) when it draws.
 struct VegLodChoice {
   int n = 0;
   int lod[2] = {0, 0};

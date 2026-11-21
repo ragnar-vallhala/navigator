@@ -221,10 +221,13 @@ void main() {
       discard;
     }
   }
-  // Cross-fade between LODs by screen-door dither: fade in (0,1] keeps pixels
-  // above the threshold, fade in [2,3] keeps those below it (the partner).
+  // Cross-fade between LODs by screen-door dither. A single layer's fade in
+  // (0,1] keeps pixels below the threshold. A cross-fade's two layers overlap:
+  // fade 4 + s keeps b < 2s, fade 2 + s keeps b > 2s - 1, so each is complete
+  // over half the fade and the pixels one drops the other still draws (a pair of
+  // complementary patterns leaves the ground showing through a thin crown).
   float b = bayer4(gl_FragCoord.xy);
-  bool keep = v_fade > 1.5 ? (v_fade - 2.0) < b : v_fade > b;
+  bool keep = v_fade > 3.5 ? 2.0 * (v_fade - 4.0) > b : (v_fade > 1.5 ? 2.0 * (v_fade - 2.0) - 1.0 < b : v_fade > b);
   if (!keep) discard;
   vec3 nm = texture(u_normal, v_uv).xyz * 2.0 - 1.0;
   vec3 Nm = normalize(TBN * nm);
@@ -435,7 +438,7 @@ void main() {
   }
   if (cov < 0.5) discard;
   float b = bayer4(gl_FragCoord.xy);
-  bool keep = v_fade > 1.5 ? (v_fade - 2.0) < b : v_fade > b;
+  bool keep = v_fade > 3.5 ? 2.0 * (v_fade - 4.0) > b : (v_fade > 1.5 ? 2.0 * (v_fade - 2.0) - 1.0 < b : v_fade > b);
   if (!keep) discard;
   vec3 toFrag = v_world - u_campos;
   float dist = length(toFrag);
@@ -1563,7 +1566,8 @@ void VegetationRenderer::draw(const VegFrame &f) {
       }
       for (int k = 0; k < ch.n; ++k) {
         std::vector<float> &b = buckets_[size_t(r.variant) * 4 + size_t(ch.lod[k])];
-        b.insert(b.end(), {r.x, r.y, r.z, r.yaw, r.scale, r.tint, ch.fade[k], r.paint});
+        // A cross-fade's first layer is sent as 4 + weight (see the shaders).
+        b.insert(b.end(), {r.x, r.y, r.z, r.yaw, r.scale, r.tint, ch.n == 2 && k == 0 ? 4.0f + ch.fade[k] : ch.fade[k], r.paint});
       }
     }
   }
