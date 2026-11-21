@@ -199,6 +199,59 @@ private slots:
     QVERIFY(out.grass > 0.0f);
   }
 
+  // The wet bank follows the height above the water, not a fixed-width band.
+  void wetBankIsOneAtTheWaterlineAndFadesWithHeight() {
+    const TerrainField f(hills());
+    for (const WaterBody &b : bodies(f)) {
+      for (int i = 0; i < 24; ++i) {
+        const float a = 6.2831853f * float(i) / 24.0f;
+        const float ca = std::cos(a), sa = std::sin(a), R = b.shoreRadius(a);
+        const auto wet = [&](float d) {
+          const float x = b.cx + d * ca, y = b.cy + d * sa;
+          return f.water().wetBank(f.heightSource(), x, y, f.height(x, y));
+        };
+        QVERIFY(wet(R + 0.1f) > 0.85f);   // right at the waterline
+        QVERIFY(wet(R - 3.0f) > 0.99f);   // under the water
+        QCOMPARE(wet(R + b.bankM + 1.0f), 0.0f); // past the carved bank
+        // It follows the ground's height above the level: dry wherever the bank
+        // stands more than kWetHeightM over the water, however far from the shore.
+        for (int k = 0; float(k) < b.bankM; ++k) {
+          const float x = b.cx + (R + float(k)) * ca, y = b.cy + (R + float(k)) * sa;
+          const float h = f.height(x, y);
+          if (h - b.level >= WaterField::kWetHeightM)
+            QCOMPARE(f.water().wetBank(f.heightSource(), x, y, h), 0.0f);
+        }
+        // Higher than kWetHeightM above the level: dry.
+        const float x = b.cx + (R + 6.0f) * ca, y = b.cy + (R + 6.0f) * sa;
+        QCOMPARE(f.water().wetBank(f.heightSource(), x, y,
+                                   b.level + WaterField::kWetHeightM + 0.5f), 0.0f);
+      }
+    }
+  }
+
+  void shoreGroundIsDarkerThanTheShoreTintAndThePondKeepsItsColour() {
+    const TerrainField f(hills());
+    const auto ps = GroundCover::pondStyle(kPalHills);
+    const auto luma = [](const PgVec3 &c) { return 0.3f * c.x + 0.59f * c.y + 0.11f * c.z; };
+    float wetL = 0.0f;
+    int n = 0;
+    for (const WaterBody &b : bodies(f))
+      for (int i = 0; i < 24; ++i) {
+        const float a = 6.2831853f * float(i) / 24.0f;
+        const float d = b.shoreRadius(a) + 0.6f;
+        const float x = b.cx + d * std::cos(a), y = b.cy + d * std::sin(a);
+        wetL += luma(f.colorAt(x, y, f.height(x, y), 1.0f).color);
+        ++n;
+      }
+    wetL /= float(n);
+    QVERIFY2(wetL < 0.9f * luma(ps.shore),
+             qPrintable(QString("wet=%1 shore=%2").arg(wetL).arg(luma(ps.shore))));
+    // The pond itself is still the palette's water colour (Low shows only this).
+    const WaterBody b = bodies(f)[0];
+    const auto in = f.colorAt(b.cx, b.cy, f.height(b.cx, b.cy), 1.0f);
+    QVERIFY(std::fabs(in.color.z - ps.water.z) < 0.02f);
+  }
+
   void helipadsAvoidPonds() {
     const TerrainField f(hills());
     HelipadParams hp;

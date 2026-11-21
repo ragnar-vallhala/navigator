@@ -237,6 +237,15 @@ GroundCover::Sample TerrainField::colorAt(float wx, float wy, float h,
     s.color = mix(s.color, ps.water, in);
     s.grass *= 1.0f - std::max(in, ring * 0.8f);
   }
+  // Wet bank: ground within ~1-2 m above the level is darker, as damp earth is,
+  // so the shore reads as soaked ground and not a painted band. Not inside the
+  // shore: there the colour is the pond's own (the whole pond when water is Low).
+  const float wet = water_.wetBank(*this, wx, wy, h) * (1.0f - water_.inside(*this, wx, wy));
+  if (wet > 0.0f) {
+    constexpr float kWetDarken = 0.34f;
+    const float k = 1.0f - kWetDarken * wet;
+    s.color = {s.color.x * k, s.color.y * k, s.color.z * k};
+  }
   return s;
 }
 
