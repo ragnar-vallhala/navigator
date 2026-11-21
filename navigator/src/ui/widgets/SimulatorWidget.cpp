@@ -2193,7 +2193,8 @@ void SimulatorWidget::startInAppSim() {
                     .arg(Units::toAngle(yaw), 6, 'f', dec)
                     .arg(Units::altSuffix(), Units::angleSuffix()));
             updateHud(snap);
-            m_propAudio.setMotors(snap.motor_omega);
+            if (m_sim) // a pose queued before Stop must not restart the props
+              m_propAudio.setMotors(snap.motor_omega);
           });
   connect(m_sim, &vsim::SimWorker::logLine, this,
           [this](const QString &s) { appendLog("vsim", s); });
@@ -2309,7 +2310,8 @@ void SimulatorWidget::attachExternalSim() {
                       .arg(Units::toAngle(yaw), 6, 'f', dec)
                       .arg(Units::altSuffix(), Units::angleSuffix()));
             updateHud(snap);
-            m_propAudio.setMotors(snap.motor_omega);
+            if (m_sim) // a pose queued before Stop must not restart the props
+              m_propAudio.setMotors(snap.motor_omega);
           });
   connect(m_sim, &vsim::SimWorker::logLine, this,
           [this](const QString &s) { appendLog("attach", s); });
@@ -2368,7 +2370,7 @@ void SimulatorWidget::stopInAppSim() {
   m_retrier.cancelAll(); // nothing left to ACK
   if (m_retryTimer)
     m_retryTimer->stop();
-  m_propAudio.setMotors({0.0f, 0.0f, 0.0f, 0.0f}); // silence once stopped
+  m_propAudio.silence(); // ramp down and release the stream once stopped
   m_simStartBtn->setEnabled(!startBlocked());
   if (m_simAttachBtn)
     m_simAttachBtn->setEnabled(true);
