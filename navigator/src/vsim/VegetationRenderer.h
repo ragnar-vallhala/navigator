@@ -125,9 +125,9 @@ VegLodChoice vegChooseLod(const VegSpeciesInfo &s, float dist, bool impostorRead
 constexpr int kVegAtlasTiles = 10;
 constexpr int kVegAtlasAzimuths = 8;
 constexpr int kVegAtlasViews = kVegAtlasAzimuths + 1;
-// The share of the billboard's pixels that show the top-down tile rises
-// smoothly with the camera's elevation about the crown: 0 on the horizon, 1 at
-// kVegTopToDeg and above. It starts at 0 and finishes early because a real crown
+// The weight of the top-down tile in the billboard rises smoothly with the
+// camera's elevation about the crown: 0 on the horizon, 1 at kVegTopToDeg and
+// above. It starts at 0 and finishes early because a real crown
 // (horizontal needle cards, round broadleaf) already shows most of its top from
 // 30 to 40 degrees up. The top tile keeps texels above kVegTopCoverage (the side
 // tiles 0.35): from above a mip-blurred crown is a solid disc and would
@@ -135,6 +135,36 @@ constexpr int kVegAtlasViews = kVegAtlasAzimuths + 1;
 constexpr float kVegTopFromDeg = 0.0f;
 constexpr float kVegTopToDeg = 55.0f;
 constexpr float kVegTopCoverage = 0.6f;
+// The top tile comes in from the crown's centre outward: inside a radius that
+// grows with the elevation (quad half-widths: a crown fills about 0.7, the tile's
+// corner is at 1.41, kVegTopSoft the soft band) it is drawn where the side tiles
+// show no foliage, and the side tiles stay under it (so the top tile's holes show
+// the crown behind them, not the sky). The radius grows in equal proportions per
+// degree (kVegTopGrow shapes it) until the crown is filled at kVegTopFull of the
+// ramp, then kVegTopRest more. Inside the disc the side tiles fade out over
+// kVegTopKeep0..1 of the ramp (where the top tile covers), and outside it over
+// kVegTopOut0..1, so from above no spire or trunk is left standing under the crown.
+constexpr float kVegTopReach = 0.8f;
+constexpr float kVegTopGrow = 1.8f;
+constexpr float kVegTopFull = 0.95f;
+constexpr float kVegTopRest = 0.8f;
+constexpr float kVegTopSoft = 0.15f;
+constexpr float kVegTopOut0 = 0.6f;
+constexpr float kVegTopOut1 = 0.85f;
+constexpr float kVegTopKeep0 = 0.5f;
+constexpr float kVegTopKeep1 = 0.9f;
+// From kVegTopDownFromDeg to kVegTopDownToDeg of elevation the top tile slides
+// down by kVegTopDown (quad half-widths, times the cosine of the elevation): the
+// footprint of a tall crown lies under its middle, and the cone's tip stays above.
+constexpr float kVegTopDown = 0.3f;
+constexpr float kVegTopDownFromDeg = 30.0f;
+constexpr float kVegTopDownToDeg = 45.0f;
+// The part of the side tile above kVegTopSpireY0..1 (the quad's own -1..1 up
+// axis) is that tip: it keeps its weight, disc or not, until kVegTopSpireOut0..1.
+constexpr float kVegTopSpireY0 = 0.0f;
+constexpr float kVegTopSpireY1 = 0.35f;
+constexpr float kVegTopSpireOut0 = 0.9f;
+constexpr float kVegTopSpireOut1 = 1.0f;
 
 // Vertex shader source of the billboard program, with the atlas layout filled
 // in from the constants above (exposed so a test can check it).

@@ -286,6 +286,7 @@ uniform float u_tile;    // first atlas tile of this variant
 out vec2 v_uv0;
 out vec2 v_uv1;
 out vec2 v_uvT;          // the top-down tile
+out float v_cy;         // the quad's own up coordinate, -1 (foot) .. 1 (tip)
 out vec2 v_tc;           // position in the top tile, -1..1 (outside the tile: nothing there)
 out float v_w;
 flat out float v_top;    // weight of the top-down tile
@@ -342,7 +343,8 @@ void main() {
   float e = asin(sinE);
   v_top = smoothstep(@TOP_FROM@, @TOP_TO@, e);
   float cxe = vv.x * c.x;
-  float cyv = c.y / max(sqrt(sinE), 0.6);
+  float cyv = (c.y + @DOWN@ * smoothstep(@DNA@, @DNB@, e) * cosE) / max(sqrt(sinE), 0.6); // the footprint lies below the crown's middle: a tall crown seen from above leans over it
+  v_cy = c.y;
   v_tc = vec2(-hl.x * cxe - hl.y * cyv, hl.y * cxe - hl.x * cyv);
   v_uvT = tileUv(u_tile + @ATLAS_AZ@, 0.5 + 0.48 * v_tc);
   v_el = vec2(sinE, cosE);
@@ -358,6 +360,7 @@ const char *kBillFSHead = R"GLSL(
 in vec2 v_uv0;
 in vec2 v_uv1;
 in vec2 v_uvT;
+in float v_cy;
 in vec2 v_tc;
 in float v_w;
 flat in float v_top;
@@ -381,39 +384,59 @@ float bayer4(vec2 p) {
 void main() {
   vec4 c0 = texture(u_atlas, v_uv0), c1 = texture(u_atlas, v_uv1);
   vec4 m0 = texture(u_atlasMask, v_uv0), m1 = texture(u_atlasMask, v_uv1);
-  // Coverage, premultiplied colour, foliage share and bark occlusion of the side
-  // views (the two nearest azimuths); a v_top share of the pixels (screen-door,
-  // Bayer) show the top-down view instead. A dither rather than an alpha mix: a
-  // mix would make every top-only texel pass the coverage test at once when the
-  // weight crosses it, a step in the pixels the tree covers.
+  // Coverage, colour, foliage share and bark occlusion of the side views (the
+  // two nearest azimuths), then of the top-down view where it comes in. There is
+  // no per-pixel pick between the two (the top tile's coverage is mostly holes
+  // where the side tile's is solid, so a dither shows as a screen door): a pixel
+  // is covered if either tile covers it, and takes the side tiles' colour where
+  // they show foliage, the top tile's elsewhere. The top tile comes in inside a
+  // radius that grows with the elevation, so the area the tree covers grows
+  // steadily instead of the whole footprint appearing at once, and the side tiles
+  // fade out last, which keeps the trunk and the crown's outline until the top
+  // tile really covers them.
   float a = mix(c0.a, c1.a, v_w);
   vec3 rgbA = c0.rgb * c0.a * (1.0 - v_w) + c1.rgb * c1.a * v_w;
   float mfol = mix(m0.a, m1.a, v_w);
   float aoSum = mix(m0.g, m1.g, v_w);
-  float thr = 0.35; // mip levels thin the coverage, so keep a bit more than half
+  vec3 rgb = rgbA / max(a, 1e-3);
+  float fol = clamp(mfol / max(a, 1e-3), 0.0, 1.0);
+  float barkAo = clamp(aoSum / max(a - mfol, 0.02), 0.0, 1.0);
+  float cov = a >= 0.35 ? 1.0 : 0.0; // mip levels thin the coverage, so keep a bit more than half
   if (v_top > 0.0) { // flat per instance, so the fetches stay in uniform control flow
     float in_t = max(abs(v_tc.x), abs(v_tc.y)) <= 1.0 ? 1.0 : 0.0; // the rotated quad's corners
     vec4 ct = texture(u_atlas, v_uvT) * in_t;
     vec4 mt = texture(u_atlasMask, v_uvT) * in_t;
-    if (v_top > bayer4(gl_FragCoord.xy + vec2(2.0, 1.0))) {
-      a = ct.a;
-      rgbA = ct.rgb * ct.a;
-      mfol = mt.a;
-      aoSum = mt.g;
-      thr = @TOP_THR@;
-    }
+    float lin = 0.5 - sin(asin(clamp(1.0 - 2.0 * v_top, -1.0, 1.0)) / 3.0);
+    float tn = clamp(lin / @FULL@, 0.0, 1.0);
+    float grow = (exp(@GROW@ * tn) - 1.0) / (exp(@GROW@) - 1.0);
+    float reach = @REACH@ * sqrt(grow) + @REST@ * smoothstep(@FULL@ - 0.1, 1.0, lin);
+    float mT = 1.0 - smoothstep(reach - @SOFT@, reach, length(v_tc));
+    // The side tiles stay inside the disc (so the top tile's holes show the crown
+    // behind them instead of the sky) and fade out as the elevation climbs.
+    float keep = 1.0 - smoothstep(@KEEP0@, @KEEP1@, lin);
+    // Above the crown's middle the side tiles keep the spire and the outline
+    // (the tip of a cone still shows from 45 degrees) and go only at the end of
+    // the ramp; the trunk and foot below fade as before.
+    float up = smoothstep(@SPY0@, @SPY1@, v_cy);
+    float gTip = 1.0 - smoothstep(@SPO0@, @SPO1@, lin);
+    float gOut = mix(1.0 - smoothstep(@OUT0@, @OUT1@, lin), gTip, up);
+    keep = mix(keep, gTip, up);
+    float sCov = a * mix(gOut, keep, mT) >= 0.35 ? 1.0 : 0.0;
+    float sFol = (sCov > 0.5 && fol > 0.5) ? 1.0 : 0.0; // bark under the crown from above is hidden by it
+    float tCov = (mT >= 0.5 && ct.a >= @TOP_THR@) ? 1.0 : 0.0;
+    float wT = tCov * (1.0 - sFol); // the side tiles win where they still show foliage
+    cov = max(sCov, tCov);
+    vec3 rgbT = ct.rgb;
+    float folT = clamp(mt.a / max(ct.a, 1e-3), 0.0, 1.0);
+    float aoT = clamp(mt.g / max(ct.a - mt.a, 0.02), 0.0, 1.0);
+    rgb = mix(rgb, rgbT, wT);
+    fol = mix(fol, folT, wT);
+    barkAo = mix(barkAo, aoT, wT);
   }
-  if (a < thr) discard;
+  if (cov < 0.5) discard;
   float b = bayer4(gl_FragCoord.xy);
   bool keep = v_fade > 1.5 ? (v_fade - 2.0) < b : v_fade > b;
   if (!keep) discard;
-  vec3 rgb = rgbA / max(a, 1e-3);
-  // Foliage takes the crown tint; bark keeps its colour, as on the meshes.
-  float fol = clamp(mfol / max(a, 1e-3), 0.0, 1.0);
-  // Mean ambient occlusion of the bark texels (stored in the mask's green, where
-  // the bake keeps it out of the bark albedo so the lighting below can apply it
-  // the way the mesh shader does).
-  float barkAo = clamp(aoSum / max(a - mfol, 0.02), 0.0, 1.0);
   vec3 toFrag = v_world - u_campos;
   float dist = length(toFrag);
   vec3 sun = normalize(u_sundir);
@@ -555,6 +578,19 @@ void restoreCoverage(QImage &img, int cutoff255, double target) {
 static QByteArray billboardFragmentMain() {
   QByteArray src(kBillFSMain);
   src.replace("@TOP_THR@", QByteArray::number(double(kVegTopCoverage), 'f', 3));
+  src.replace("@REACH@", QByteArray::number(double(kVegTopReach), 'f', 3));
+  src.replace("@FULL@", QByteArray::number(double(kVegTopFull), 'f', 3));
+  src.replace("@GROW@", QByteArray::number(double(kVegTopGrow), 'f', 3));
+  src.replace("@REST@", QByteArray::number(double(kVegTopRest), 'f', 3));
+  src.replace("@SOFT@", QByteArray::number(double(kVegTopSoft), 'f', 3));
+  src.replace("@OUT0@", QByteArray::number(double(kVegTopOut0), 'f', 3));
+  src.replace("@OUT1@", QByteArray::number(double(kVegTopOut1), 'f', 3));
+  src.replace("@KEEP0@", QByteArray::number(double(kVegTopKeep0), 'f', 3));
+  src.replace("@SPY0@", QByteArray::number(double(kVegTopSpireY0), 'f', 3));
+  src.replace("@SPY1@", QByteArray::number(double(kVegTopSpireY1), 'f', 3));
+  src.replace("@SPO0@", QByteArray::number(double(kVegTopSpireOut0), 'f', 3));
+  src.replace("@SPO1@", QByteArray::number(double(kVegTopSpireOut1), 'f', 3));
+  src.replace("@KEEP1@", QByteArray::number(double(kVegTopKeep1), 'f', 3));
   return src;
 }
 
@@ -563,6 +599,9 @@ QByteArray vegBillboardVertexSource() {
   src.replace("@ATLAS_TILES@", QByteArray::number(double(kAtlasTiles), 'f', 1));
   src.replace("@ATLAS_AZ@", QByteArray::number(double(kAtlasAzimuths), 'f', 1));
   src.replace("@TOP_FROM@", QByteArray::number(double(kVegTopFromDeg * kPi / 180.0f), 'f', 5));
+  src.replace("@DNA@", QByteArray::number(double(kVegTopDownFromDeg * kPi / 180.0f), 'f', 5));
+  src.replace("@DNB@", QByteArray::number(double(kVegTopDownToDeg * kPi / 180.0f), 'f', 5));
+  src.replace("@DOWN@", QByteArray::number(double(kVegTopDown), 'f', 3));
   src.replace("@TOP_TO@", QByteArray::number(double(kVegTopToDeg * kPi / 180.0f), 'f', 5));
   return src;
 }
