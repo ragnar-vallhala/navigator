@@ -197,6 +197,8 @@ SimulatorWidget::SimulatorWidget(QWidget *parent) : QWidget(parent) {
                          m_rcInvert[f]->isChecked(),
                          f == RcBridge::Throttle && m_rcThrottleHalf &&
                              m_rcThrottleHalf->isChecked());
+    if (m_rcUartLog)
+      m_rc->setUartLog(m_rcUartLog->isChecked());
     m_rc->start();
   } else {
     delete m_rc;
