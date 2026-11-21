@@ -1218,7 +1218,14 @@ QMatrix4x4 SimRendererWidget::cameraView() const {
     // Free-roam: look along freeForward() from camPos_, not locked to drone.
     const QVector3D fwd = freeForward();
     QMatrix4x4 view;
-    view.lookAt(camPos_, camPos_ + fwd, QVector3D(0.0f, 0.0f, -1.0f));
+    // Straight down (or up) the world up vector is parallel to the view and the
+    // basis degenerates (a blank frame): take the heading as the image's up.
+    QVector3D up(0.0f, 0.0f, -1.0f);
+    if (std::fabs(fwd.z()) > 0.9999f) {
+      const float sgn = fwd.z() > 0.0f ? 1.0f : -1.0f;
+      up = QVector3D(-std::cos(cam_yaw_) * sgn, -std::sin(cam_yaw_) * sgn, 0.0f);
+    }
+    view.lookAt(camPos_, camPos_ + fwd, up);
     return view;
   }
   if (fpv_) {

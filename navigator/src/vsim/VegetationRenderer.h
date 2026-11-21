@@ -120,9 +120,21 @@ struct VegLodChoice {
 VegLodChoice vegChooseLod(const VegSpeciesInfo &s, float dist, bool impostorReady);
 
 // Impostor atlas layout: kVegAtlasTiles x kVegAtlasTiles tiles, each tree
-// variant baked from kVegAtlasAzimuths directions.
+// variant baked from kVegAtlasAzimuths directions on the horizon plus one view
+// straight down (the tile after the azimuths), kVegAtlasViews tiles in all.
 constexpr int kVegAtlasTiles = 10;
 constexpr int kVegAtlasAzimuths = 8;
+constexpr int kVegAtlasViews = kVegAtlasAzimuths + 1;
+// The share of the billboard's pixels that show the top-down tile rises
+// smoothly with the camera's elevation about the crown: 0 on the horizon, 1 at
+// kVegTopToDeg and above. It starts at 0 and finishes early because a real crown
+// (horizontal needle cards, round broadleaf) already shows most of its top from
+// 30 to 40 degrees up. The top tile keeps texels above kVegTopCoverage (the side
+// tiles 0.35): from above a mip-blurred crown is a solid disc and would
+// otherwise overshoot the mesh.
+constexpr float kVegTopFromDeg = 0.0f;
+constexpr float kVegTopToDeg = 55.0f;
+constexpr float kVegTopCoverage = 0.6f;
 
 // Vertex shader source of the billboard program, with the atlas layout filled
 // in from the constants above (exposed so a test can check it).
@@ -191,6 +203,8 @@ public:
   struct BakeStats {
     long long foliagePx = 0, barkPx = 0;
     double foliageHeightSum = 0, barkHeightSum = 0; // 0 foot .. 1 top, summed over texels
+    long long topPx = 0;      // covered texels in the top-down tiles
+    unsigned long long hash = 0; // of every baked tile (colour and mask), order independent
   };
   // Tests: draw every tree at this LOD (0-2 mesh, 3 impostor), -1 = by distance.
   void setForcedLod(int lod) { forcedLod_ = lod; }

@@ -167,6 +167,82 @@ struct Rig {
   }
 };
 
+// Four trees of one kind on bare ground, 40 m east of the origin and spread 20 m
+// apart sideways (so about as far from a camera behind them), each with its own
+// yaw. Several trees keep the pixel counts of far rows large enough to compare.
+constexpr int kStandTrees = 4;
+World standWorld(int kind) {
+  World w = buildWorld(kPalForest, -1, 0);
+  for (auto &v : w.veg)
+    v.clear();
+  for (size_t i = 0; i < w.cells.size(); ++i)
+    if (w.cells[i].first == 0 && w.cells[i].second == 0)
+      for (int n = 0; n < kStandTrees; ++n) {
+        const float y = -30.0f + 20.0f * float(n);
+        VegInstance t;
+        t.species = kVegTree;
+        t.kind = uint8_t(kind);
+        t.variant = 0;
+        t.scale = 1.0f;
+        t.yaw = 0.3f + 1.3f * float(n);
+        t.tint = 0.5f;
+        t.pos = {40.0f, y, -surfaceHeight(*w.field, 40.0f, y, kChunkM, kRes)};
+        w.veg[i].push_back(t);
+      }
+  return w;
+}
+
+// Camera `d` metres (slant) from the stand's middle (6 m up), `elevDeg` above the
+// horizontal, looking straight at it.
+void aimAtStand(SimRendererWidget *r, const World &w, float d, float elevDeg) {
+  const float e = elevDeg * 3.14159265f / 180.0f;
+  aimCamera(r, w, 40.0f - d * std::cos(e), 0.0f, 6.0f + d * std::sin(e), 0.0f, e);
+}
+
+struct TreePixels {
+  int foliage = 0; // green-dominant pixels that differ from the empty scene
+  int all = 0;
+  double lum = 0.0; // mean luminance of those pixels
+};
+
+// What the trees add to the frame `off` (the same pose with vegetation off).
+TreePixels treeAdded(const QImage &onIn, const QImage &offIn) {
+  const QImage on = onIn.convertToFormat(QImage::Format_RGB32);
+  const QImage off = offIn.convertToFormat(QImage::Format_RGB32);
+  TreePixels t;
+  double sum = 0;
+  for (int y = 0; y < on.height(); ++y)
+    for (int x = 0; x < on.width(); ++x) {
+      const QRgb a = on.pixel(x, y), b = off.pixel(x, y);
+      if (std::abs(qRed(a) - qRed(b)) + std::abs(qGreen(a) - qGreen(b)) +
+              std::abs(qBlue(a) - qBlue(b)) <= 24)
+        continue;
+      ++t.all;
+      sum += 0.299 * qRed(a) + 0.587 * qGreen(a) + 0.114 * qBlue(a);
+      if (qGreen(a) >= qRed(a))
+        ++t.foliage;
+    }
+  t.lum = t.all ? sum / t.all : 0.0;
+  return t;
+}
+
+// The stand seen from `d` m at `elev` degrees down, drawn at `lod` (0-2 mesh,
+// 3 impostor, -1 by distance). The impostor atlas needs a few frames to bake.
+TreePixels standView(SimRendererWidget *r, const World &w, float d, float elev, int lod) {
+  aimAtStand(r, w, d, elev);
+  r->setVegetationEnabled(false);
+  const QImage off = r->grabFrame();
+  r->setVegetationEnabled(true);
+  r->setVegetationForcedLod(lod);
+  QImage on = settledFrame(r);
+  for (int i = 0; i < 40 && (lod == 3 || lod == -1) && d > 135.0f &&
+                  r->vegetationStats().impostors == 0;
+       ++i)
+    on = r->grabFrame();
+  r->setVegetationForcedLod(-1);
+  return treeAdded(on, off);
+}
+
 } // namespace
 
 class TstVegetationRender : public QObject {
@@ -240,8 +316,12 @@ private slots:
     QVERIFY(src.contains("+ q) / " + tiles + ";"));
     QVERIFY(src.contains("* " + az + ";"));
     QVERIFY(src.contains("mod(i0 + 1.0, " + az + ")"));
+    QVERIFY(src.contains("tileUv(u_tile + " + az + ", ")); // the top-down tile follows the azimuths
     // The atlas must be able to hold every azimuth of at least one variant.
-    QVERIFY(vsim::kVegAtlasTiles * vsim::kVegAtlasTiles >= vsim::kVegAtlasAzimuths);
+    QVERIFY(vsim::kVegAtlasTiles * vsim::kVegAtlasTiles >= vsim::kVegAtlasViews);
+    QCOMPARE(vsim::kVegAtlasViews, vsim::kVegAtlasAzimuths + 1);
+    // The nine tree variants (fir 2, pine 3, jacaranda 2, island 2) all get a tile set.
+    QVERIFY(9 * vsim::kVegAtlasViews <= vsim::kVegAtlasTiles * vsim::kVegAtlasTiles);
     // A stale tile count would show up as a literal divide by a different number.
     if (vsim::kVegAtlasTiles != 8)
       QVERIFY(!src.contains("tile / 8.0") && !src.contains("+ q) / 8.0"));
@@ -398,6 +478,223 @@ private slots:
     qInfo("mean height: foliage %.2f, bark %.2f", fh, bh);
     QVERIFY(bh < fh - 0.05);
     QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // Far trees seen from above keep their crowns. Four trees of one kind, 160 m
+  // and 250 m away (the impostor range), camera level with the crowns, 45, 60
+  // and 90 degrees down: the foliage pixels of the natural draw (impostor) against
+  // the same trees forced to LOD0. LOD0 gives 240 or more pixels in every row of
+  // the three kinds asserted (the single-tree rows were too small at 250 m), so it
+  // is the reference; LOD1 is logged beside it. The island tree is expected to
+  // overshoot, side views included (its impostor fills its whole card): it is
+  // held to what main drew (it improved from above), not to the band.
+  void farTreesKeepTheirFoliageFromAbove_data() {
+    QTest::addColumn<int>("kind");
+    for (int k = 0; k < 4; ++k)
+      QTest::newRow(k == 0 ? "fir" : k == 1 ? "pine" : k == 2 ? "jacaranda" : "island") << k;
+  }
+  void farTreesKeepTheirFoliageFromAbove() {
+    QFETCH(int, kind);
+    World w = standWorld(kind);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    // What main drew (natural / LOD0 foliage pixels) for the island, per row, at
+    // 160 m then 250 m, for 0, 45, 60 degrees down; none for 90 (no tile).
+    const double islandMain[2][3] = {{2.49, 4.37, 2.70}, {2.00, 2.50, 2.03}};
+    QString failures;
+    int di = 0;
+    for (float d : {160.0f, 250.0f}) {
+      int ei = 0;
+      for (float e : {0.0f, 45.0f, 60.0f, 90.0f}) {
+        const TreePixels nat = standView(rig.r, w, d, e, -1);
+        const bool impostors = rig.r->vegetationStats().impostors > 0;
+        const TreePixels ref0 = standView(rig.r, w, d, e, 0);
+        const TreePixels ref1 = standView(rig.r, w, d, e, 1);
+        if (rig.r->vegetationStats().impostorVariants == 0)
+          QSKIP("no impostor atlas on this context");
+        const double r0 = ref0.foliage ? double(nat.foliage) / ref0.foliage : 0.0;
+        const double r1 = ref1.foliage ? double(nat.foliage) / ref1.foliage : 0.0;
+        qInfo("kind %d, %.0f m, %.0f deg down: foliage px natural %d, LOD0 %d (x%.2f), LOD1 %d (x%.2f), impostors drawn %d",
+              kind, double(d), double(e), nat.foliage, ref0.foliage, r0, ref1.foliage, r1, int(impostors));
+        if (!impostors || ref0.foliage < (kind < 3 ? 150 : 90)) // the island tree is small
+          failures += QString("[no impostors or reference too small at %1 m, %2 deg] ").arg(double(d)).arg(double(e));
+        else if (kind < 3 && (r0 < 0.70 || r0 > 1.50))
+          failures += QString("[%1 m %2 deg: x%3] ").arg(double(d)).arg(double(e)).arg(r0, 0, 'f', 2);
+        else if (kind == 3) {
+          // Held to main's own ratio (a little slack); straight above main drew
+          // nothing, so no more than main's side-view overshoot.
+          const double limit = ei < 3 ? islandMain[di][ei] * 1.10 : 2.75;
+          if (r0 > limit)
+            failures += QString("[island %1 m %2 deg: x%3 > %4] ").arg(double(d)).arg(double(e)).arg(r0, 0, 'f', 2).arg(limit, 0, 'f', 2);
+        }
+        ++ei;
+      }
+      ++di;
+    }
+    QVERIFY2(failures.isEmpty(), qPrintable(failures));
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // The side view did not move: with the camera level with the crowns the
+  // billboard is the quad it was, over tiles baked as before. Foliage pixels and
+  // mean luminance against what main drew (measured on main, same scene).
+  void impostorSideViewIsUnchangedFromMain_data() {
+    QTest::addColumn<int>("kind");
+    QTest::addColumn<float>("dist");
+    QTest::addColumn<int>("foliage");
+    QTest::addColumn<double>("lum");
+    QTest::newRow("fir 160") << 0 << 160.0f << 1129 << 71.8;
+    QTest::newRow("fir 250") << 0 << 250.0f << 431 << 82.5;
+    QTest::newRow("pine 160") << 1 << 160.0f << 681 << 60.1;
+    QTest::newRow("pine 250") << 1 << 250.0f << 227 << 75.7;
+    QTest::newRow("jacaranda 160") << 2 << 160.0f << 2161 << 78.0;
+    QTest::newRow("jacaranda 250") << 2 << 250.0f << 893 << 87.8;
+    QTest::newRow("island 160") << 3 << 160.0f << 917 << 73.5;
+    QTest::newRow("island 250") << 3 << 250.0f << 384 << 84.0;
+  }
+  void impostorSideViewIsUnchangedFromMain() {
+    QFETCH(int, kind);
+    QFETCH(float, dist);
+    QFETCH(int, foliage);
+    QFETCH(double, lum);
+    World w = standWorld(kind);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    const TreePixels t = standView(rig.r, w, dist, 0.0f, -1);
+    if (rig.r->vegetationStats().impostorVariants == 0)
+      QSKIP("no impostor atlas on this context");
+    qInfo("kind %d, %.0f m side: foliage px %d (main %d), luminance %.1f (main %.1f)", kind, double(dist),
+          t.foliage, foliage, t.lum, lum);
+    QVERIFY2(std::abs(double(t.foliage) / foliage - 1.0) <= 0.03,
+             qPrintable(QString("foliage %1 vs main %2").arg(t.foliage).arg(foliage)));
+    QVERIFY2(std::abs(t.lum / lum - 1.0) <= 0.02,
+             qPrintable(QString("luminance %1 vs main %2").arg(t.lum).arg(lum)));
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // No pop where a tree changes from mesh to impostor (130 m), for every kind,
+  // level with the crowns and from 45 and 60 degrees up: the foliage the trees
+  // add to the frame (scaled by distance squared) and its mean luminance, step
+  // by step across the edge. The luminance of the impostor is higher than the
+  // mesh's (see the report); the blend hides it as a slow drift, not a step.
+  void impostorCrossFadeHasNoPop_data() {
+    QTest::addColumn<int>("kind");
+    QTest::addColumn<float>("elev");
+    for (int k = 0; k < 4; ++k)
+      for (float e : {0.0f, 45.0f, 60.0f})
+        QTest::newRow(qPrintable(QString("%1 @%2 deg").arg(k == 0 ? "fir" : k == 1 ? "pine" : k == 2 ? "jacaranda" : "island").arg(int(e))))
+            << k << e;
+  }
+  void impostorCrossFadeHasNoPop() {
+    QFETCH(int, kind);
+    QFETCH(float, elev);
+    World w = standWorld(kind);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    const float dists[] = {116, 120, 124, 128, 130, 132, 136, 140, 146};
+    std::vector<double> fol, lum;
+    for (float d : dists) {
+      const TreePixels t = standView(rig.r, w, d, elev, -1);
+      fol.push_back(t.foliage * double(d) * double(d) / (116.0 * 116.0));
+      lum.push_back(t.lum);
+    }
+    if (rig.r->vegetationStats().impostorVariants == 0)
+      QSKIP("no impostor atlas on this context");
+    double worstF = 1.0, worstL = 1.0;
+    for (size_t i = 1; i < fol.size(); ++i) {
+      QVERIFY2(fol[i - 1] > 20 && fol[i] > 20, "trees not found");
+      const double rf = fol[i] / fol[i - 1], rl = lum[i] / lum[i - 1];
+      if (std::abs(std::log(rf)) > std::abs(std::log(worstF)))
+        worstF = rf;
+      if (std::abs(std::log(rl)) > std::abs(std::log(worstL)))
+        worstL = rl;
+    }
+    qInfo("kind %d, %.0f deg: worst foliage step x%.2f, worst luminance step x%.2f, luminance drift x%.2f over %g-%g m",
+          kind, double(elev), worstF, worstL, lum.back() / lum.front(), double(dists[0]), double(dists[8]));
+    QVERIFY2(worstF >= 0.7 && worstF <= 1.0 / 0.7, qPrintable(QString("foliage step x%1").arg(worstF)));
+    QVERIFY2(worstL >= 0.8 && worstL <= 1.25, qPrintable(QString("luminance step x%1").arg(worstL)));
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // The blend between the side tiles and the top tile has no step: the pine at
+  // 160 m with the camera climbing from level to straight above in 5 degree steps
+  // (then 89.9 and exactly 90, where the quad's heading is undefined and the
+  // bake's up vector would be): the foliage pixels and luminance between
+  // neighbours stay within a stated bound, and exactly overhead draws the same
+  // as 89.9.
+  void pineElevationSweepIsSmooth() {
+    World w = standWorld(1);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    std::vector<float> elevs;
+    for (int e = 0; e <= 85; e += 5)
+      elevs.push_back(float(e));
+    elevs.push_back(89.9f);
+    elevs.push_back(90.0f);
+    std::vector<TreePixels> px;
+    for (float e : elevs) {
+      px.push_back(standView(rig.r, w, 160.0f, e, -1));
+      qInfo("pine 160 m, %.1f deg: foliage px %d, luminance %.1f, impostors %d", double(e), px.back().foliage,
+            px.back().lum, rig.r->vegetationStats().impostors);
+    }
+    if (rig.r->vegetationStats().impostorVariants == 0)
+      QSKIP("no impostor atlas on this context");
+    double worstF = 1.0, worstL = 1.0;
+    for (size_t i = 1; i + 2 < px.size(); ++i) { // up to 85 -> 89.9
+      QVERIFY2(px[i - 1].foliage > 100 && px[i].foliage > 100, "trees not found");
+      const double rf = double(px[i].foliage) / px[i - 1].foliage, rl = px[i].lum / px[i - 1].lum;
+      if (std::abs(std::log(rf)) > std::abs(std::log(worstF)))
+        worstF = rf;
+      if (std::abs(std::log(rl)) > std::abs(std::log(worstL)))
+        worstL = rl;
+    }
+    qInfo("pine sweep: worst foliage step x%.2f, worst luminance step x%.2f per 5 degrees", worstF, worstL);
+    QVERIFY2(worstF >= 0.80 && worstF <= 1.25, qPrintable(QString("foliage step x%1").arg(worstF)));
+    QVERIFY2(worstL >= 0.93 && worstL <= 1.08, qPrintable(QString("luminance step x%1").arg(worstL)));
+    const TreePixels &p899 = px[px.size() - 2], &p90 = px.back();
+    QVERIFY2(p90.foliage > 100, "nothing drawn from straight above");
+    QVERIFY2(std::abs(double(p90.foliage) / p899.foliage - 1.0) <= 0.05,
+             qPrintable(QString("90 deg %1 vs 89.9 deg %2").arg(p90.foliage).arg(p899.foliage)));
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // The top-down tile exists for every variant and the whole bake is repeatable:
+  // two renderers baking the same forest give the same atlas (a hash of every
+  // tile's colour and mask, read back), and the top tiles are not empty.
+  void impostorBakeHasTopViewsAndIsRepeatable() {
+    unsigned long long hash[2] = {0, 0};
+    long long top[2] = {0, 0};
+    for (int run = 0; run < 2; ++run) {
+      const World forest = buildWorld(kPalForest, -2, 1);
+      Rig rig(true);
+      rig.r->setVegetationBakeStats(true);
+      loadTerrain(rig.r, forest);
+      loadVegetation(rig.r, forest);
+      QVERIFY(rig.show());
+      aimCamera(rig.r, forest, -200.0f, -150.0f, 12.0f, 0.75f, 0.06f);
+      settledFrame(rig.r);
+      if (rig.r->vegetationStats().impostorVariants == 0)
+        QSKIP("no impostor atlas on this context");
+      const VegetationRenderer::BakeStats b = rig.r->vegetationBakeStats();
+      hash[run] = b.hash;
+      top[run] = b.topPx;
+      qInfo("run %d: %d variants baked, top tiles cover %lld texels, atlas hash %llx", run,
+            rig.r->vegetationStats().impostorVariants, b.topPx, b.hash);
+      QCOMPARE(rig.r->glErrorCount(), 0);
+    }
+    // Nine variants, each with a top tile of at least a few hundred covered texels.
+    QVERIFY(top[0] > 2700);
+    QCOMPARE(top[0], top[1]);
+    QVERIFY(hash[0] != 0);
+    QCOMPARE(hash[0], hash[1]);
   }
 
   // A trunk keeps its brightness when the mesh gives way to the impostor. One
