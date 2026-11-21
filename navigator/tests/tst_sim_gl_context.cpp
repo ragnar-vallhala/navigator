@@ -736,6 +736,62 @@ private slots:
     QCOMPARE(ripples->stepCount(), steps);
     QCOMPARE(rig.r->waterRenderer()->rippleUploads(), settled);
   }
+
+  // Screen-space reflections: the opaque scene is copied each frame (High only),
+  // the copy never raises a GL error, and turning it off or dropping to Low
+  // stops the copying. The frame itself must differ with it on (the bank shows
+  // in the water), by more than the water's own animation does between frames.
+  void waterReflectsTheBankWhenSsrIsOn() {
+    vsim::procgen::FieldParams fp;
+    fp.seed = 7u;
+    fp.palette = vsim::procgen::kPalHills;
+    fp.heightM = 70.0f;
+    fp.flatRadiusM = 12.0f;
+    auto field = std::make_shared<const vsim::procgen::TerrainField>(fp);
+    const auto bodies =
+        field->water().bodiesIn(field->heightSource(), -1500, -1500, 1500, 1500);
+    QVERIFY(!bodies.empty());
+    const vsim::procgen::WaterBody b = bodies.front();
+
+    Rig rig;
+    QVERIFY(rig.showDocked());
+    rig.r->setTerrainField(field);
+    rig.r->setCameraPoseForTest({b.cx - b.radiusM * 0.5f, b.cy, -(b.level + 1.2f)}, 0.0f, 0.04f);
+    rig.r->setWaterQuality(vsim::terrain::Quality::High);
+
+    const auto bandDiff = [](const QImage &x, const QImage &y) {
+      qint64 sum = 0;
+      for (int py = x.height() * 45 / 100; py < x.height() * 75 / 100; ++py)
+        for (int px = 0; px < x.width(); ++px)
+          sum += qAbs(qGray(x.pixel(px, py)) - qGray(y.pixel(px, py)));
+      return sum;
+    };
+
+    rig.r->setWaterSsr(false);
+    const QImage off1 = rig.r->grabFrame();
+    QVERIFY(rig.r->waterRenderer()->glReady());
+    QVERIFY(!rig.r->waterRenderer()->ssrActive());
+    QCOMPARE(rig.r->waterRenderer()->sceneCaptures(), 0);
+    const QImage off2 = rig.r->grabFrame();
+    const qint64 baseline = bandDiff(off1, off2);
+
+    rig.r->setWaterSsr(true);
+    const QImage on = rig.r->grabFrame();
+    QVERIFY(rig.r->waterRenderer()->ssrActive());
+    QVERIFY(rig.r->waterRenderer()->sceneCaptures() >= 1);
+    QVERIFY(!rig.r->waterRenderer()->ssrBroken());
+    QCOMPARE(rig.r->glErrorCount(), 0);
+    const qint64 withSsr = bandDiff(off2, on);
+    QVERIFY2(withSsr > baseline + 1000,
+             qPrintable(QString("ssr=%1 baseline=%2").arg(withSsr).arg(baseline)));
+
+    // Low draws no water, so nothing is copied.
+    const int caps = rig.r->waterRenderer()->sceneCaptures();
+    rig.r->setWaterQuality(vsim::terrain::Quality::Low);
+    rig.r->grabFrame();
+    QCOMPARE(rig.r->waterRenderer()->sceneCaptures(), caps);
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
 };
 
 QTEST_MAIN(TstSimGlContext)

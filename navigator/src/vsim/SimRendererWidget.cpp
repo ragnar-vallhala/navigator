@@ -2338,6 +2338,10 @@ void SimRendererWidget::drawWater(const QMatrix4x4 &view) {
   f.sunDir = sunDir_;
   f.time = floraTime_;
   f.ripples = ripples_.get();
+  f.ssr = waterSsr_;
+  f.sceneFbo = context()->defaultFramebufferObject();
+  f.viewW = fbW_;
+  f.viewH = fbH_;
   f.sunIntensity = litSunInt_;
   f.ambientStrength = litAmbStr_;
   f.fogDensity = atmo_.fogDensity;
