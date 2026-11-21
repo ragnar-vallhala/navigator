@@ -32,6 +32,7 @@ namespace {
 constexpr int kAtlasTiles = kVegAtlasTiles;
 constexpr int kTuftSize = 7;      // grass pieces per grass instance
 constexpr int kAtlasAzimuths = kVegAtlasAzimuths;
+constexpr int kAtlasViews = kVegAtlasViews;
 constexpr int kTilePx = 128;
 constexpr float kPi = 3.14159265358979f;
 constexpr float kSinkM = 0.06f;    // instances stand this far into the surface
@@ -268,8 +269,10 @@ void main() {
 }
 )GLSL";
 
-// Billboards: one camera-facing (about the vertical) quad per instance, sampled
-// from the baked atlas with a blend of the two nearest azimuth tiles.
+// Billboards: one camera-facing quad per instance (spherical about the crown
+// centre, so it is vertical from the side and tilts to face a camera above the
+// tree), sampled from the baked atlas. From the side: the two nearest azimuth
+// tiles. From above: the top-down tile, blended in by the camera elevation.
 const char *kBillVS = R"GLSL(
 #version 330 core
 layout(location = 3) in vec4 i_posyaw;  // base (NED), plain yaw: only trees are billboarded, never a tilted rock
@@ -282,7 +285,11 @@ uniform float u_half;    // quad half size, model units
 uniform float u_tile;    // first atlas tile of this variant
 out vec2 v_uv0;
 out vec2 v_uv1;
+out vec2 v_uvT;          // the top-down tile
+out vec2 v_tc;           // position in the top tile, -1..1 (outside the tile: nothing there)
 out float v_w;
+flat out float v_top;    // weight of the top-down tile
+out vec2 v_el;           // sin, cos of the camera elevation about the crown centre
 out float v_fade;
 out float v_tint;
 out vec3 v_world;
@@ -302,13 +309,19 @@ vec2 tileUv(float tile, vec2 q) {
 void main() {
   vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
   float s = i_misc.x * u_k;
-  vec2 hv = u_eye.xy - i_posyaw.xy;
-  float hlen = length(hv);
-  vec2 h = hlen > 1e-4 ? hv / hlen : vec2(1.0, 0.0);
-  vec2 rgt = vec2(h.y, -h.x);
+  vec3 centre = i_posyaw.xyz + vec3(0.0, 0.0, -u_cy * s);
+  vec3 te = u_eye - centre;
+  float hlen = length(te.xy);
+  // Straight overhead has no heading: any fixed one keeps the quad and the top
+  // tile's rotation finite (and they agree, both come from h).
+  vec2 h = hlen > 1e-4 ? te.xy / hlen : vec2(1.0, 0.0);
+  float sinE = clamp(-te.z / max(length(te), 1e-4), 0.0, 1.0); // an eye below the crown: the horizon view
+  float cosE = sqrt(1.0 - sinE * sinE);
+  vec3 dir = vec3(h * cosE, -sinE);          // to the eye, NED
+  vec3 rgt3 = vec3(h.y, -h.x, 0.0);
+  vec3 upq = cross(dir, rgt3);               // (0,0,-1) at the horizon, -h overhead
   vec4 vv = instVary(i_posyaw.xy);
-  vec3 w = i_posyaw.xyz + vec3(0.0, 0.0, -u_cy * s) +
-           vec3(rgt * (c.x * u_half * s * vv.y), -c.y * u_half * s);
+  vec3 w = centre + rgt3 * (c.x * u_half * s * vv.y) + upq * (c.y * u_half * s);
   float cyw = cos(i_posyaw.w), syw = sin(i_posyaw.w);
   vec2 hl = vec2(cyw * h.x + syw * h.y, -syw * h.x + cyw * h.y); // into model frame
   hl.y *= vv.x; // a mirrored tree seen from here is the baked one seen from the mirror azimuth
@@ -321,6 +334,18 @@ void main() {
   if (vv.x < 0.0) q.x = 1.0 - q.x;
   v_uv0 = tileUv(u_tile + i0, q);
   v_uv1 = tileUv(u_tile + i1, q);
+  // The top tile is the view from straight above with the image's up toward model
+  // north (the side tile at azimuth 0 tilted over). Screen right/up of this quad
+  // are the horizontal offsets (hl.y, -hl.x) and, away from the eye, -hl; the
+  // ground offset along the up axis is stretched by 1/sqrt(sinE): a crown seen from
+  // 45 degrees is only partly flattened, its height still shows.
+  float e = asin(sinE);
+  v_top = smoothstep(@TOP_FROM@, @TOP_TO@, e);
+  float cxe = vv.x * c.x;
+  float cyv = c.y / max(sqrt(sinE), 0.6);
+  v_tc = vec2(-hl.x * cxe - hl.y * cyv, hl.y * cxe - hl.x * cyv);
+  v_uvT = tileUv(u_tile + @ATLAS_AZ@, 0.5 + 0.48 * v_tc);
+  v_el = vec2(sinE, cosE);
   v_fade = i_misc.z;
   v_tint = i_misc.y;
   v_world = w;
@@ -332,7 +357,11 @@ const char *kBillFSHead = R"GLSL(
 #version 330 core
 in vec2 v_uv0;
 in vec2 v_uv1;
+in vec2 v_uvT;
+in vec2 v_tc;
 in float v_w;
+flat in float v_top;
+in vec2 v_el;
 in float v_fade;
 in float v_tint;
 in vec3 v_world;
@@ -351,26 +380,47 @@ float bayer4(vec2 p) {
 }
 void main() {
   vec4 c0 = texture(u_atlas, v_uv0), c1 = texture(u_atlas, v_uv1);
+  vec4 m0 = texture(u_atlasMask, v_uv0), m1 = texture(u_atlasMask, v_uv1);
+  // Coverage, premultiplied colour, foliage share and bark occlusion of the side
+  // views (the two nearest azimuths); a v_top share of the pixels (screen-door,
+  // Bayer) show the top-down view instead. A dither rather than an alpha mix: a
+  // mix would make every top-only texel pass the coverage test at once when the
+  // weight crosses it, a step in the pixels the tree covers.
   float a = mix(c0.a, c1.a, v_w);
-  if (a < 0.35) discard; // mip levels thin the coverage, so keep a bit more than half
+  vec3 rgbA = c0.rgb * c0.a * (1.0 - v_w) + c1.rgb * c1.a * v_w;
+  float mfol = mix(m0.a, m1.a, v_w);
+  float aoSum = mix(m0.g, m1.g, v_w);
+  float thr = 0.35; // mip levels thin the coverage, so keep a bit more than half
+  if (v_top > 0.0) { // flat per instance, so the fetches stay in uniform control flow
+    float in_t = max(abs(v_tc.x), abs(v_tc.y)) <= 1.0 ? 1.0 : 0.0; // the rotated quad's corners
+    vec4 ct = texture(u_atlas, v_uvT) * in_t;
+    vec4 mt = texture(u_atlasMask, v_uvT) * in_t;
+    if (v_top > bayer4(gl_FragCoord.xy + vec2(2.0, 1.0))) {
+      a = ct.a;
+      rgbA = ct.rgb * ct.a;
+      mfol = mt.a;
+      aoSum = mt.g;
+      thr = @TOP_THR@;
+    }
+  }
+  if (a < thr) discard;
   float b = bayer4(gl_FragCoord.xy);
   bool keep = v_fade > 1.5 ? (v_fade - 2.0) < b : v_fade > b;
   if (!keep) discard;
-  vec3 rgb = (c0.rgb * c0.a * (1.0 - v_w) + c1.rgb * c1.a * v_w) / max(a, 1e-3);
+  vec3 rgb = rgbA / max(a, 1e-3);
   // Foliage takes the crown tint; bark keeps its colour, as on the meshes.
-  vec4 m0 = texture(u_atlasMask, v_uv0), m1 = texture(u_atlasMask, v_uv1);
-  float mfol = mix(m0.a, m1.a, v_w);
   float fol = clamp(mfol / max(a, 1e-3), 0.0, 1.0);
   // Mean ambient occlusion of the bark texels (stored in the mask's green, where
   // the bake keeps it out of the bark albedo so the lighting below can apply it
   // the way the mesh shader does).
-  float barkAo = clamp(mix(m0.g, m1.g, v_w) / max(a - mfol, 0.02), 0.0, 1.0);
+  float barkAo = clamp(aoSum / max(a - mfol, 0.02), 0.0, 1.0);
   vec3 toFrag = v_world - u_campos;
   float dist = length(toFrag);
   vec3 sun = normalize(u_sundir);
-  // A crown has no single normal: lean the upward one toward the viewer.
+  // A crown has no single normal: lean the upward one toward the viewer, in 3D
+  // (the horizontal lean shrinks and the upward part grows as the camera climbs).
   vec2 hz = toFrag.xy / max(length(toFrag.xy), 1e-3);
-  vec3 N = normalize(vec3(-hz * 0.45, -0.85));
+  vec3 N = normalize(vec3(-hz * 0.45 * v_el.y, -(0.85 + 0.45 * v_el.x)));
   // Same foliage terms as the mesh shader (ambient floor, light through leaves).
   vec3 L = ambientLit(N) * 1.5 + sunLightColor() * (wrapDiffuse(N, sun) * 0.95 + 0.25);
   // Bark is lit like the mesh trunk (no crown rounding, no light through leaves):
@@ -501,10 +551,19 @@ void restoreCoverage(QImage &img, int cutoff255, double target) {
 
 // The tile and azimuth counts reach the shader from the same constants the
 // bake uses, so the two cannot drift apart.
+// The billboard fragment shader's main, with the top tile's coverage threshold in.
+static QByteArray billboardFragmentMain() {
+  QByteArray src(kBillFSMain);
+  src.replace("@TOP_THR@", QByteArray::number(double(kVegTopCoverage), 'f', 3));
+  return src;
+}
+
 QByteArray vegBillboardVertexSource() {
   QByteArray src(kBillVS);
   src.replace("@ATLAS_TILES@", QByteArray::number(double(kAtlasTiles), 'f', 1));
   src.replace("@ATLAS_AZ@", QByteArray::number(double(kAtlasAzimuths), 'f', 1));
+  src.replace("@TOP_FROM@", QByteArray::number(double(kVegTopFromDeg * kPi / 180.0f), 'f', 5));
+  src.replace("@TOP_TO@", QByteArray::number(double(kVegTopToDeg * kPi / 180.0f), 'f', 5));
   return src;
 }
 
@@ -789,7 +848,7 @@ bool VegetationRenderer::buildPrograms(const VegGlsl &g) {
   progBillboard_ = std::make_unique<QOpenGLShaderProgram>();
   const bool billOk = linkProgram(
       *progBillboard_, "vegetation billboard", vegBillboardVertexSource(),
-      QByteArray(kBillFSHead) + g.atmosphere + g.lighting + kCommonGLSL + kBillFSMain);
+      QByteArray(kBillFSHead) + g.atmosphere + g.lighting + kCommonGLSL + billboardFragmentMain());
   progBake_ = std::make_unique<QOpenGLShaderProgram>();
   const bool bakeOk = linkProgram(*progBake_, "vegetation bake", kBakeVS, kBakeFS);
   if (!billOk || !bakeOk) {
@@ -1095,7 +1154,6 @@ void VegetationRenderer::ensureMesh(VariantGpu &v, int lod) {
   glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
-// Renders `v` from kAtlasAzimuths directions into its atlas tiles.
 // Reads this variant's baked tiles back (tests only): how many covered texels
 // are foliage and how many are bark, and where they sit vertically.
 void VegetationRenderer::collectBakeStats(const VariantGpu &v) {
@@ -1104,13 +1162,24 @@ void VegetationRenderer::collectBakeStats(const VariantGpu &v) {
   glGetIntegerv(GL_READ_BUFFER, &prevRead);
   glBindFramebuffer(GL_FRAMEBUFFER, atlasFbo_);
   std::vector<unsigned char> cov(size_t(kTilePx) * kTilePx * 4), msk(cov.size());
-  for (int a = 0; a < kAtlasAzimuths; ++a) {
+  for (int a = 0; a < kAtlasViews; ++a) {
     const int tile = v.tile + a;
     const int tx = (tile % kAtlasTiles) * kTilePx, ty = (tile / kAtlasTiles) * kTilePx;
     glReadBuffer(GL_COLOR_ATTACHMENT0);
     glReadPixels(tx, ty, kTilePx, kTilePx, GL_RGBA, GL_UNSIGNED_BYTE, cov.data());
     glReadBuffer(GL_COLOR_ATTACHMENT1);
     glReadPixels(tx, ty, kTilePx, kTilePx, GL_RGBA, GL_UNSIGNED_BYTE, msk.data());
+    unsigned long long hsh = 1469598103934665603ull; // FNV-1a over the tile
+    for (unsigned char byte : cov)
+      hsh = (hsh ^ byte) * 1099511628211ull;
+    for (unsigned char byte : msk)
+      hsh = (hsh ^ byte) * 1099511628211ull;
+    bakeStatsOut_.hash += hsh * (2ull * (unsigned long long)tile + 1ull);
+    if (a >= kAtlasAzimuths) { // the top tile only counts its covered texels
+      for (size_t i = 3; i < cov.size(); i += 4)
+        bakeStatsOut_.topPx += cov[i] >= 128 ? 1 : 0;
+      continue;
+    }
     for (int y = 0; y < kTilePx; ++y)
       for (int x = 0; x < kTilePx; ++x) {
         const size_t i = (size_t(y) * kTilePx + size_t(x)) * 4 + 3;
@@ -1130,6 +1199,7 @@ void VegetationRenderer::collectBakeStats(const VariantGpu &v) {
   glReadBuffer(GLenum(prevRead)); // belongs to the framebuffer bound when it was read
 }
 
+// Renders `v` from kAtlasAzimuths directions and from above into its atlas tiles.
 void VegetationRenderer::bakeImpostors(VariantGpu &v) {
   ensureMesh(v, 1);
   const VegMesh &m =
@@ -1153,17 +1223,25 @@ void VegetationRenderer::bakeImpostors(VariantGpu &v) {
   QMatrix4x4 proj;
   proj.ortho(-H, H, -H, H, 0.1f, 2.0f * D);
   glBindVertexArray(v.vao[1]);
-  for (int a = 0; a < kAtlasAzimuths; ++a) {
+  for (int a = 0; a < kAtlasViews; ++a) {
     const int tile = v.tile + a;
     const int tx = (tile % kAtlasTiles) * kTilePx, ty = (tile / kAtlasTiles) * kTilePx;
     glViewport(tx, ty, kTilePx, kTilePx);
     glScissor(tx, ty, kTilePx, kTilePx);
     glClearColor(0.30f, 0.36f, 0.24f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    const float al = 2.0f * kPi * float(a) / float(kAtlasAzimuths);
     QMatrix4x4 view;
-    view.lookAt(QVector3D(std::sin(al) * D, v.centreY, std::cos(al) * D),
-                QVector3D(0, v.centreY, 0), QVector3D(0, 1, 0));
+    if (a < kAtlasAzimuths) {
+      const float al = 2.0f * kPi * float(a) / float(kAtlasAzimuths);
+      view.lookAt(QVector3D(std::sin(al) * D, v.centreY, std::cos(al) * D),
+                  QVector3D(0, v.centreY, 0), QVector3D(0, 1, 0));
+    } else {
+      // From straight above. The usual up vector (0,1,0) is parallel to the view
+      // direction here (lookAt would give a degenerate basis), so say which way
+      // the image goes: toward -z (model north), the azimuth-0 view tilted over.
+      view.lookAt(QVector3D(0, v.centreY + D, 0), QVector3D(0, v.centreY, 0),
+                  QVector3D(0, 0, -1));
+    }
     progBake_->setUniformValue(loc_.bakeMvp, proj * view);
     for (const VegSubmesh &sm : m.submeshes) {
       const Mat &mat = sg.mats[size_t(sm.material)];
@@ -1343,10 +1421,13 @@ void VegetationRenderer::draw(const VegFrame &f) {
           v.centreY = 0.5f * (av.bboxMin.y() + av.bboxMax.y());
           const float rh = std::hypot(std::max(std::fabs(av.bboxMin.x()), std::fabs(av.bboxMax.x())),
                                       std::max(std::fabs(av.bboxMin.z()), std::fabs(av.bboxMax.z())));
+          // A square that holds the crown from any direction: a crown fits an
+          // ellipsoid, whose projection never exceeds its longest semi-axis (so
+          // the side view's size, and so its resolution, are unchanged).
           v.billH = 1.06f * std::max(0.5f * ext.y(), rh);
-          if (info.impostor && nextTile + kAtlasAzimuths <= kAtlasTiles * kAtlasTiles) {
+          if (info.impostor && nextTile + kAtlasViews <= kAtlasTiles * kAtlasTiles) {
             v.tile = nextTile;
-            nextTile += kAtlasAzimuths;
+            nextTile += kAtlasViews;
           }
           // Grass tufts outnumber the single blades; every tree variant of a
           // kind is equally likely.
