@@ -12,7 +12,8 @@ namespace {
 QString touchExe(const QString &path) {
   QDir().mkpath(QFileInfo(path).path());
   QFile f(path);
-  f.open(QIODevice::WriteOnly);
+  if (!f.open(QIODevice::WriteOnly))
+    return {};
   f.write("#!/bin/sh\n");
   f.close();
   f.setPermissions(QFile::permissions(path) | QFile::ExeOwner);
@@ -51,7 +52,13 @@ private slots:
     QTemporaryDir t;
     const QString app = t.path() + "/app";
     touchExe(app + "/" + kBin);
+    // Windows treats a file as executable only by extension, so keep ".exe" there.
+#ifdef Q_OS_WIN
+    const QString envBin = touchExe(t.path() + "/elsewhere/custom_rtos.exe");
+#else
     const QString envBin = touchExe(t.path() + "/elsewhere/custom_rtos");
+#endif
+    QVERIFY(!envBin.isEmpty());
     QCOMPARE(findRtosBackend(envBin, app, t.path() + "/repo").found, envBin);
   }
   void besideBinaryBeatsRepo() {
@@ -78,7 +85,8 @@ private slots:
 #ifndef Q_OS_WIN
     QFile f(app + "/lib/" + kBin);                        // present but not executable
     QDir().mkpath(app + "/lib");
-    f.open(QIODevice::WriteOnly); f.close();
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.close();
     f.setPermissions(QFile::ReadOwner | QFile::WriteOwner);
 #endif
     const QString good = touchExe(t.path() + "/lib/" + kBin);   // ../lib of app
