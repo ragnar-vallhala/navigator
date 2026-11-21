@@ -827,6 +827,68 @@ private slots:
     QCOMPARE(rig.r->waterRenderer()->sceneCaptures(), caps);
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
+
+  // Shore polish: looking down across the pond, the water stays soft and
+  // see-through over the shallows instead of an opaque sheet with a hard foam
+  // rim. The clock is frozen, so the frame with water differs from the one
+  // without only where the water is drawn.
+  void shoreWaterIsSoftAndSeeThrough() {
+    vsim::procgen::FieldParams fp;
+    fp.seed = 7u;
+    fp.palette = vsim::procgen::kPalHills;
+    fp.heightM = 70.0f;
+    fp.flatRadiusM = 12.0f;
+    auto field = std::make_shared<const vsim::procgen::TerrainField>(fp);
+    const auto bodies =
+        field->water().bodiesIn(field->heightSource(), -1500, -1500, 1500, 1500);
+    QVERIFY(!bodies.empty());
+    const vsim::procgen::WaterBody b = bodies.front();
+
+    Rig rig;
+    QVERIFY(rig.showDocked());
+    rig.r->setTerrainField(field);
+    rig.r->setCameraPoseForTest({b.cx - b.radiusM * 1.7f, b.cy, -(b.level + 30.0f)}, 0.0f, 0.75f);
+    rig.r->freezeAnimationForTest(true);
+    {
+      const Soup g = fieldPatch(*field, b.cx, b.cy, 80.0f, 80);
+      rig.r->setWorldChunk(0x200000001LL, g.pos, g.nrm, g.col);
+    }
+    rig.r->setWaterSsr(false);
+    rig.r->setWaterQuality(vsim::terrain::Quality::Low);
+    const QImage dry = rig.r->grabFrame();
+    rig.r->setWaterQuality(vsim::terrain::Quality::High);
+    const QImage wet = rig.r->grabFrame();
+    QVERIFY(rig.r->waterRenderer()->glReady());
+    QCOMPARE(rig.r->glErrorCount(), 0);
+
+    // Mean |wet - dry| per image row (the camera looks north, so rows run from
+    // the far side of the pond down to the near, dry bank).
+    QVector<double> prof;
+    for (int py = 0; py < wet.height(); ++py) {
+      double sum = 0;
+      for (int px = 0; px < wet.width(); ++px)
+        sum += qAbs(qGray(wet.pixel(px, py)) - qGray(dry.pixel(px, py)));
+      prof << sum / wet.width();
+    }
+    // The near shore (the band of rows where the pond meets the grass in front
+    // of the camera) is where the foam and the shallows sit. With a soft foam
+    // and a 1.1 m see-through ramp the water there stays close to the ground
+    // beneath it; an opaque, bright foam rim pushes the mean difference far up.
+    // Software GL with a frozen clock is deterministic; the old hard-foam,
+    // half-metre-veil shader measures about 30 here, the limit is 27.
+    double nearBand = 0;
+    for (int py = 240; py < 312; ++py)
+      nearBand += prof[py];
+    nearBand /= 72.0;
+    QString dump;
+    for (int py = 0; py < prof.size(); py += 12)
+      dump += QString::number(prof[py], 'f', 1) + ' ';
+    const QString info = QString("nearBand=%1 profile: %2").arg(nearBand).arg(dump);
+    QVERIFY2(prof[0] < 1.0 && prof[wet.height() - 1] < 1.0,
+             qPrintable("the frame has no dry ground at both ends; " + info));
+    QVERIFY2(nearBand > 8.0, qPrintable("the water is not drawn; " + info));
+    QVERIFY2(nearBand < 27.0, qPrintable("the shallows are opaque / the foam is hard; " + info));
+  }
 };
 
 QTEST_MAIN(TstSimGlContext)
