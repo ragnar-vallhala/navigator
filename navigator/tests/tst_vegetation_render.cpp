@@ -628,7 +628,10 @@ private slots:
     loadTerrain(rig.r, w);
     loadVegetation(rig.r, w);
     QVERIFY(rig.show());
-    const float dists[] = {116, 120, 124, 128, 130, 132, 136, 140, 146};
+    // Two metres apart across the whole fade, so the difference between the mesh
+    // and the impostor (which varies from one rasteriser to the next) is spread
+    // over many steps instead of landing in one.
+    const float dists[] = {116, 118, 120, 122, 124, 126, 128, 130, 132, 134, 136, 138, 140, 142, 144, 146};
     std::vector<double> fol, lum;
     for (float d : dists) {
       const TreePixels t = standView(rig.r, w, d, elev, -1);
@@ -637,13 +640,6 @@ private slots:
     }
     if (rig.r->vegetationStats().impostorVariants == 0)
       QSKIP("no impostor atlas on this context");
-    // What the switch itself is worth on this rasteriser: the impostor against
-    // the LOD1 mesh at the edge. A thin crown moves it between machines, and the
-    // step may be as big as that and no bigger.
-    const TreePixels atImp = standView(rig.r, w, 130.0f, elev, 3);
-    const TreePixels atMesh = standView(rig.r, w, 130.0f, elev, 1);
-    const double edge = double(atImp.foliage) / std::max(1, atMesh.foliage);
-    const double stepMax = std::max(1.0 / 0.7, 1.15 * edge), stepMin = std::min(0.7, 0.87 / std::max(edge, 1e-3));
     double worstF = 1.0, worstL = 1.0;
     for (size_t i = 1; i < fol.size(); ++i) {
       QVERIFY2(fol[i - 1] > 20 && fol[i] > 20, "trees not found");
@@ -654,9 +650,8 @@ private slots:
         worstL = rl;
     }
     qInfo("kind %d, %.0f deg: worst foliage step x%.2f, worst luminance step x%.2f, luminance drift x%.2f over %g-%g m",
-          kind, double(elev), worstF, worstL, lum.back() / lum.front(), double(dists[0]), double(dists[8]));
-    qInfo("kind %d, %.0f deg: impostor/LOD1 at 130 m x%.2f, step bound %.2f..%.2f", kind, double(elev), edge, stepMin, stepMax);
-    QVERIFY2(worstF >= stepMin && worstF <= stepMax, qPrintable(QString("foliage step x%1").arg(worstF)));
+          kind, double(elev), worstF, worstL, lum.back() / lum.front(), double(dists[0]), double(dists[15]));
+    QVERIFY2(worstF >= 0.7 && worstF <= 1.0 / 0.7, qPrintable(QString("foliage step x%1").arg(worstF)));
     QVERIFY2(worstL >= 0.8 && worstL <= 1.25, qPrintable(QString("luminance step x%1").arg(worstL)));
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
@@ -711,6 +706,39 @@ private slots:
     QVERIFY2(p90.foliage > 100, "nothing drawn from straight above");
     QVERIFY2(std::abs(double(p90.foliage) / p899.foliage - 1.0) <= 0.05,
              qPrintable(QString("90 deg %1 vs 89.9 deg %2").arg(p90.foliage).arg(p899.foliage)));
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // The crown keeps its tone as the top tile comes in: the mean luminance of the
+  // tree pixels from 20, 30 and 45 degrees up stays within 15 percent of the
+  // side view of the same trees (the top tile used to read darker than the side
+  // tiles, and a dark saucer showed where it replaced the crown).
+  void impostorKeepsItsToneFromAbove_data() {
+    QTest::addColumn<int>("kind");
+    QTest::newRow("fir") << 0;
+    QTest::newRow("pine") << 1;
+    QTest::newRow("jacaranda") << 2;
+  }
+  void impostorKeepsItsToneFromAbove() {
+    QFETCH(int, kind);
+    World w = standWorld(kind);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    const TreePixels side = standView(rig.r, w, 160.0f, 0.0f, -1);
+    if (rig.r->vegetationStats().impostorVariants == 0)
+      QSKIP("no impostor atlas on this context");
+    QVERIFY2(side.foliage > 100, "trees not found");
+    QString failures;
+    for (float e : {20.0f, 30.0f, 45.0f}) {
+      const TreePixels t = standView(rig.r, w, 160.0f, e, -1);
+      const double r = t.lum / side.lum;
+      qInfo("TONE kind %d, %.0f deg: luminance %.1f (side %.1f), x%.3f", kind, double(e), t.lum, side.lum, r);
+      if (r < 0.85 || r > 1.15)
+        failures += QString("[%1 deg: x%2] ").arg(double(e)).arg(r, 0, 'f', 3);
+    }
+    QVERIFY2(failures.isEmpty(), qPrintable(failures));
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
 

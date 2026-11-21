@@ -135,17 +135,24 @@ constexpr int kVegAtlasViews = kVegAtlasAzimuths + 1;
 constexpr float kVegTopFromDeg = 0.0f;
 constexpr float kVegTopToDeg = 55.0f;
 constexpr float kVegTopCoverage = 0.6f;
-// The top tile takes over from the crown's centre outward: inside a radius that
-// grows with the elevation it replaces the side tiles (quad half-widths: a crown
-// fills about 0.7, the tile's corner is at 1.41), over a soft band kVegTopSoft
-// wide. The covered area grows in equal proportions per degree (kVegTopGrow
-// shapes it) until the crown is filled at kVegTopFull of the ramp, then the radius
-// grows by kVegTopRest more to clear what is left of the side tiles.
+// The top tile comes in from the crown's centre outward: inside a radius that
+// grows with the elevation (quad half-widths: a crown fills about 0.7, the tile's
+// corner is at 1.41, kVegTopSoft the soft band) it is drawn where the side tiles
+// show no foliage, and the side tiles stay under it (so the top tile's holes show
+// the crown behind them, not the sky). The radius grows in equal proportions per
+// degree (kVegTopGrow shapes it) until the crown is filled at kVegTopFull of the
+// ramp, then kVegTopRest more. Inside the disc the side tiles fade out over
+// kVegTopKeep0..1 of the ramp (where the top tile covers), and outside it over
+// kVegTopOut0..1, so from above no spire or trunk is left standing under the crown.
 constexpr float kVegTopReach = 0.8f;
-constexpr float kVegTopGrow = 1.0f;
-constexpr float kVegTopFull = 0.9f;
+constexpr float kVegTopGrow = 1.8f;
+constexpr float kVegTopFull = 0.95f;
 constexpr float kVegTopRest = 0.8f;
 constexpr float kVegTopSoft = 0.15f;
+constexpr float kVegTopOut0 = 0.6f;
+constexpr float kVegTopOut1 = 0.85f;
+constexpr float kVegTopKeep0 = 0.5f;
+constexpr float kVegTopKeep1 = 0.9f;
 
 // Vertex shader source of the billboard program, with the atlas layout filled
 // in from the constants above (exposed so a test can check it).
