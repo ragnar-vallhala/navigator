@@ -409,19 +409,26 @@ private slots:
   void trunkBrightnessSurvivesTheImpostorSwitch_data() {
     QTest::addColumn<int>("kind");
     QTest::addColumn<bool>("strict");
-    // Only the pine's trunk is asserted: it is the conifer whose bark the
-    // billboard now lights like the mesh. The fir's thin trunk is mostly hidden
-    // by needles, and the broadleaf impostors keep their old lighting (and bake
-    // a different LOD from the mesh LOD2 they are compared with), so those rows
-    // only log their ratio.
-    QTest::newRow("fir") << 0 << false;
-    QTest::newRow("pine") << 1 << true;
-    QTest::newRow("jacaranda") << 2 << false;
-    QTest::newRow("island") << 3 << false;
+    QTest::addColumn<float>("view"); // which side of the tree the camera stands on (radians)
+    // The primary view (from the west) is asserted for the pine and both
+    // broadleaf trees; the fir's thin trunk is mostly hidden by needles (about 30
+    // pixels), so it is only logged. The two other views are logged too: the
+    // mesh trunk is lit by the sun and the cascaded shadows, the billboard has a
+    // model of the sun on the visible half-cylinder and no shadow, so how well
+    // they agree depends on the sun's side of the tree (see the report).
+    for (float view : {3.14159f, 1.9f, 4.6f}) {
+      const QByteArray sfx = "@" + QByteArray::number(double(view), 'f', 1);
+      const bool primary = view > 3.0f && view < 3.3f;
+      QTest::newRow(("fir" + sfx).constData()) << 0 << false << view;
+      QTest::newRow(("pine" + sfx).constData()) << 1 << primary << view;
+      QTest::newRow(("jacaranda" + sfx).constData()) << 2 << primary << view;
+      QTest::newRow(("island" + sfx).constData()) << 3 << primary << view;
+    }
   }
   void trunkBrightnessSurvivesTheImpostorSwitch() {
     QFETCH(int, kind);
     QFETCH(bool, strict);
+    QFETCH(float, view);
     World w = buildWorld(kPalForest, -1, 0);
     for (auto &v : w.veg)
       v.clear();
@@ -441,7 +448,8 @@ private slots:
     loadTerrain(rig.r, w);
     loadVegetation(rig.r, w);
     QVERIFY(rig.show());
-    aimCamera(rig.r, w, 0.0f, 0.0f, 6.0f, 0.0f, 0.04f);
+    // 40 m from the tree, looking at it from the angle `view` (pi: from the west)
+    aimCamera(rig.r, w, 40.0f + 40.0f * std::cos(view), 40.0f * std::sin(view), 6.0f, view + 3.14159f, 0.04f);
     rig.r->setVegetationEnabled(false);
     const QImage off = rig.r->grabFrame().convertToFormat(QImage::Format_RGB32);
     rig.r->setVegetationEnabled(true);
