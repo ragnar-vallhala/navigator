@@ -110,19 +110,26 @@ const int NW = 5;
 const float WL[NW] = float[](7.0, 3.6, 2.1, 1.25, 0.75);
 const float WH[NW] = float[](0.0, 0.55, -0.7, 1.3, -1.9);
 const float WA[NW] = float[](0.013, 0.011, 0.009, 0.007, 0.005);
+// A wave this short against the pixel footprint (metres per pixel) would alias
+// into rings, so it fades out as its wavelength nears a few pixels.
+float waveFade(float wavelength, float footprint) {
+  return 1.0 - smoothstep(0.12, 0.34, footprint / wavelength);
+}
 // Gradient of the height field (d/dx, d/dy) of the vertex shader's waves, plus a
 // finer ripple layer that only the shading sees.
-vec2 waveGrad(vec2 p, float t, float wind) {
+vec2 waveGrad(vec2 p, float t, float wind, float fp) {
   vec2 g = vec2(0.0);
   for (int i = 0; i < NW; ++i) {
     float k = 6.2831853 / WL[i];
     vec2 d = vec2(cos(WH[i]), sin(WH[i]));
-    g += d * (WA[i] * WL[i] * wind * k) * cos(k * dot(d, p) - sqrt(9.81 * k) * t);
+    g += d * (WA[i] * WL[i] * wind * k * waveFade(WL[i], fp)) *
+         cos(k * dot(d, p) - sqrt(9.81 * k) * t);
   }
   for (int i = 0; i < 3; ++i) {
-    float a = 1.7 + 2.1 * float(i), k = 6.2831853 / (0.32 + 0.11 * float(i));
+    float a = 1.7 + 2.1 * float(i), wl = 0.32 + 0.11 * float(i), k = 6.2831853 / wl;
     vec2 d = vec2(cos(a), sin(a));
-    g += d * (0.0035 * wind * k) * cos(k * dot(d, p) - sqrt(9.81 * k) * t * 1.3 + 3.0 * float(i));
+    g += d * (0.0035 * wind * k * waveFade(wl, fp)) *
+         cos(k * dot(d, p) - sqrt(9.81 * k) * t * 1.3 + 3.0 * float(i));
   }
   return g;
 }
@@ -137,7 +144,9 @@ void main() {
   vec3 V = -toFrag / max(dist, 1e-4);          // toward the eye
   float depth = max(v_dq.x, 0.0);
   float calm = smoothstep(0.0, 0.7, depth);
-  vec2 g = waveGrad(v_pos.xy, u_time, u_wind) * calm;
+  // World metres per pixel, from screen derivatives (taken outside any branch).
+  float fp = max(length(dFdx(v_pos.xy)), length(dFdy(v_pos.xy)));
+  vec2 g = waveGrad(v_pos.xy, u_time, u_wind, fp) * calm;
   // Surface up is -Z: n = (-h_x, -h_y, -1).
   vec3 N = normalize(vec3(-g.x, -g.y, -1.0));
   if (dot(N, V) < 0.0) N = reflect(N, V);       // never face away from the eye
@@ -168,8 +177,11 @@ void main() {
   // Width in metres (not depth), so a shallow pond gets the same thin band as a
   // deep one: foam only within ~1.6 m of the waterline.
   float edge = 1.0 - smoothstep(0.0, 1.6, v_dq.z);
-  float n1 = wNoise(v_pos.xy * 5.2 + vec2(u_time * 0.35, -u_time * 0.22));
-  float n2 = wNoise(v_pos.xy * 13.0 - vec2(u_time * 0.5, u_time * 0.3));
+  // Each noise octave fades to its mean once its cells are about a pixel wide.
+  float n1 = mix(wNoise(v_pos.xy * 5.2 + vec2(u_time * 0.35, -u_time * 0.22)), 0.5,
+                 smoothstep(0.25, 0.7, fp * 5.2));
+  float n2 = mix(wNoise(v_pos.xy * 13.0 - vec2(u_time * 0.5, u_time * 0.3)), 0.5,
+                 smoothstep(0.25, 0.7, fp * 13.0));
   // Sparse patches (not a continuous ring): threshold the noise so the foam
   // breaks into drifting flecks along the waterline.
   float foam = edge * smoothstep(0.50, 0.82, n1 * 0.6 + n2 * 0.5);
