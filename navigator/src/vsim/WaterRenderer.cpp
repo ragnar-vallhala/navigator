@@ -282,7 +282,12 @@ void main() {
                  smoothstep(0.25, 0.7, fp * 13.0));
   // Sparse patches (not a continuous ring): threshold the noise so the foam
   // breaks into drifting flecks along the waterline.
-  float foam = edge * smoothstep(0.50, 0.82, n1 * 0.6 + n2 * 0.5);
+  // Wide threshold ramp: flecks feather out instead of ending on a hard edge;
+  // they thin toward the bank (the water is a film there) and at grazing
+  // angles, where a flat white sheet would sit on top of the surface.
+  float foam = edge * smoothstep(0.46, 0.95, n1 * 0.6 + n2 * 0.5);
+  foam *= smoothstep(0.0, 0.35, v_dq.z) * 0.5 + 0.5;
+  foam *= mix(0.6, 1.0, smoothstep(0.06, 0.45, cosv));
   foam = clamp(foam + ripFoam, 0.0, 1.0);
   vec3 foamCol = (ambientLight(vec3(0.0, 0.0, -1.0)) * u_ambstr + sunLightColor() * (0.55 * sunUp)) * 0.95 + 0.12;
 
@@ -290,7 +295,11 @@ void main() {
   col = mix(col, foamCol, foam * 0.75);
 
   // Soft edge: clear at the waterline, fully there a short way in.
-  float alpha = clamp(max(smoothstep(0.0, 0.5, depth) * 0.9, F) + foam * 0.8, 0.0, 1.0);
+  // The shallows are see-through: the bed shows for the first metre of depth
+  // (not just the first half metre), so the bank reads as water thinning over
+  // ground, not a painted edge. The body colour fades in with the same ramp.
+  float veil = smoothstep(0.0, 1.1, depth);
+  float alpha = clamp(max(veil * 0.92, F) + foam * 0.8, 0.0, 1.0);
   col = applyAerialPerspective(col, toFrag, dist);
   o_color = vec4(col, alpha);
 }
