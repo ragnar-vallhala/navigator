@@ -1285,7 +1285,8 @@ void SimRendererWidget::paintGL() {
   if (floraDirty_)
     flushFloraUpdates();
 #endif
-  floraTime_ += 0.016f; // ~60 Hz wind + sky clock
+  if (!animFrozenForTest_)
+    floraTime_ += 0.016f; // ~60 Hz wind + sky clock
 
   QMatrix4x4 view = cameraView();
   camEye_ =
