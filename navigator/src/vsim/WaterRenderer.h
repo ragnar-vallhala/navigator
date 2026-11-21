@@ -35,6 +35,7 @@
 #pragma once
 
 #include "Atmosphere.h"
+#include "WaterRipples.h"
 #include "procgen/WaterField.h"
 
 #include <QByteArray>
@@ -86,6 +87,9 @@ struct WaterFrame {
   float fogBase = 0.0f, fogHeight = 150.0f;
   float wind = 0.6f; // 0 glass .. 1 choppy
   QVector3D waterColor{0.14f, 0.27f, 0.31f}; // palette pond colour
+  // Prop-wash ripples (optional): the field is uploaded while it moves and its
+  // gradient is added to the wave normal. Null, unbound or settled: no change.
+  const WaterRipples *ripples = nullptr;
 };
 
 // The renderer's shared GLSL, as for VegetationRenderer: atmosphere + fog, and
@@ -102,6 +106,7 @@ public:
   // The bodies to draw (rebuilds the mesh on the next draw).
   void setBodies(std::vector<procgen::WaterBody> bodies);
   bool hasBodies() const { return !bodies_.empty(); }
+  const std::vector<procgen::WaterBody> &bodies() const { return bodies_; }
   int bodyCount() const { return int(bodies_.size()); }
 
   bool glReady() const { return prog_ != nullptr; }
@@ -114,15 +119,22 @@ public:
   int liveObjects() const; // GL objects alive (program + VAO + 2 buffers)
 
   int drawnVertices() const { return lastVertices_; }
+  // Ripple texture uploads so far (tests: 0 while the surface is calm).
+  int rippleUploads() const { return rippleUploads_; }
 
 private:
   void uploadMesh();
+  void bindRipples(const WaterRipples *r);
   std::vector<procgen::WaterBody> bodies_;
   bool meshDirty_ = true;
   std::unique_ptr<QOpenGLShaderProgram> prog_;
   unsigned vao_ = 0, vbo_ = 0, ibo_ = 0;
   int indexCount_ = 0;
   int lastVertices_ = 0;
+  unsigned ripTex_ = 0;
+  bool ripWasOn_ = false;
+  int rippleUploads_ = 0;
+  std::vector<uint16_t> ripHalf_;
 };
 
 } // namespace vsim

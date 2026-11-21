@@ -234,6 +234,18 @@ float WaterField::shoreRing(const HeightSource &src, float wx, float wy) const {
   return smoothstep(R - 1.0f, R, d) * (1.0f - smoothstep(R + 1.5f, R + 5.0f, d));
 }
 
+float WaterField::wetBank(const HeightSource &src, float wx, float wy,
+                          float h) const {
+  WaterBody b;
+  if (!bodyAt(src, wx, wy, b))
+    return 0.0f;
+  const float dx = wx - b.cx, dy = wy - b.cy;
+  const float d = std::sqrt(dx * dx + dy * dy);
+  const float R = b.shoreRadiusToward(dx, dy);
+  const float reach = 1.0f - smoothstep(R + b.bankM - 3.0f, R + b.bankM, d);
+  return (1.0f - smoothstep(0.15f, kWetHeightM, h - b.level)) * reach;
+}
+
 bool WaterField::nearWater(const HeightSource &src, float wx, float wy,
                            float marginM) const {
   if (!enabled())

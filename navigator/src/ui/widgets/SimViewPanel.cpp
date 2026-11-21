@@ -72,6 +72,8 @@ railLay->addWidget(m_horizonPip);
 // as the main view.
 m_downRenderer = new vsim::SimRendererWidget();
 m_downRenderer->setDownCam(true);
+// One ripple sim for both views: stepped once per moment, drawn by each.
+m_downRenderer->setRipples(m_renderer->ripples());
 m_downRenderer->setWorldVisible(true);
 QWidget *downBox = nullptr;
 if (glOk) {

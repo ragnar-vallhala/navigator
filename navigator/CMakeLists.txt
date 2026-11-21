@@ -263,6 +263,7 @@ set(GCS_SITL_SOURCES
     src/vsim/procgen/Vegetation.cpp
     src/vsim/VegetationRenderer.cpp
     src/vsim/WaterRenderer.cpp
+    src/vsim/WaterRipples.cpp
     src/vsim/procgen/WorldPresets.cpp
     src/vsim/procgen/Helipads.cpp
     src/vsim/MassProperties.cpp
@@ -316,6 +317,7 @@ set(GCS_SITL_HEADERS
     src/vsim/procgen/Vegetation.h
     src/vsim/VegetationRenderer.h
     src/vsim/WaterRenderer.h
+    src/vsim/WaterRipples.h
     src/vsim/procgen/WorldPresets.h
     src/vsim/MassProperties.h
     src/vsim/DroneModel.h

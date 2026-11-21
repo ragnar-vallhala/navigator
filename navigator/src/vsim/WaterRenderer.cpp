@@ -103,6 +103,8 @@ out vec4 o_color;
 uniform float u_time;
 uniform float u_wind;
 uniform vec3 u_wcol;
+uniform sampler2D u_rip;   // prop-wash ripple heights [m], R16F
+uniform vec4 u_ripwin;     // window origin xy, size [m]; w = 1 when live
 )GLSL";
 
 const char *kWaterFSMain = R"GLSL(
@@ -148,6 +150,23 @@ void main() {
   float fp = max(length(dFdx(v_pos.xy)), length(dFdy(v_pos.xy)));
   vec2 g = waveGrad(v_pos.xy, u_time, u_wind, fp) * calm;
   // Surface up is -Z: n = (-h_x, -h_y, -1).
+  float ripFoam = 0.0;
+  if (u_ripwin.w > 0.5) {
+    vec2 uv = (v_pos.xy - u_ripwin.xy) / u_ripwin.z;
+    float n = float(textureSize(u_rip, 0).x);
+    float e = 1.5 / n, cell = 1.5 * u_ripwin.z / n; // 3-texel stencil: smoother than C0 bilinear
+    // Slope of the ripple field by central differences, fading out toward the
+    // window edge and as a texel shrinks below a pixel (no shimmer far away).
+    float inWin = (1.0 - smoothstep(0.42, 0.5, abs(uv.x - 0.5))) *
+                  (1.0 - smoothstep(0.42, 0.5, abs(uv.y - 0.5)));
+    float lod = 1.0 - smoothstep(0.5, 1.2, fp / cell);
+    vec2 rg = vec2(textureLod(u_rip, uv + vec2(e, 0.0), 0.0).r - textureLod(u_rip, uv - vec2(e, 0.0), 0.0).r,
+                   textureLod(u_rip, uv + vec2(0.0, e), 0.0).r - textureLod(u_rip, uv - vec2(0.0, e), 0.0).r)
+             / (2.0 * cell);
+    rg *= 4.0 * inWin * lod * calm;      // shading gain: centimetre waves must read
+    g += rg;
+    ripFoam = smoothstep(0.12, 0.30, length(rg)) * 0.35;
+  }
   vec3 N = normalize(vec3(-g.x, -g.y, -1.0));
   if (dot(N, V) < 0.0) N = reflect(N, V);       // never face away from the eye
 
@@ -185,6 +204,7 @@ void main() {
   // Sparse patches (not a continuous ring): threshold the noise so the foam
   // breaks into drifting flecks along the waterline.
   float foam = edge * smoothstep(0.50, 0.82, n1 * 0.6 + n2 * 0.5);
+  foam = clamp(foam + ripFoam, 0.0, 1.0);
   vec3 foamCol = (ambientLight(vec3(0.0, 0.0, -1.0)) * u_ambstr + sunLightColor() * (0.55 * sunUp)) * 0.95 + 0.12;
 
   vec3 col = mix(body, refl, F) + glint;
@@ -254,6 +274,42 @@ void WaterRenderer::uploadMesh() {
   meshDirty_ = false;
 }
 
+// Uploads the ripple window while it is moving (plus the one frame after it
+// settles, so it ends flat) and points the shader at it; otherwise the shader
+// branch is off and nothing is bound or uploaded.
+void WaterRenderer::bindRipples(const WaterRipples *r) {
+  constexpr int kUnit = 6;
+  const bool on = r && r->bound() && (r->active() || ripWasOn_);
+  ripWasOn_ = r && r->bound() && r->active();
+  QOpenGLShaderProgram &p = *prog_;
+  if (!on) {
+    p.setUniformValue("u_ripwin", QVector4D(0, 0, 1, 0));
+    p.setUniformValue("u_rip", kUnit);
+    return;
+  }
+  GLint prevUnit = GL_TEXTURE0;
+  glGetIntegerv(GL_ACTIVE_TEXTURE, &prevUnit);
+  glActiveTexture(GL_TEXTURE0 + kUnit);
+  const int n = WaterRipples::kN;
+  r->toHalf(ripHalf_);
+  if (!ripTex_) {
+    glGenTextures(1, &ripTex_);
+    glBindTexture(GL_TEXTURE_2D, ripTex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, n, n, 0, GL_RED, GL_HALF_FLOAT, ripHalf_.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  } else {
+    glBindTexture(GL_TEXTURE_2D, ripTex_);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, n, n, GL_RED, GL_HALF_FLOAT, ripHalf_.data());
+  }
+  ++rippleUploads_;
+  glActiveTexture(GLenum(prevUnit));
+  p.setUniformValue("u_rip", kUnit);
+  p.setUniformValue("u_ripwin", QVector4D(r->originX(), r->originY(), r->sizeM(), 1.0f));
+}
+
 void WaterRenderer::draw(const WaterFrame &f) {
   if (bodies_.empty() || !prog_)
     return;
@@ -282,6 +338,7 @@ void WaterRenderer::draw(const WaterFrame &f) {
   p.setUniformValue("u_time", f.time);
   p.setUniformValue("u_wind", f.wind);
   p.setUniformValue("u_wcol", f.waterColor);
+  bindRipples(f.ripples);
 
   GLboolean blend = glIsEnabled(GL_BLEND), cull = glIsEnabled(GL_CULL_FACE);
   GLboolean depthMask = GL_TRUE;
@@ -308,6 +365,11 @@ void WaterRenderer::releaseGL() {
     glDeleteBuffers(1, &ibo_);
     vao_ = vbo_ = ibo_ = 0;
   }
+  if (ripTex_) {
+    glDeleteTextures(1, &ripTex_);
+    ripTex_ = 0;
+  }
+  ripWasOn_ = false;
   prog_.reset();
   indexCount_ = 0;
   meshDirty_ = true;

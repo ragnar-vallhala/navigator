@@ -2272,6 +2272,47 @@ void SimRendererWidget::drawVegetation(const QMatrix4x4 &view) {
     update(); // textures / impostors still arriving: keep painting
 }
 
+// Feeds the ripple sim: binds it to the pond the vehicle is over (or nearest
+// to, within reach), hands it each rotor's spot and height above the water, and
+// runs it up to the wall clock. A second view calling this at the same moment
+// finds the clock already there and steps nothing.
+void SimRendererWidget::updateRipples() {
+  ripples();
+  const QVector3D pos = snap_.pos_w; // NED: up is -z
+  const procgen::WaterBody *nearest = nullptr;
+  float nearD = 1e9f;
+  for (const procgen::WaterBody &b : water_->bodies()) {
+    const float dx = pos.x() - b.cx, dy = pos.y() - b.cy;
+    const float d = std::sqrt(dx * dx + dy * dy) - b.shoreRadiusToward(dx, dy);
+    if (d < nearD) {
+      nearD = d;
+      nearest = &b;
+    }
+  }
+  // Only a vehicle close enough to matter (the wash reaches ~10 m, plus margin).
+  constexpr float kReachM = WaterRipples::kMaxHeightM + 6.0f;
+  std::array<RippleRotor, 4> rotors;
+  int n = 0;
+  if (nearest && nearD < kReachM) {
+    ripples_->bindBody(*nearest);
+    for (int i = 0; i < 4; ++i) {
+      const QVector3D w = pos + snap_.att.rotatedVector(motorPos_[i]);
+      RippleRotor &r = rotors[size_t(n)];
+      r.x = w.x();
+      r.y = w.y();
+      r.heightM = -w.z() - nearest->level;
+      r.radiusM = propRadius_;
+      // Wash speed goes with rotor speed, i.e. with the duty.
+      r.strength = std::clamp(snap_.motor_duty[size_t(i)] * 1.2f, 0.0f, 1.0f);
+      ++n;
+    }
+  }
+  ripples_->setRotors(rotors.data(), n);
+  // Sim time (1 ms per engine tick): a stopped sim freezes the water, and both
+  // views read the same tick, so the second one steps nothing.
+  ripples_->advanceTo(double(snap_.tick_count) * 1e-3);
+}
+
 void SimRendererWidget::drawWater(const QMatrix4x4 &view) {
   // The bodies near the camera, rebuilt when it has moved a fair way: cells are
   // 170 m, the view ends in haze well inside 650 m.
@@ -2288,6 +2329,7 @@ void SimRendererWidget::drawWater(const QMatrix4x4 &view) {
   if (!water_->glReady() &&
       !water_->initGL({QByteArray(kAtmosphereGLSL) + kFogGLSL, kLightingGLSL}))
     return;
+  updateRipples();
   WaterFrame f;
   f.proj = proj_;
   f.view = view;
@@ -2295,6 +2337,7 @@ void SimRendererWidget::drawWater(const QMatrix4x4 &view) {
   f.camEye = camEye_;
   f.sunDir = sunDir_;
   f.time = floraTime_;
+  f.ripples = ripples_.get();
   f.sunIntensity = litSunInt_;
   f.ambientStrength = litAmbStr_;
   f.fogDensity = atmo_.fogDensity;
