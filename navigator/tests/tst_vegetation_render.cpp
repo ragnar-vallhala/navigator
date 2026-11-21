@@ -643,6 +643,37 @@ private slots:
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
 
+  // A pine's coarser mesh LODs keep its crown: from 40 to 80 m they show about
+  // what the full mesh shows (ratios of renders on one rasteriser, so it holds
+  // on any of them). Level with the crowns LOD1 drew 0.71 of LOD0 before its
+  // low branches and card segments were restored, which read as a bare pole.
+  void pineLod1KeepsItsFoliage() {
+    World w = standWorld(1);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    QString failures;
+    for (float d : {40.0f, 60.0f, 80.0f})
+      for (float e : {0.0f, 20.0f}) {
+        const TreePixels l0 = standView(rig.r, w, d, e, 0);
+        const TreePixels l1 = standView(rig.r, w, d, e, 1);
+        const TreePixels l2 = standView(rig.r, w, d, e, 2);
+        const double ratio = l0.foliage ? double(l1.foliage) / l0.foliage : 0.0;
+        const double ratio2 = l0.foliage ? double(l2.foliage) / l0.foliage : 0.0;
+        qInfo("pine LOD1 %.0f m %.0f deg: LOD0 %d px, LOD1 %d px (x%.3f), LOD2 %d px (x%.3f)", double(d), double(e), l0.foliage,
+              l1.foliage, ratio, l2.foliage, ratio2);
+        if (l0.foliage < 150)
+          failures += QString("[reference too small at %1 m] ").arg(double(d));
+        else if (ratio < 0.85 || ratio > 1.15)
+          failures += QString("[%1 m %2 deg: LOD1 x%3] ").arg(double(d)).arg(double(e)).arg(ratio, 0, 'f', 2);
+        else if (ratio2 < 0.62 || ratio2 > 1.15)
+          failures += QString("[%1 m %2 deg: LOD2 x%3] ").arg(double(d)).arg(double(e)).arg(ratio2, 0, 'f', 2);
+      }
+    QVERIFY2(failures.isEmpty(), qPrintable(failures));
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
   // The side view did not move: with the camera level with the crowns the top
   // tile has no weight and the billboard is the quad it was, over tiles baked as
   // before. The relation is self-contained, so it holds on any rasteriser: half
