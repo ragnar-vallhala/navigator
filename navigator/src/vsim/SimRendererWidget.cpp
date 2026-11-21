@@ -33,7 +33,6 @@
 
 #include <array>
 #include <atomic>
-#include <chrono>
 #include <climits>
 #include <cmath>
 #include <vector>
@@ -2309,8 +2308,9 @@ void SimRendererWidget::updateRipples() {
     }
   }
   ripples_->setRotors(rotors.data(), n);
-  using clock = std::chrono::steady_clock;
-  ripples_->advanceTo(std::chrono::duration<double>(clock::now().time_since_epoch()).count());
+  // Sim time (1 ms per engine tick): a stopped sim freezes the water, and both
+  // views read the same tick, so the second one steps nothing.
+  ripples_->advanceTo(double(snap_.tick_count) * 1e-3);
 }
 
 void SimRendererWidget::drawWater(const QMatrix4x4 &view) {

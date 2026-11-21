@@ -116,8 +116,13 @@ void WaterRipples::advanceTo(double tSec) {
     return;
   }
   const double dt = tSec - clock_;
-  if (dt <= 0.0)
-    return; // a second view asking for the same moment: nothing to do
+  if (dt == 0.0)
+    return; // a second view, or a stopped sim: the same moment, nothing to do
+  if (dt < 0.0) { // the clock went backwards (sim restart): re-anchor, no steps
+    clock_ = tSec;
+    acc_ = 0.0;
+    return;
+  }
   clock_ = tSec;
   acc_ += std::min(dt, 0.25);
   int n = 0;

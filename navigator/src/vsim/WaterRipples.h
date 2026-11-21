@@ -65,7 +65,9 @@ public:
 
   // The rotors in force until the next call (empty clears the forcing).
   void setRotors(const RippleRotor *r, int n);
-  // Run fixed steps up to wall/sim time tSec. The first call only sets the clock.
+  // Run fixed steps up to sim time tSec (seconds). The first call only sets the
+  // clock; an unchanged clock steps nothing (a stopped sim freezes the water);
+  // a clock that goes backwards re-anchors without stepping.
   void advanceTo(double tSec);
   // Run exactly n fixed steps (tests).
   void stepFixed(int n);

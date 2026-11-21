@@ -192,6 +192,41 @@ private slots:
     (void)d;
   }
 
+  // A stopped sim reports the same tick over and over: the water must freeze.
+  void anUnchangedClockMeansNoSteps() {
+    const auto b = pond();
+    const RippleRotor r = rotorAt(b, 0.3f, 1.0f);
+    WaterRipples w;
+    w.bindBody(b);
+    w.setRotors(&r, 1);
+    w.advanceTo(10.0);
+    w.advanceTo(10.5);
+    const uint64_t n = w.stepCount();
+    QVERIFY(n > 0);
+    const std::vector<float> before = w.heights();
+    for (int i = 0; i < 1000; ++i)
+      w.advanceTo(10.5);
+    QCOMPARE(w.stepCount(), n);
+    QVERIFY(w.heights() == before);
+  }
+
+  // Re-Start resets the tick counter: no jump, no stall until it catches up.
+  void aClockThatGoesBackwardsReAnchors() {
+    const auto b = pond();
+    const RippleRotor r = rotorAt(b, 0.3f, 1.0f);
+    WaterRipples w;
+    w.bindBody(b);
+    w.setRotors(&r, 1);
+    w.advanceTo(500.0);
+    w.advanceTo(500.5);
+    const uint64_t n = w.stepCount();
+    w.advanceTo(0.2); // back to near zero: re-anchor only
+    QCOMPARE(w.stepCount(), n);
+    for (int f = 1; f <= 30; ++f) // and half a second of 60 Hz frames runs again
+      w.advanceTo(0.2 + double(f) / 60.0);
+    QVERIFY(w.stepCount() >= n + 29 && w.stepCount() <= n + 31);
+  }
+
   void aStallDropsTheBacklogInsteadOfSpiralling() {
     const auto b = pond();
     WaterRipples w;
