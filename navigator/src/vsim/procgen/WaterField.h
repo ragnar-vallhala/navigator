@@ -84,6 +84,12 @@ public:
   float inside(const HeightSource &src, float wx, float wy) const;
   // 1 on the wet ring just outside the shore (mud / sand), else 0.
   float shoreRing(const HeightSource &src, float wx, float wy) const;
+  // Wetness of the ground at (wx, wy) whose height is `h`: 1 at the waterline,
+  // falling to 0 by kWetHeightM above the water level (so it follows the bank's
+  // slope, not a fixed-width band), and 0 beyond the carved bank. Under the water
+  // it is 1 (callers that colour the lake bed weight it by 1 - inside()).
+  float wetBank(const HeightSource &src, float wx, float wy, float h) const;
+  static constexpr float kWetHeightM = 1.8f;
   // True when water lies within `marginM` of (wx, wy).
   bool nearWater(const HeightSource &src, float wx, float wy, float marginM) const;
 
