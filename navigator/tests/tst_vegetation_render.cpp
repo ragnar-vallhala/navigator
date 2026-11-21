@@ -969,6 +969,80 @@ private slots:
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
 
+  // A jacaranda's coarser mesh LODs keep its crown mass: from 50 to 130 m they
+  // show about what the full mesh shows (ratios of renders on one rasteriser,
+  // so it holds on any of them). LOD2 drew 0.57 to 0.65 of LOD0 before its
+  // leaf budget was raised, against 1.25 for the impostor, so a tree handing
+  // over between them doubled its foliage and the dithered cross-fade showed
+  // a dot grid.
+  void jacarandaLod2KeepsItsFoliage() {
+    World w = standWorld(2);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    QString failures;
+    for (float d : {50.0f, 100.0f, 130.0f})
+      for (float e : {0.0f, 20.0f, 45.0f}) {
+        const TreePixels l0 = standView(rig.r, w, d, e, 0);
+        const TreePixels l2 = standView(rig.r, w, d, e, 2);
+        const double ratio = l0.foliage ? double(l2.foliage) / l0.foliage : 0.0;
+        qInfo("jacaranda LOD2 %.0f m %.0f deg: LOD0 %d px, LOD2 %d px, x%.3f", double(d), double(e), l0.foliage, l2.foliage, ratio);
+        if (l0.foliage < 150)
+          failures += QString("[reference too small at %1 m] ").arg(double(d));
+        else if (ratio < 0.78 || ratio > 1.40)
+          failures += QString("[%1 m %2 deg: LOD2 x%3] ").arg(double(d)).arg(double(e)).arg(ratio, 0, 'f', 2);
+      }
+    QVERIFY2(failures.isEmpty(), qPrintable(failures));
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // Where a tree hands over between the mesh LOD 2 and its impostor (the
+  // cross-fade, 121 to 139 m) it must not show a dot grid: the two layers were
+  // dithered into complementary pixels, so neither covered a crown solidly and
+  // the ground showed through as a regular pattern (stipple 0.64 to 0.99 against
+  // 0.1 to 0.6 for either layer alone). Over the band, level and from above, the
+  // worst stipple stays near the noisier of the two layers drawn alone.
+  void crossFadeLeavesNoDotGrid_data() {
+    QTest::addColumn<int>("kind");
+    for (int k = 0; k < 4; ++k)
+      QTest::newRow(k == 0 ? "fir" : k == 1 ? "pine" : k == 2 ? "jacaranda" : "island") << k;
+  }
+  void crossFadeLeavesNoDotGrid() {
+    QFETCH(int, kind);
+    World w = standWorld(kind);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    QString failures;
+    for (float e : {20.0f, 45.0f}) {
+      const TreePixels imp = standView(rig.r, w, 130.0f, e, 3);
+      const TreePixels mesh = standView(rig.r, w, 130.0f, e, 2);
+      QVERIFY2(imp.all > 150 && mesh.all > 150, "trees not found");
+      const double ref = std::max(imp.stipple(), mesh.stipple());
+      double worst = 0.0, worstD = 0.0;
+      for (int step = 0; step <= 10; ++step) {
+        const float d = 120.0f + 2.0f * float(step);
+        const double s = standView(rig.r, w, d, e, -1).stipple();
+        if (s > worst) {
+          worst = s;
+          worstD = double(d);
+        }
+      }
+      qInfo("DOTGRID kind %d %.0f deg: impostor %.3f, mesh LOD2 %.3f, worst over 120-140 m %.3f at %.0f m", kind, double(e),
+            imp.stipple(), mesh.stipple(), worst, worstD);
+      if (rig.r->vegetationStats().impostorVariants == 0)
+        QSKIP("no impostor atlas on this context");
+      // The island tree's impostor holds 2.6 to 5.6 times the foliage of its mesh,
+      // which no cross-fade hides, so it gets more room.
+      if (worst > (kind == 3 ? 1.5 * ref + 0.12 : 1.2 * ref + 0.22))
+        failures += QString("[%1 deg: %2 at %3 m vs layers %4] ").arg(double(e)).arg(worst, 0, 'f', 3).arg(worstD).arg(ref, 0, 'f', 3);
+    }
+    QVERIFY2(failures.isEmpty(), qPrintable(failures));
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
   // The top-down tile exists for every variant and the whole bake is repeatable:
   // two renderers baking the same forest give the same atlas (a hash of every
   // tile's colour and mask, read back), and the top tiles are not empty.

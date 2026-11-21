@@ -92,6 +92,7 @@ SMALL = (3000, 800, 150)
 GRADE_LEAF = (-22.0, 0.95, 0.85)
 BIG_CONIFER = (32000, 7000, 1200)
 BIG_BROADLEAF = (36000, 7000, 1200)
+JACARANDA = (36000, 7000, 3000)
 
 SPECIES = [
     # Conifers are built, not decimated: a tapered trunk plus tiers of needle
@@ -129,7 +130,7 @@ SPECIES = [
          variants=['jacaranda_tree_LOD0', 'jacaranda_tree_LOD0_wide'],
          # the second variant is the same model turned and reproportioned
          derive={'jacaranda_tree_LOD0_wide': dict(src='jacaranda_tree_LOD0', rot=2.4, sx=1.16, sy=0.86, sz=0.92)},
-         budget=lod_budgets(BIG_BROADLEAF),
+         budget=lod_budgets(JACARANDA),
          mats={'jacaranda_tree_trunk': dict(weight=0.08, cutout=False, cull=False, size=512),
                'jacaranda_tree_leaves': dict(weight=0.82, cutout=True, key_black=True, cull=True, grade=GRADE_LEAF,
                                              size=1024, scale_cap=(3.5, 4.5, 6.0), tris_per_comp=2),
