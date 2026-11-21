@@ -260,6 +260,11 @@ navigator_test(tst_waterfield
     ${SRC}/vsim/procgen/Helipads.cpp)
 target_include_directories(tst_waterfield PRIVATE ${SRC}/vsim)
 
+# ---- Prop-wash ripple sim (Qt-free, headless) -------------------------------
+navigator_test(tst_waterripples tst_waterripples.cpp ${SRC}/vsim/WaterRipples.cpp
+    ${SRC}/vsim/procgen/WaterField.cpp)
+target_include_directories(tst_waterripples PRIVATE ${SRC}/vsim)
+
 # ---- Terrain material: splat rule + quality default (header only) ----------
 navigator_test(tst_terrainmaterial tst_terrainmaterial.cpp)
 target_include_directories(tst_terrainmaterial PRIVATE ${SRC}/vsim)
@@ -319,7 +324,7 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
     target_sources(tst_sim_gl_context PRIVATE ${SRC}/vsim/GpuGrass.cpp)
     target_compile_definitions(tst_sim_gl_context PRIVATE VAYU_SIM_GRASS=1)
   endif()
-  target_sources(tst_sim_gl_context PRIVATE ${SRC}/vsim/VegetationRenderer.cpp ${SRC}/vsim/WaterRenderer.cpp
+  target_sources(tst_sim_gl_context PRIVATE ${SRC}/vsim/VegetationRenderer.cpp ${SRC}/vsim/WaterRenderer.cpp ${SRC}/vsim/WaterRipples.cpp
       ${SRC}/vsim/procgen/Vegetation.cpp ${SRC}/vsim/procgen/Noise.cpp
       ${SRC}/vsim/procgen/TerrainField.cpp ${SRC}/vsim/procgen/WaterField.cpp ${SRC}/vsim/procgen/GroundCover.cpp)
   target_link_libraries(tst_sim_gl_context PRIVATE navigator_vegetation)
@@ -340,7 +345,7 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
       tst_vegetation_render.cpp
       ${SRC}/vsim/FarTerrain.cpp ${SRC}/vsim/FarTerrain.h
       ${SRC}/vsim/SimRendererWidget.cpp ${SRC}/vsim/SimRendererWidget.h
-      ${SRC}/vsim/VegetationRenderer.cpp ${SRC}/vsim/WaterRenderer.cpp
+      ${SRC}/vsim/VegetationRenderer.cpp ${SRC}/vsim/WaterRenderer.cpp ${SRC}/vsim/WaterRipples.cpp
       ${SRC}/vsim/TerrainMaterial.cpp ${SRC}/vsim/TerrainTextures.h
       ${CMAKE_SOURCE_DIR}/resources/resources.qrc
       ${SRC}/ui/widgets/SimHudWidget.cpp ${SRC}/ui/widgets/SimHudWidget.h
