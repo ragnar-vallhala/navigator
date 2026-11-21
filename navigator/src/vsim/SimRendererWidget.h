@@ -322,6 +322,13 @@ public:
   vsim::terrain::Quality waterQuality() const {
     return waterQualitySet_ ? waterQuality_ : terrainDefault_;
   }
+  // Screen-space reflections on the water (High only; NAV_WATER_SSR=0 turns it
+  // off at start-up). It copies the opaque scene each frame, so it is a setting.
+  void setWaterSsr(bool on) {
+    waterSsr_ = on;
+    update();
+  }
+  bool waterSsr() const { return waterSsr_; }
   const WaterRenderer *waterRenderer() const { return water_.get(); }
   // The prop-wash ripple sim. Both views of the simulator page hold the same
   // one (SimViewPanel), so it is stepped once per moment; without it the widget
@@ -755,6 +762,7 @@ private:
   std::shared_ptr<const procgen::TerrainField> waterField_;
   QVector2D waterCentre_{1e9f, 1e9f}; // where the water body list was last built
   vsim::terrain::Quality waterQuality_ = vsim::terrain::Quality::High;
+  bool waterSsr_ = qEnvironmentVariable("NAV_WATER_SSR", "1") != QLatin1String("0");
   bool waterQualitySet_ = false; // false: use terrainDefault_ (from GL_RENDERER)
   void drawWater(const QMatrix4x4 &view);
   void updateRipples();

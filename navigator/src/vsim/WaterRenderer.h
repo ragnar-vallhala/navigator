@@ -90,6 +90,12 @@ struct WaterFrame {
   // Prop-wash ripples (optional): the field is uploaded while it moves and its
   // gradient is added to the wave normal. Null, unbound or settled: no change.
   const WaterRipples *ripples = nullptr;
+  // Screen-space reflections (High only): the opaque scene so far is resolved
+  // into a colour + depth copy and the surface ray-marches its reflected ray in
+  // it. `sceneFbo` is the framebuffer being drawn into, viewW x viewH its size.
+  bool ssr = false;
+  unsigned sceneFbo = 0;
+  int viewW = 0, viewH = 0;
 };
 
 // The renderer's shared GLSL, as for VegetationRenderer: atmosphere + fog, and
@@ -121,10 +127,17 @@ public:
   int drawnVertices() const { return lastVertices_; }
   // Ripple texture uploads so far (tests: 0 while the surface is calm).
   int rippleUploads() const { return rippleUploads_; }
+  // Scene copies taken for reflections so far, and whether the last draw used
+  // them (tests). A failed blit turns the feature off for good (sky only).
+  int sceneCaptures() const { return sceneCaptures_; }
+  bool ssrActive() const { return ssrActive_; }
+  bool ssrBroken() const { return ssrBroken_; }
 
 private:
   void uploadMesh();
   void bindRipples(const WaterRipples *r);
+  bool captureScene(unsigned srcFbo, int w, int h);
+  void freeScene();
   std::vector<procgen::WaterBody> bodies_;
   bool meshDirty_ = true;
   std::unique_ptr<QOpenGLShaderProgram> prog_;
@@ -135,6 +148,11 @@ private:
   bool ripWasOn_ = false;
   int rippleUploads_ = 0;
   std::vector<uint16_t> ripHalf_;
+  unsigned sceneFbo_ = 0, sceneColor_ = 0, sceneDepth_ = 0;
+  int sceneW_ = 0, sceneH_ = 0;
+  unsigned sceneDepthFmt_ = 0;
+  int sceneCaptures_ = 0;
+  bool ssrActive_ = false, ssrBroken_ = false;
 };
 
 } // namespace vsim
