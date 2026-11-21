@@ -19,6 +19,7 @@
 #include <cmath>
 #include "GlAvailability.h"
 #include "SimPanelsCommon.h"
+#include "../../autotune/BackendLocator.h"
 #include "../../vsim/FlightEventLog.h"
 #include "../../vsim/ThreadRetire.h"
 #include "../../vsim/procgen/Helipads.h"
@@ -490,19 +491,11 @@ void SimulatorWidget::startAutotune() {
   if (m_tuneSysIdBw)
     p.sysIdBwFrac = m_tuneSysIdBw->value();
   p.rtosRateCost = m_tuneCostFn && m_tuneCostFn->currentIndex() == 1;
-  for (const QString &cand :
-       {root + "/build_sitl_rtos/vayu_sitl_rtos",
-        root + "/sim/host/build_sitl_rtos/vayu_sitl_rtos"}) {
-    if (QFileInfo::exists(cand)) {
-      p.rtosBin = cand;
-      break;
-    }
-  }
+  const autotune::BackendLookup lk = autotune::findRtosBackend(
+      qEnvironmentVariable("VAYU_SITL_RTOS"), QCoreApplication::applicationDirPath(), root);
+  p.rtosBin = lk.found;
   if (p.rtosBin.isEmpty()) {
-    m_tuneLog->appendPlainText(
-        tr("[error] autotune backend not found. Build it with:\n"
-           "  cmake -S sim/host -B build_sitl_rtos -DVAYU_SITL_RTOS_BUILD=ON\n"
-           "  cmake --build build_sitl_rtos --target vayu_sitl_rtos"));
+    m_tuneLog->appendPlainText(autotune::backendNotFoundMessage(lk.tried));
     return;
   }
 
