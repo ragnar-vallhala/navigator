@@ -79,6 +79,7 @@ struct VegFrame {
   QVector3D camEye, sunDir, dronePos;
   float time = 0.0f;
   float droneRadius = 0.0f;
+  bool droneInMap = false; // the drone is a caster in the shadow map: no cylinder
   float sunIntensity = 1.0f, ambientStrength = 1.0f;
   float fogDensity = 1.0f / 420.0f, fogStart = 45.0f;
   float fogBase = 0.0f, fogHeight = 150.0f; // height fog (FarTerrain.h kFogGLSL)

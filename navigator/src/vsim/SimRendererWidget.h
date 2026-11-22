@@ -431,6 +431,11 @@ public:
     return {(c.x() / c.w() * 0.5 + 0.5) * fbW_, (0.5 - c.y() / c.w() * 0.5) * fbH_};
   }
   // Test hook: the last frame drew the drone's contact blob.
+  void setRotorCoverageForTest(float c) {
+    rotorCoverageForTest_ = c;
+    ++shadowGeomVer_; // the tiles hold the old coverage
+  }
+  bool droneInShadowMapForTest() const { return droneInMap_; }
   bool droneBlobDrawnForTest() const { return veg_ && veg_->droneBlobDrawn(); }
   int contextGoneCount() const { return goneCount_; } // aboutToBeDestroyed seen
   bool contextWasCurrentWhenGone() const { return goneCurrent_; }
@@ -591,6 +596,20 @@ private:
   int ul_droner_ = -1;
   QVector3D droneShadowPos_;  // drone position for the analytic shadow
   float droneShadowR_ = 0.0f; // shadow radius [m]; 0 = off
+  // The drone drawn into the shadow map (renderShadowPass). While it is, the
+  // analytic cylinder steps aside; it stays as the fallback otherwise.
+  bool droneInMap_ = false;
+  float rotorCoverageForTest_ = -1.0f; // < 0: kRotorCoverage
+  float droneVisualScale() const;
+  bool droneCasterReady() const;
+  void drawDroneCaster(const QMatrix4x4 &lightVP);
+  quint64 droneShadowVer_ = 1; // bumped when the drone's pose changes
+  QVector3D droneKeyPos_;
+  QQuaternion droneKeyAtt_;
+  float droneKeyScale_ = 0.0f;
+  bool droneKeyReady_ = false;
+  bool shadowCacheDroneIn_[kMaxCascades] = {false, false, false};
+  quint64 shadowCacheDroneVer_[kMaxCascades] = {0, 0, 0};
   int ul_sunint_ = -1;
   int ul_ambstr_ = -1;
   int ul_terrain_ = -1;
@@ -607,6 +626,7 @@ private:
   // frame (terrain casters); lit terrain + grass sample it to drop into shade.
   std::unique_ptr<QOpenGLShaderProgram> progDepth_; // depth-only, light-space
   int ud_lightmvp_ = -1;
+  int ud_cover_ = -1;
   unsigned int shadowFbo_ = 0;
   unsigned int shadowTex_ = 0;   // atlas: cascades side by side (ShadowCascades.h)
   ShadowQuality shadowQuality_ = ShadowQuality::High;
