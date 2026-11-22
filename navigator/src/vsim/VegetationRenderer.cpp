@@ -297,6 +297,10 @@ out vec2 v_el;           // sin, cos of the camera elevation about the crown cen
 out float v_fade;
 out float v_tint;
 out vec3 v_world;
+flat out vec3 v_rgt;       // the quad's right, up and toward-the-eye axes (world)
+flat out vec3 v_upq;
+flat out vec3 v_dir;
+flat out float v_mir;      // -1 when the baked image is drawn mirrored
 // Per-instance look from the base position alone (no data to ship, same for
 // every chunking): x = mirror, y = width, z = lean azimuth, w = lean amount.
 vec4 instVary(vec2 p) {
@@ -354,6 +358,10 @@ void main() {
   v_fade = i_misc.z;
   v_tint = i_misc.y;
   v_world = w;
+  v_rgt = rgt3;
+  v_upq = upq;
+  v_dir = dir;
+  v_mir = vv.x;
   gl_Position = u_vp * vec4(w, 1.0);
 }
 )GLSL";
@@ -371,6 +379,10 @@ in vec2 v_el;
 in float v_fade;
 in float v_tint;
 in vec3 v_world;
+flat in vec3 v_rgt;
+flat in vec3 v_upq;
+flat in vec3 v_dir;
+flat in float v_mir;
 out vec4 o_color;
 uniform sampler2D u_atlas;   // display-referred colour, coverage in alpha
 uniform sampler2D u_atlasMask; // alpha: foliage share of the covered texels
@@ -401,9 +413,15 @@ void main() {
   vec3 rgbA = c0.rgb * c0.a * (1.0 - v_w) + c1.rgb * c1.a * v_w;
   float mfol = mix(m0.a, m1.a, v_w);
   float aoSum = mix(m0.g, m1.g, v_w);
+  // The mesh shader's lighting normal as the baking cameras saw it (right, up),
+  // averaged over the foliage texels of the mip level: the mean of the unit
+  // normals, so a far level's is shorter and its toward-camera part longer.
+  vec2 nxy = (vec2(mix(m0.r, m1.r, v_w), mix(m0.b, m1.b, v_w)) * 2.0 - 1.0) / max(mfol, 1e-3);
   vec3 rgb = rgbA / max(a, 1e-3);
   float fol = clamp(mfol / max(a, 1e-3), 0.0, 1.0);
   float barkAo = clamp(aoSum / max(a - mfol, 0.02), 0.0, 1.0);
+  vec2 topNxy = vec2(0.0);
+  float topW = 0.0;
   float cov = a >= 0.35 ? 1.0 : 0.0; // mip levels thin the coverage, so keep a bit more than half
   if (v_top > 0.0) { // flat per instance, so the fetches stay in uniform control flow
     float in_t = max(abs(v_tc.x), abs(v_tc.y)) <= 1.0 ? 1.0 : 0.0; // the rotated quad's corners
@@ -432,9 +450,12 @@ void main() {
     vec3 rgbT = ct.rgb;
     float folT = clamp(mt.a / max(ct.a, 1e-3), 0.0, 1.0);
     float aoT = clamp(mt.g / max(ct.a - mt.a, 0.02), 0.0, 1.0);
+    vec2 nxyT = (vec2(mt.r, mt.b) * 2.0 - 1.0) / max(mt.a, 1e-3);
     rgb = mix(rgb, rgbT, wT);
     fol = mix(fol, folT, wT);
     barkAo = mix(barkAo, aoT, wT);
+    topNxy = nxyT;
+    topW = wT;
   }
   if (cov < 0.5) discard;
   float b = bayer4(gl_FragCoord.xy);
@@ -443,12 +464,30 @@ void main() {
   vec3 toFrag = v_world - u_campos;
   float dist = length(toFrag);
   vec3 sun = normalize(u_sundir);
-  // A crown has no single normal: lean the upward one toward the viewer, in 3D
-  // (the horizontal lean shrinks and the upward part grows as the camera climbs).
   vec2 hz = toFrag.xy / max(length(toFrag.xy), 1e-3);
-  vec3 N = normalize(vec3(-hz * 0.45 * v_el.y, -(0.85 + 0.45 * v_el.x)));
-  // Same foliage terms as the mesh shader (ambient floor, light through leaves).
-  vec3 L = ambientLit(N) * 1.5 + sunLightColor() * (wrapDiffuse(N, sun) * 0.95 + 0.25);
+  // The crown's lighting normal is the one the mesh shader would use, baked per
+  // texel (so mesh and impostor agree at any sun by construction): the baked
+  // (right, up) rebuilt on the horizon basis of the heading (the side tiles are
+  // baked level, and a surface normal does not turn with the camera) with the
+  // toward-camera part from its length, or straight up from the top tile (whose horizontal part has no frame
+  // here). The mirror flips the baked right.
+  float lenS = min(length(nxy), 1.0), lenT = min(length(topNxy), 1.0);
+  vec2 hd = normalize(v_dir.xy);
+  vec3 tw = normalize(vec3(hd, abs(v_dir.z) / max(length(v_dir.xy), 1e-3)));
+  vec3 Ns = v_rgt * (nxy.x * v_mir) + vec3(0.0, 0.0, -nxy.y) + tw * sqrt(max(1.0 - lenS * lenS, 0.0));
+  if (v_mir > 0.0) {
+    vec3 upv = vec3(0.0, 0.0, -1.0);
+    float cu = dot(Ns, upv);
+    float ku = 0.45 * cu + sqrt(0.2025 * cu * cu + 0.1);
+    vec3 Nmu = (ku * Ns - 0.45 * upv) / 0.55;
+    Ns = normalize(0.55 * -Nmu + 0.45 * upv);
+  }
+  vec3 Nt = vec3(0.0, 0.0, -sqrt(max(1.0 - lenT * lenT, 0.0)));
+  vec3 Nf = normalize(mix(Ns, Nt, (v_mir > 0.0 ? 0.75 : 0.0) * topW) + 1e-4 * vec3(0.0, 0.0, -1.0));
+  // The mesh's terms (ambient floor, sun with light through the leaves; the card
+  // normal faces the eye, so the sun behind the crown shines through).
+  float thru = clamp(dot(v_dir, sun) * v_mir, 0.0, 1.0);
+  vec3 L = ambientLit(Nf) * 1.5 + sunLightColor() * (wrapDiffuse(Nf, sun) * 0.95 + thru * 0.45);
   // Bark is lit like the mesh trunk (no crown rounding, no light through leaves):
   // the mean over the visible half of a vertical cylinder, with the mesh's warm
   // bark grade and lighting weights. Foliage keeps the crown terms above.
@@ -472,19 +511,29 @@ void main() {
 const char *kBakeVS = R"GLSL(
 #version 330 core
 layout(location = 0) in vec3 a_pos;
+layout(location = 1) in vec3 a_nrm;
 layout(location = 2) in vec2 a_uv;
 uniform mat4 u_mvp;
 out vec2 v_uv;
-void main() { v_uv = a_uv; gl_Position = u_mvp * vec4(a_pos, 1.0); }
+out vec3 v_nrm;
+out vec3 v_pos;
+void main() { v_uv = a_uv; v_nrm = a_nrm; v_pos = a_pos; gl_Position = u_mvp * vec4(a_pos, 1.0); }
 )GLSL";
 
 const char *kBakeFS = R"GLSL(
 #version 330 core
 in vec2 v_uv;
+in vec3 v_nrm;
+in vec3 v_pos;
 layout(location = 0) out vec4 o_color;
-layout(location = 1) out vec4 o_mask; // alpha 1 on foliage (cut-out) texels, 0 on bark
+// alpha 1 on foliage (cut-out) texels, 0 on bark; green: bark occlusion; red and
+// blue: on foliage the lighting normal the mesh shader uses, as the baking camera
+// sees it (right, up), 0.5 = zero (see kBillFSMain)
+layout(location = 1) out vec4 o_mask;
 uniform sampler2D u_diffuse;
 uniform sampler2D u_arm;
+uniform sampler2D u_normal;
+uniform mat3 u_viewRot;
 uniform float u_cutout;
 uniform float u_cutoff;
 uniform vec3 u_albedoMul; // colour multiplier (identity for trees)
@@ -496,11 +545,25 @@ void main() {
   vec4 d = texture(u_diffuse, v_uv);
   if (u_cutout > 0.5 && d.a < u_cutoff) discard;
   float ao = texture(u_arm, v_uv).r;
+  // The mesh shader's foliage normal: the (two-sided) surface normal bent by the
+  // normal map, then leaned toward the sky (model up is +y here).
+  vec3 N = normalize(v_nrm);
+  if (gl_FrontFacing) N = -N;
+  vec3 dp1 = dFdx(v_pos), dp2 = dFdy(v_pos);
+  vec2 duv1 = dFdx(v_uv), duv2 = dFdy(v_uv);
+  vec3 dp2perp = cross(dp2, N), dp1perp = cross(N, dp1);
+  vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+  vec3 B = -(dp2perp * duv1.y + dp1perp * duv2.y);
+  float invmax = inversesqrt(max(max(dot(T, T), dot(B, B)), 1e-20));
+  vec3 nm = texture(u_normal, v_uv).xyz * 2.0 - 1.0;
+  vec3 Nm = normalize(mat3(T * invmax, B * invmax, N) * nm);
+  Nm = normalize(mix(N, Nm, 0.85));
+  vec3 Nv = u_viewRot * normalize(mix(Nm, vec3(0.0, 1.0, 0.0), 0.45));
   // Foliage bakes its occlusion into the albedo; bark keeps its albedo plain and
   // stores the occlusion in the mask's green for the billboard's trunk lighting.
   bool fol = u_cutout > 0.5;
   o_color = vec4(srgbEnc(d.rgb) * u_albedoMul * (fol ? mix(0.55, 1.0, ao) : 1.0), 1.0);
-  o_mask = vec4(0.0, fol ? 0.0 : ao, 0.0, fol ? 1.0 : 0.0);
+  o_mask = vec4(fol ? 0.5 + 0.5 * Nv.x : 0.5, fol ? 0.0 : ao, fol ? 0.5 + 0.5 * Nv.y : 0.5, fol ? 1.0 : 0.0);
 }
 )GLSL";
 
@@ -1261,6 +1324,7 @@ void VegetationRenderer::bakeImpostors(VariantGpu &v) {
   progBake_->bind();
   progBake_->setUniformValue("u_diffuse", 2);
   progBake_->setUniformValue("u_arm", 4);
+  progBake_->setUniformValue("u_normal", 3);
   const float H = v.billH, D = 4.0f * H + 2.0f;
   QMatrix4x4 proj;
   proj.ortho(-H, H, -H, H, 0.1f, 2.0f * D);
@@ -1272,6 +1336,10 @@ void VegetationRenderer::bakeImpostors(VariantGpu &v) {
     glScissor(tx, ty, kTilePx, kTilePx);
     glClearColor(0.30f, 0.36f, 0.24f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    // The mask's red and blue are a normal's x and y, 0.5 for none; its green is
+    // bark occlusion, which keeps the clear colour above.
+    const GLfloat maskClear[4] = {0.5f, 0.36f, 0.5f, 0.0f};
+    glClearBufferfv(GL_COLOR, 1, maskClear);
     QMatrix4x4 view;
     if (a < kAtlasAzimuths) {
       const float al = 2.0f * kPi * float(a) / float(kAtlasAzimuths);
@@ -1285,12 +1353,15 @@ void VegetationRenderer::bakeImpostors(VariantGpu &v) {
                   QVector3D(0, 0, -1));
     }
     progBake_->setUniformValue(loc_.bakeMvp, proj * view);
+    progBake_->setUniformValue("u_viewRot", view.normalMatrix());
     for (const VegSubmesh &sm : m.submeshes) {
       const Mat &mat = sg.mats[size_t(sm.material)];
       const VegMaterial &vm =
           assets_.species[size_t(v.species)].materials[size_t(sm.material)];
       glActiveTexture(GL_TEXTURE2);
       glBindTexture(GL_TEXTURE_2D, mat.tex[0]);
+      glActiveTexture(GL_TEXTURE3);
+      glBindTexture(GL_TEXTURE_2D, mat.tex[1]);
       glActiveTexture(GL_TEXTURE4);
       glBindTexture(GL_TEXTURE_2D, mat.tex[2]);
       progBake_->setUniformValue("u_cutout", vm.cutout() ? 1.0f : 0.0f);
