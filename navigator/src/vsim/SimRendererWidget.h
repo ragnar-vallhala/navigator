@@ -424,6 +424,14 @@ public:
     cam_pitch_ = down;
     update();
   }
+  // Test hook: where a world point (NED) landed in the last
+  // frame, in device pixels from the top left (valid after a frame was drawn).
+  QPointF worldToPixelForTest(const QVector3D &w) const {
+    const QVector4D c = lastVegVp_ * QVector4D(w, 1.0f);
+    return {(c.x() / c.w() * 0.5 + 0.5) * fbW_, (0.5 - c.y() / c.w() * 0.5) * fbH_};
+  }
+  // Test hook: the last frame drew the drone's contact blob.
+  bool droneBlobDrawnForTest() const { return veg_ && veg_->droneBlobDrawn(); }
   int contextGoneCount() const { return goneCount_; } // aboutToBeDestroyed seen
   bool contextWasCurrentWhenGone() const { return goneCurrent_; }
   // Drops every GL object and builds them all again in the CURRENT context,
@@ -655,6 +663,7 @@ private:
   // the grass wind — kept general so it survives with grass compiled out.
   float floraTime_ = 0.0f;
   bool animFrozenForTest_ = false;
+  QMatrix4x4 lastVegVp_; // proj * view of the last vegetation pass (tests)
 
 #ifdef VAYU_SIM_GRASS
   // Flora shader: instanced grass/flower blades, wind + distance fade + fog.
@@ -773,6 +782,7 @@ private:
   std::shared_ptr<WaterRipples> ripples_; // shared with the other view when set
   bool vegEnabled_ = true;
   void drawVegetation(const QMatrix4x4 &view);
+  void drawDroneBlob(const QMatrix4x4 &view);
   std::map<qint64, std::unique_ptr<Mesh>> worldChunks_;
   struct PendingChunk {
     qint64 key;

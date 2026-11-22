@@ -359,6 +359,58 @@ Outline soloOutline(SimRendererWidget *r, const World &w, float d, float elev, i
   return outlineOf(on, off);
 }
 
+// One object (a tree or a rock) alone at (40, 0), the camera 7 m before it at
+// eye height. Returns how much the frame with vegetation on is darker than the
+// same pose with it off at ground point (40 - ahead, 0), as on / off luma over a
+// small window: below 1 where the contact blob darkens the ground. The tree
+// itself covers none of the probed pixels (they are nearer the camera than its
+// foot), and the sun shadow map and the terrain are the same on and off, as
+// vegetation never casts.
+constexpr float kProbeCamBackM = 7.0f, kProbeEyeM = 1.7f, kProbeDownRad = 0.22f;
+
+double windowLuma(const QImage &im, int cx, int cy) {
+  double sum = 0;
+  int n = 0;
+  for (int y = cy - 2; y <= cy + 2; ++y)
+    for (int x = cx - 2; x <= cx + 2; ++x) {
+      if (x < 0 || y < 0 || x >= im.width() || y >= im.height())
+        continue;
+      const QRgb c = im.pixel(x, y);
+      sum += 0.299 * qRed(c) + 0.587 * qGreen(c) + 0.114 * qBlue(c);
+      ++n;
+    }
+  return n ? sum / n : 0.0;
+}
+
+// Screen position of the point `ahead` metres before the object, at the height
+// of its foot (the blob is a flat disc there; from a grazing camera the slope
+// under it would move the probe off the disc by more than a few pixels).
+QPoint probePixel(SimRendererWidget *r, const World &w, float ahead) {
+  const float g = surfaceHeight(*w.field, 40.0f, 0.0f, kChunkM, kRes);
+  const QPointF p = r->worldToPixelForTest(QVector3D(40.0f - ahead, 0.0f, -g));
+  return QPoint(int(std::lround(p.x())), int(std::lround(p.y())));
+}
+
+void aimProbe(SimRendererWidget *r, const World &w) {
+  aimCamera(r, w, 40.0f - kProbeCamBackM, 0.0f, kProbeEyeM, 0.0f, kProbeDownRad);
+}
+
+World loneWorld(uint8_t species, int kind) {
+  World w = standWorld(0, 0);
+  for (size_t i = 0; i < w.cells.size(); ++i)
+    if (w.cells[i].first == 0 && w.cells[i].second == 0) {
+      VegInstance t;
+      t.species = species;
+      t.kind = uint8_t(kind);
+      t.scale = 1.0f;
+      t.yaw = 0.3f;
+      t.tint = 0.5f;
+      t.pos = {40.0f, 0.0f, -surfaceHeight(*w.field, 40.0f, 0.0f, kChunkM, kRes)};
+      w.veg[i].push_back(t);
+    }
+  return w;
+}
+
 } // namespace
 
 class TstVegetationRender : public QObject {
@@ -1353,6 +1405,136 @@ private slots:
       settledFrame(rig.r);
       QCOMPARE(rig.r->liveGlObjects(), live);
     }
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // The soft contact blob under a trunk or a rock: the ground a little way from
+  // the foot is darker than ground 3 m away, by the blob alone (the sun shadow
+  // map and the terrain are the same with vegetation on and off).
+  void contactBlobDarkensTheFoot_data() {
+    QTest::addColumn<int>("species");
+    QTest::addColumn<int>("kind");
+    QTest::addColumn<float>("nearM"); // probe distance before the foot
+    QTest::addColumn<double>("maxRatio");
+    using B = VegContactBlob;
+    // 60% of the way out in the blob, clear of the object itself.
+    QTest::newRow("jacaranda") << int(kVegTree) << 2
+                          << 0.6f * B::kTrunkRadiusMult * kVegTreeKinds[2].trunkRadiusM << 0.88;
+    QTest::newRow("rock") << int(kVegRock) << 0
+                          << 0.6f * 0.5f * kVegRockSpanM * B::kRockRadiusMult << 0.94;
+  }
+  void contactBlobDarkensTheFoot() {
+    QFETCH(int, species);
+    QFETCH(int, kind);
+    QFETCH(float, nearM);
+    QFETCH(double, maxRatio);
+    World w = loneWorld(uint8_t(species), kind);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    rig.r->setSun(46.0f, 37.0f);
+    rig.r->setTerrainQuality(vsim::terrain::Quality::High);
+    aimProbe(rig.r, w);
+    rig.r->setVegetationEnabled(false);
+    rig.r->grabFrame();
+    const QImage off = rig.r->grabFrame().convertToFormat(QImage::Format_RGB32);
+    rig.r->setVegetationEnabled(true);
+    const QImage on = settledFrame(rig.r).convertToFormat(QImage::Format_RGB32);
+    QVERIFY(rig.r->vegetationStats().blobs >= 1);
+    const QPoint a = probePixel(rig.r, w, nearM);
+    const QPoint b = probePixel(rig.r, w, 3.0f);
+    const double nearRatio = windowLuma(on, a.x(), a.y()) / windowLuma(off, a.x(), a.y());
+    const double farRatio = windowLuma(on, b.x(), b.y()) / windowLuma(off, b.x(), b.y());
+    qInfo("blob probe: near %.3f far %.3f", nearRatio, farRatio);
+    QVERIFY2(farRatio > 0.97, "ground 3 m away must be untouched by the blob");
+    QVERIFY2(nearRatio < maxRatio, "ground at the foot must be darker with the blob");
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // No trees, no tree blob: a world of one tree with trees off draws no blob and
+  // leaves the frame as it is with vegetation off.
+  void treesOffMeansNoBlob() {
+    World w = loneWorld(kVegTree, 1);
+    Rig rig(false);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    rig.r->setSun(46.0f, 37.0f);
+    rig.r->setTerrainQuality(vsim::terrain::Quality::High);
+    aimProbe(rig.r, w);
+    rig.r->setVegetationEnabled(false);
+    rig.r->grabFrame();
+    const QImage off = rig.r->grabFrame();
+    rig.r->setVegetationEnabled(true);
+    const QImage on = settledFrame(rig.r);
+    QCOMPARE(rig.r->vegetationStats().blobs, 0);
+    QVERIFY(changedFraction(on, off) < 0.001);
+    // and with them on, the blob is there
+    rig.r->setVegetationTreesEnabled(true);
+    settledFrame(rig.r);
+    QVERIFY(rig.r->vegetationStats().blobs >= 1);
+    // vegetation off altogether: nothing is reported either
+    rig.r->setVegetationEnabled(false);
+    rig.r->grabFrame();
+    QCOMPARE(rig.r->vegetationStats().blobs, 0);
+  }
+
+  // The drone's blob lies on the ground under it while it is low, is gone far
+  // above the ground, and needs the terrain field to know where the ground is.
+  // It does not depend on the vegetation: the same with trees off, vegetation
+  // off, and no vegetation loaded at all.
+  void droneBlobSitsUnderTheDrone_data() {
+    QTest::addColumn<bool>("trees");
+    QTest::addColumn<bool>("vegetation");
+    QTest::addColumn<bool>("loaded");
+    QTest::newRow("vegetation on") << true << true << true;
+    QTest::newRow("trees off") << false << true << true;
+    QTest::newRow("vegetation off") << true << false << true;
+    QTest::newRow("vegetation unloaded") << true << true << false;
+  }
+  void droneBlobSitsUnderTheDrone() {
+    QFETCH(bool, trees);
+    QFETCH(bool, vegetation);
+    QFETCH(bool, loaded);
+    World w = loneWorld(kVegTree, 1);
+    for (auto &v : w.veg)
+      for (auto &t : v)
+        t.pos.y = 60.0f; // out of view
+    FieldParams fp;
+    fp.seed = 11u;
+    fp.palette = kPalForest;
+    fp.heightM = 20.0f;
+    auto field = std::make_shared<const TerrainField>(fp);
+    Rig rig(trees);
+    rig.r->setMotorsEditable(false); // the simulator running: the drone is flying
+    rig.r->setTerrainField(field);
+    loadTerrain(rig.r, w);
+    if (loaded)
+      loadVegetation(rig.r, w);
+    rig.r->setVegetationEnabled(vegetation);
+    QVERIFY(rig.show());
+    rig.r->setSun(46.0f, 37.0f);
+    rig.r->setTerrainQuality(vsim::terrain::Quality::High);
+    const float g = surfaceHeight(*w.field, 40.0f, 0.0f, kChunkM, kRes);
+    auto frame = [&](float aboveM) {
+      aimCamera(rig.r, w, 34.0f, 0.0f, 3.5f, 0.0f, 0.3f);
+      SimSnapshot s;
+      s.pos_w = {40.0f, 0.0f, -(g + aboveM)};
+      rig.r->setSnapshot(s);
+      return settledFrame(rig.r).convertToFormat(QImage::Format_RGB32);
+    };
+    const QImage high = frame(60.0f);
+    QVERIFY(!rig.r->droneBlobDrawnForTest());
+    const QImage low = frame(1.5f);
+    QVERIFY(rig.r->droneBlobDrawnForTest());
+    // Ground under the drone, seen from behind: the blob darkens it (the drone
+    // itself is above, and the analytic sun shadow falls elsewhere).
+    const QPointF p = rig.r->worldToPixelForTest(QVector3D(40.0f, 0.0f, -g - 0.02f));
+    const double ratio = windowLuma(low, int(p.x()), int(p.y())) /
+                         windowLuma(high, int(p.x()), int(p.y()));
+    qInfo("drone blob ratio %.3f", ratio);
+    QVERIFY(ratio < 0.9);
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
 };

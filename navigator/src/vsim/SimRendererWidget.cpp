@@ -1392,6 +1392,8 @@ void SimRendererWidget::paintGL() {
 
   if (vegEnabled_ && worldVisible_ && !training && veg_)
     drawVegetation(view);
+  if (worldVisible_ && !training)
+    drawDroneBlob(view);
 
   // Water over the carved ponds, after the opaque scene (it blends).
   if (worldVisible_ && !training && water_ && waterField_ &&
@@ -2247,6 +2249,25 @@ void SimRendererWidget::setVegetationTreesEnabled(bool on) {
 const VegetationRenderer::Stats &SimRendererWidget::vegetationStats() const {
   static const VegetationRenderer::Stats none;
   return veg_ && vegEnabled_ ? veg_->stats() : none;
+}
+
+// The drone's contact blob on the ground under it: its own pass, whatever the
+// vegetation flags say (the height cue stays with vegetation off).
+void SimRendererWidget::drawDroneBlob(const QMatrix4x4 &view) {
+  if (!veg_)
+    return;
+  lastVegVp_ = proj_ * view; // for worldToPixelForTest
+  VegFrame f;
+  f.proj = proj_;
+  f.view = view;
+  f.camEye = camEye_;
+  f.dronePos = droneShadowPos_;
+  f.droneRadius = droneShadowR_;
+  if (farTerrain_.active()) {
+    f.droneGroundZ = farTerrain_.surfaceZ(droneShadowPos_.x(), droneShadowPos_.y(), 1e9f);
+    f.droneGroundKnown = f.droneGroundZ < 1e8f;
+  }
+  veg_->drawDroneBlob(f);
 }
 
 void SimRendererWidget::drawVegetation(const QMatrix4x4 &view) {

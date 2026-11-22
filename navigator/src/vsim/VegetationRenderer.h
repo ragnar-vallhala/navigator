@@ -86,6 +86,45 @@ struct VegFrame {
   bool shadowOn = false;
   int defaultFbo = 0;
   int viewportW = 0, viewportH = 0;
+  // NED z of the terrain under the drone (the drone's contact blob sits there);
+  // droneGroundKnown is false when there is no terrain field to ask.
+  float droneGroundZ = 0.0f;
+  bool droneGroundKnown = false;
+};
+
+// The soft contact blob under every tree trunk, rock and the drone: a darkened,
+// feathered disc that grounds the object on the terrain (the sun shadow map is
+// too coarse for a trunk's foot, and there is no ground occlusion). One
+// instanced draw, multiplied into the framebuffer. Every number that shapes it
+// is here.
+struct VegContactBlob {
+  // Size, as a multiple of the object's own base radius.
+  static constexpr float kTrunkRadiusMult = 5.0f; // x the trunk radius (collider radius x scale)
+  static constexpr float kRockRadiusMult = 2.0f;  // x the rock's half span
+  static constexpr float kMinRadiusM = 0.35f;
+  // Darkness at the centre: 0 = none, 1 = black.
+  static constexpr float kTreeDarkness = 0.55f;
+  static constexpr float kRockDarkness = 0.5f;
+  // Falloff: full darkness out to this fraction of the radius, then a smooth
+  // fade to nothing at the rim.
+  static constexpr float kCoreFraction = 0.15f;
+  // Distance fade [m]: full to kFadeStartM, gone at kFadeEndM; blobs beyond are
+  // not even sent.
+  static constexpr float kFadeStartM = 35.0f;
+  static constexpr float kFadeEndM = 70.0f;
+  // The disc is flat, kLiftM above the surface at the object's foot.
+  static constexpr float kLiftM = 0.02f;
+  // Its depth is taken this far [m] toward the eye, so ground that is a little
+  // above the disc (a slope, a bump) does not hide it.
+  static constexpr float kDepthNudgeM = 1.0f;
+  // The drone: radius = drone shadow radius x (1 + height x kDroneSpread),
+  // darkness kDroneDarkness / (1 + height / kDroneHalfHeightM), none above
+  // kDroneMaxHeightM.
+  static constexpr float kDroneDarkness = 0.35f;
+  static constexpr float kDroneSpread = 0.12f;
+  static constexpr float kDroneHalfHeightM = 6.0f;
+  static constexpr float kDroneMaxHeightM = 40.0f;
+  static constexpr int kMaxInstances = 6000;
 };
 
 // Which asset species stand in for each procgen species, and their sizes and
@@ -224,6 +263,11 @@ public:
   void releaseGL(); // frees every GL object; CPU data stays
   void draw(const VegFrame &f);
   bool glReady() const { return glReady_; }
+  // The drone's contact blob, independent of the vegetation flags and assets: needs
+  // only a current GL context. Uses f.proj, view, camEye, dronePos, droneRadius
+  // and the drone ground fields.
+  void drawDroneBlob(const VegFrame &f);
+  bool droneBlobDrawn() const { return droneBlobDrawn_; } // by the last drawDroneBlob()
   int liveObjects() const; // GL names currently held
 
   // True while species are still decoding/uploading or impostors still to
@@ -234,6 +278,7 @@ public:
     int instancesDrawn = 0, drawCalls = 0, impostors = 0, chunksDrawn = 0;
     long long triangles = 0;
     int speciesReady = 0, impostorVariants = 0;
+    int blobs = 0;         // contact blobs drawn (trees and rocks)
     // Trees drawn this frame per kind (procgen::kVegTreeKinds order), as meshes
     // and as impostors, and the triangles the meshes cost.
     int treeMeshes[procgen::kVegTreeKindCount] = {};
@@ -321,7 +366,14 @@ private:
   std::array<std::vector<int>, procgen::kVegTreeKindCount> treePool_;
   bool resolvedAssets_ = false;
 
-  std::unique_ptr<QOpenGLShaderProgram> prog_, progBillboard_, progBake_;
+  std::unique_ptr<QOpenGLShaderProgram> prog_, progBillboard_, progBake_, progBlob_;
+  unsigned blobVao_ = 0, blobDisc_ = 0, blobInst_ = 0;
+  std::vector<float> blobData_; // per frame: x, y, z, radius, darkness
+  void drawBlobs(const VegFrame &f);
+  void drawBlobInstances(const VegFrame &f, const float *data, int n);
+  bool ensureBlobGl();
+  void releaseBlobGL();
+  bool blobGlTried_ = false, droneBlobDrawn_ = false;
   // Per-draw uniform locations (the per-frame ones are set by name).
   struct Locs {
     int k = -1, height = -1, sway = -1, cutout = -1, cutoff = -1, a2c = -1;
