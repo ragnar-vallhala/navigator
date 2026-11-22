@@ -151,7 +151,7 @@ SPECIES = [
                # holds 1.5 to 3 times the mesh's pixels; a higher cut-off in the bake
                # alone brings it down. The mesh LODs keep the 0.5.
                'island_tree_01_leaves': dict(weight=0.78, cutout=True, key_black=True, cull=True, grade=GRADE_ISLAND_LEAF,
-                                             size=1024, scale_cap=(3.5, 4.5, 6.0), tris_per_comp=2,
+                                             size=1024, scale_cap=(3.5, 4.5, 8.0), tris_per_comp=2,
                                              impostor_cutoff=0.7),
                'island_tree_01_branches': dict(weight=0.12, cutout=False, cull=True, size=512,
                                                scale_cap=(2.0, 2.5, 3.0), tris_per_comp=12)}),
