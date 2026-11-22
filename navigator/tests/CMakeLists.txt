@@ -307,6 +307,12 @@ navigator_test(tst_vegetation
     ${SRC}/vsim/procgen/Vegetation.cpp)
 target_include_directories(tst_vegetation PRIVATE ${SRC}/vsim)
 
+# ---- Collider window around the drone (Qt-free, engine-free) ----------------
+navigator_test(tst_treecolliderwindow
+    tst_treecolliderwindow.cpp
+    ${SRC}/vsim/procgen/TreeColliderWindow.cpp)
+target_include_directories(tst_treecolliderwindow PRIVATE ${SRC}/vsim/procgen ${SRC}/vsim)
+
 # ---- Procedural world presets (Qt-free core, headless) ----------------------
 navigator_test(tst_worldpresets
     tst_worldpresets.cpp
