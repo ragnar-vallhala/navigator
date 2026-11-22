@@ -62,10 +62,15 @@ inline QString bannerText(uint32_t crashFlags, float peakImpactMps) {
   if (!isCrashed(crashFlags))
     return QString();
   // A non-finite or negative peak would print "nan"/"-inf" in the middle of a
-  // warning; show 0 instead of nonsense.
-  const float peak = (peakImpactMps >= 0.0f && peakImpactMps < 1.0e6f)
-                         ? peakImpactMps
-                         : 0.0f;
+  // warning, and says nothing about why: show no cause at all.
+  if (!(peakImpactMps >= 0.0f && peakImpactMps < 1.0e6f))
+    return QStringLiteral("CRASHED, Reset to fly");
+  const float peak = peakImpactMps;
+  // A speed crash needs a contact faster than the limit, so a crash whose peak
+  // is at or under it was the other rule: the airframe was left on its back.
+  // Saying "impact 2.4 m/s" for that would read as a crash below the limit.
+  if (peak <= kLimitMps)
+    return QStringLiteral("CRASHED: left on its back, Reset to fly");
   return QStringLiteral("CRASHED: impact %1 m/s, Reset to fly")
       .arg(static_cast<double>(peak), 0, 'f', 1);
 }

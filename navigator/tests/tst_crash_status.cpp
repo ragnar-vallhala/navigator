@@ -48,6 +48,7 @@ private slots:
   void returnsTheBytesWritten();
   void onlyBitZeroIsCrashed();
   void bannerTextWhenCrashed();
+  void bannerNamesATiltCrash();
   void bannerEmptyWhenNotCrashed();
   void bannerHandlesNonsensePeak();
 };
@@ -121,6 +122,16 @@ void TstCrashStatus::bannerTextWhenCrashed() {
            QStringLiteral("CRASHED: impact 15.0 m/s, Reset to fly"));
 }
 
+void TstCrashStatus::bannerNamesATiltCrash() {
+  // The engine also crashes an airframe left on its back, at any speed: its
+  // peak is under the limit, so the text must not claim an impact speed.
+  const QString back = QStringLiteral("CRASHED: left on its back, Reset to fly");
+  QCOMPARE(vsim::crash::bannerText(VSIM_POSE_CRASHED, 2.4f), back);
+  QCOMPARE(vsim::crash::bannerText(VSIM_POSE_CRASHED, 0.0f), back);
+  QCOMPARE(vsim::crash::bannerText(VSIM_POSE_CRASHED, vsim::crash::kLimitMps),
+           back);
+}
+
 void TstCrashStatus::bannerEmptyWhenNotCrashed() {
   // A hard-but-survivable contact has a peak and no crash: nothing to show.
   QVERIFY(vsim::crash::bannerText(0u, 7.9f).isEmpty());
@@ -128,7 +139,7 @@ void TstCrashStatus::bannerEmptyWhenNotCrashed() {
 }
 
 void TstCrashStatus::bannerHandlesNonsensePeak() {
-  const QString zero = QStringLiteral("CRASHED: impact 0.0 m/s, Reset to fly");
+  const QString zero = QStringLiteral("CRASHED, Reset to fly");
   QCOMPARE(vsim::crash::bannerText(VSIM_POSE_CRASHED, std::nanf("")), zero);
   QCOMPARE(vsim::crash::bannerText(VSIM_POSE_CRASHED, -3.0f), zero);
   QCOMPARE(vsim::crash::bannerText(VSIM_POSE_CRASHED, INFINITY), zero);
