@@ -24,9 +24,19 @@
 // two calls over the same set compare equal and a caller can send one update
 // per batch only when the set changed.
 //
-// Frame: VegCollider.pos is the surface point, x/y in the same frame as the
-// drone position and chunk grid, z the engine's NED down coordinate; the
-// cylinder rises from pos by `height`, so its centre is pos.z - height / 2.
+// Frames (traced, no conversion of x/y/z is needed beyond the centre shift):
+//  - Input VegCollider.pos is the NED world frame the drone pose and the World
+//    tab use: x north, y east, z DOWN, absolute metres (chunk (cx, cy) spans
+//    [cx*chunkM, (cx+1)*chunkM) on x and y, no chunk-local offset).
+//    scatterVegetation sets pos = (x, y, -surfaceHeight) (Vegetation.cpp:394,
+//    458), so up is -z and pos is the base of the stem on the ground, not a
+//    height above it. The renderer draws at pos.z + kSinkM, same frame
+//    (VegetationRenderer.cpp:835-837).
+//  - Output EngineCylinder is what a World-tab cylinder obstacle sends through
+//    SimWorker::sendObstacles (SimWorker.cpp:211-231, copied one to one into
+//    vsim_ctl_obstacle_t): centre in NED metres, size.x = radius, size.z = full
+//    height, axis the body-local z (VsimTypes.h:111-115). A cylinder standing
+//    on pos therefore has its centre at pos.z - height / 2 (half a height up).
 #pragma once
 
 #include "Vegetation.h"

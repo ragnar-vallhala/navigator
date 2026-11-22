@@ -19,9 +19,13 @@
 // core, headless).
 #include <QtTest/QtTest>
 
+#include "VsimTypes.h"
+#include "procgen/GroundCover.h"
+#include "procgen/TerrainField.h"
 #include "procgen/TreeColliderWindow.h"
 
 #include <algorithm>
+#include <cmath>
 
 using namespace vsim::procgen;
 
@@ -31,6 +35,33 @@ VegCollider tree(float x, float y, float z = 0.0f, float r = 0.3f, float h = 10.
 }
 VegCollider rock(float x, float y, float z = 0.0f) {
   return VegCollider{PgVec3{x, y, z}, 1.0f, 1.5f, true};
+}
+
+// What SimWorker::sendObstacles (vsim/SimWorker.cpp:211-231) hands the engine
+// for a World-tab obstacle: pos, size and restitution copied one to one into
+// vsim_ctl_obstacle_t (b.pos = o.pos, b.size = o.size, b.restitution). That
+// code is inline in a member that needs the engine thread, so the arithmetic
+// is repeated here; for a cylinder pos is the CENTRE in NED metres (z down),
+// size.x the radius and size.z the full height, axis the body-local z
+// (vsim/VsimTypes.h:111-115).
+struct WireCylinder {
+  float pos[3];
+  float size[3];
+  float restitution;
+};
+WireCylinder sendObstaclesWire(const vsim::Obstacle &o) {
+  return WireCylinder{{o.pos.x(), o.pos.y(), o.pos.z()},
+                      {o.size.x(), o.size.y(), o.size.z()},
+                      o.restitution};
+}
+// The World-tab way to say "a cylinder standing on the surface point `base`
+// (NED, z down) that is `h` tall": the centre is half the height above it.
+vsim::Obstacle worldTabCylinder(PgVec3 base, float r, float h) {
+  vsim::Obstacle o;
+  o.type = vsim::Obstacle::Cylinder;
+  o.pos = QVector3D(base.x, base.y, base.z - 0.5f * h);
+  o.size = QVector3D(r, r, h);
+  return o;
 }
 } // namespace
 
@@ -119,6 +150,64 @@ private slots:
     // A changed set compares unequal.
     in.push_back(tree(40, 40));
     QVERIFY(treeColliderWindow(in, {}, 0, 100, true, true) != a);
+  }
+
+  // A tree placed the way scatterVegetation places it (pos.z = -surface height,
+  // NED, up is -z) lands on the same engine cylinder as the equivalent World-tab
+  // obstacle after SimWorker's conversion.
+  void matchesWorldTabObstacle() {
+    const PgVec3 base{12.0f, -7.0f, -42.5f}; // surface 42.5 m above NED zero
+    const auto w = treeColliderWindow({tree(base.x, base.y, base.z, 0.35f, 9.0f)},
+                                      {}, 0, 100, true, true);
+    QCOMPARE(int(w.size()), 1);
+    const WireCylinder o = sendObstaclesWire(worldTabCylinder(base, 0.35f, 9.0f));
+    QCOMPARE(w[0].center.x, o.pos[0]);
+    QCOMPARE(w[0].center.y, o.pos[1]);
+    QCOMPARE(w[0].center.z, o.pos[2]);
+    QCOMPARE(w[0].radius, o.size[0]);
+    QCOMPARE(w[0].height, o.size[2]);
+    QCOMPARE(w[0].restitution, o.restitution);
+    // And it is above the ground: the top is at a smaller (more up) NED z.
+    QVERIFY(w[0].center.z - 0.5f * w[0].height < base.z);
+  }
+
+  // The real chain: scatterVegetation -> vegetationColliders -> window. Every
+  // trunk stands on the terrain (pos.z = -height, so NED), and its cylinder
+  // equals the World-tab obstacle for the same base.
+  void realScatterPathMatchesWorldTab() {
+    FieldParams fp;
+    fp.seed = 11u;
+    fp.palette = kPalForest;
+    const TerrainField f(fp);
+    const VegParams p = vegParamsForPalette(kPalForest);
+    const float chunkM = 256.0f;
+    std::vector<VegInstance> inst;
+    for (int j = 0; j < 2; ++j)
+      for (int i = 0; i < 2; ++i) {
+        const auto v = scatterVegetation(f, i, j, chunkM, p);
+        inst.insert(inst.end(), v.begin(), v.end());
+      }
+    const std::vector<VegCollider> cols = vegetationColliders(inst);
+    QVERIFY(cols.size() > 20);
+    // Drone in chunk (0,0): chunks -1..1 are in the window, so (0..1, 0..1) all are.
+    const auto w = treeColliderWindow(cols, PgVec3{10, 10, 0}, 0, chunkM, true, true);
+    QCOMPARE(w.size(), cols.size());
+    for (const VegCollider &c : cols) {
+      // NED: the surface is at z = -height (within the mesh-vs-field difference).
+      QVERIFY2(std::fabs(c.pos.z + f.height(c.pos.x, c.pos.y)) < 3.0f,
+               "collider base is not at -terrain height");
+      const WireCylinder o = sendObstaclesWire(worldTabCylinder(c.pos, c.radius, c.height));
+      const EngineCylinder e = [&] {
+        for (const EngineCylinder &x : w)
+          if (x.center.x == o.pos[0] && x.center.y == o.pos[1] && x.radius == o.size[0] &&
+              x.height == o.size[2])
+            return x;
+        return EngineCylinder{};
+      }();
+      QVERIFY(e.radius > 0.0f);
+      QCOMPARE(e.center.z, o.pos[2]);
+      QCOMPARE(e.restitution, o.restitution);
+    }
   }
 
   void degenerateInputs() {
