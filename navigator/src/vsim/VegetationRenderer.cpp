@@ -580,6 +580,46 @@ void main() {
 }
 )GLSL";
 
+// Contact blobs (see VegContactBlob): a 16-sided disc fan per instance, x y the
+// unit-disc offset, drawn as a multiply.
+const char *kBlobVS = R"GLSL(
+#version 330 core
+layout(location = 0) in vec2 a_disc;
+layout(location = 1) in vec4 i_pos;   // base (NED), radius
+layout(location = 2) in float i_dark;
+uniform mat4 u_vp;
+uniform vec3 u_eye;
+uniform vec3 u_shape; // lift, fade start, fade end
+uniform float u_nudge; // depth bias toward the eye [m]
+out float v_rho;
+out float v_dark;
+void main() {
+  float rho = length(a_disc);
+  vec3 p = vec3(i_pos.xy + a_disc * i_pos.w,
+                i_pos.z - u_shape.x);
+  // Screen position from p, depth from a point u_nudge closer to the eye: the
+  // terrain's slope and its triangles' deviation from the surface then cannot
+  // bury the disc, and it still loses to a trunk or rock standing in front of it.
+  vec4 c = u_vp * vec4(p, 1.0);
+  vec4 cn = u_vp * vec4(p + normalize(u_eye - p) * u_nudge, 1.0);
+  gl_Position = vec4(c.xy, cn.z / cn.w * c.w, c.w);
+  v_rho = rho;
+  v_dark = i_dark * (1.0 - smoothstep(u_shape.y, u_shape.z, distance(p, u_eye)));
+}
+)GLSL";
+
+const char *kBlobFS = R"GLSL(
+#version 330 core
+in float v_rho;
+in float v_dark;
+uniform float u_core;
+out vec4 o_color;
+void main() {
+  float a = v_dark * (1.0 - smoothstep(u_core, 1.0, v_rho));
+  o_color = vec4(vec3(1.0 - a), 1.0);
+}
+)GLSL";
+
 bool linkProgram(QOpenGLShaderProgram &p, const char *name, const QByteArray &vs,
                  const QByteArray &fs) {
   if (!p.addShaderFromSourceCode(QOpenGLShader::Vertex, vs) ||
@@ -980,6 +1020,9 @@ bool VegetationRenderer::buildPrograms(const VegGlsl &g) {
     progBillboard_.reset();
     progBake_.reset();
   }
+  progBlob_ = std::make_unique<QOpenGLShaderProgram>();
+  if (!linkProgram(*progBlob_, "vegetation blob", kBlobVS, kBlobFS))
+    progBlob_.reset(); // no blobs; everything else still draws
   loc_.k = prog_->uniformLocation("u_k");
   loc_.height = prog_->uniformLocation("u_height");
   loc_.sway = prog_->uniformLocation("u_sway");
@@ -1117,13 +1160,22 @@ void VegetationRenderer::releaseGL() {
   atlasFbo_ = atlasDepth_ = atlasTex_ = atlasMask_ = 0;
   atlasOk_ = false;
   atlasTried_ = false;
+  if (blobVao_)
+    glDeleteVertexArrays(1, &blobVao_);
+  if (blobDisc_)
+    glDeleteBuffers(1, &blobDisc_);
+  if (blobInst_)
+    glDeleteBuffers(1, &blobInst_);
+  blobVao_ = blobDisc_ = blobInst_ = 0;
   prog_.reset();
   progBillboard_.reset();
   progBake_.reset();
+  progBlob_.reset();
 }
 
 int VegetationRenderer::liveObjects() const {
-  int n = (prog_ ? 1 : 0) + (progBillboard_ ? 1 : 0) + (progBake_ ? 1 : 0);
+  int n = (prog_ ? 1 : 0) + (progBillboard_ ? 1 : 0) + (progBake_ ? 1 : 0) + (progBlob_ ? 1 : 0);
+  n += (blobVao_ ? 1 : 0) + (blobDisc_ ? 1 : 0) + (blobInst_ ? 1 : 0);
   n += (atlasFbo_ ? 1 : 0) + (atlasDepth_ ? 1 : 0) + (atlasTex_ ? 1 : 0) + (atlasMask_ ? 1 : 0);
   for (const SpeciesGpu &s : sp_)
     for (const Mat &m : s.mats)
@@ -1517,6 +1569,73 @@ void VegetationRenderer::drawImpostors(VariantGpu &v, const std::vector<float> &
   }
 }
 
+// The contact blobs of this frame's trees and rocks, and the drone's: one
+// instanced draw of the 16-sided disc fan, after everything that writes depth.
+void VegetationRenderer::drawBlobs(const VegFrame &f) {
+  using B = VegContactBlob;
+  if (!progBlob_)
+    return;
+  if (f.droneGroundKnown && f.droneRadius > 0.0f) {
+    const float h = f.droneGroundZ - f.dronePos.z(); // NED: above ground is negative z
+    if (h > 0.0f && h < B::kDroneMaxHeightM) {
+      blobData_.insert(blobData_.end(),
+                       {f.dronePos.x(), f.dronePos.y(), f.droneGroundZ,
+                        f.droneRadius * (1.0f + h * B::kDroneSpread),
+                        B::kDroneDarkness / (1.0f + h / B::kDroneHalfHeightM)});
+      stats_.droneBlob = true;
+    }
+  }
+  const int n = int(blobData_.size() / 5);
+  if (n == 0)
+    return;
+  constexpr int kSides = 16;
+  if (!blobVao_) {
+    float disc[(kSides + 2) * 2] = {0.0f, 0.0f};
+    for (size_t i = 0; i <= size_t(kSides); ++i) {
+      const float a = 6.2831853f * float(i) / float(kSides);
+      disc[(i + 1) * 2] = std::cos(a);
+      disc[(i + 1) * 2 + 1] = std::sin(a);
+    }
+    glGenVertexArrays(1, &blobVao_);
+    glGenBuffers(1, &blobDisc_);
+    glGenBuffers(1, &blobInst_);
+    glBindVertexArray(blobVao_);
+    glBindBuffer(GL_ARRAY_BUFFER, blobDisc_);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(disc), disc, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
+    glBindBuffer(GL_ARRAY_BUFFER, blobInst_);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 5 * sizeof(float), nullptr);
+    glVertexAttribDivisor(1, 1);
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, 5 * sizeof(float),
+                          reinterpret_cast<void *>(4 * sizeof(float)));
+    glVertexAttribDivisor(2, 1);
+  }
+  glBindVertexArray(blobVao_);
+  glBindBuffer(GL_ARRAY_BUFFER, blobInst_);
+  glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(blobData_.size() * sizeof(float)),
+               blobData_.data(), GL_STREAM_DRAW);
+  progBlob_->bind();
+  progBlob_->setUniformValue("u_vp", f.proj * f.view);
+  progBlob_->setUniformValue("u_eye", f.camEye);
+  progBlob_->setUniformValue("u_shape", QVector3D(B::kLiftM, B::kFadeStartM, B::kFadeEndM));
+  progBlob_->setUniformValue("u_core", B::kCoreFraction);
+  progBlob_->setUniformValue("u_nudge", B::kDepthNudgeM);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_DST_COLOR, GL_ZERO); // multiply
+  glDisable(GL_CULL_FACE);
+  glDepthMask(GL_FALSE);
+  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+  glDrawArraysInstanced(GL_TRIANGLE_FAN, 0, kSides + 2, n);
+  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+  glDepthMask(GL_TRUE);
+  glDisable(GL_BLEND);
+  progBlob_->release();
+  ++stats_.drawCalls;
+}
+
 void VegetationRenderer::draw(const VegFrame &f) {
   stats_ = Stats();
   if (!glReady_ || !prog_ || chunks_.empty())
@@ -1603,6 +1722,7 @@ void VegetationRenderer::draw(const VegFrame &f) {
   const QVector3D eye = f.camEye;
   for (std::vector<float> &b : buckets_)
     b.clear();
+  blobData_.clear();
   float farthest = 0.0f;
   for (const VegSpeciesInfo &s : kTable)
     farthest = std::max(farthest, s.maxDist);
@@ -1648,6 +1768,23 @@ void VegetationRenderer::draw(const VegFrame &f) {
       if (!vis)
         continue;
       const float d = std::sqrt(d2);
+      if (progBlob_ && d < VegContactBlob::kFadeEndM &&
+          blobData_.size() < size_t(VegContactBlob::kMaxInstances) * 5) {
+        float rad = 0.0f, dark = 0.0f;
+        if (info.cat == procgen::kVegTree) { // table rows 0.. are the tree kinds
+          rad = procgen::kVegTreeKinds[r.info].trunkRadiusM * r.scale *
+                VegContactBlob::kTrunkRadiusMult;
+          dark = VegContactBlob::kTreeDarkness;
+        } else if (info.cat == procgen::kVegRock) {
+          rad = 0.5f * procgen::kVegRockSpanM * r.scale * VegContactBlob::kRockRadiusMult;
+          dark = VegContactBlob::kRockDarkness;
+        }
+        if (dark > 0.0f) {
+          blobData_.insert(blobData_.end(),
+                           {r.x, r.y, r.z - kSinkM, std::max(rad, VegContactBlob::kMinRadiusM), dark});
+          ++stats_.blobs;
+        }
+      }
       const bool billReady = atlasOk_ && v.baked;
       VegLodChoice ch = vegChooseLod(info, d, billReady);
       if (forcedLod_ >= 0 && d < info.maxDist) { // tests: one LOD at every distance
@@ -1738,6 +1875,7 @@ void VegetationRenderer::draw(const VegFrame &f) {
         drawImpostors(var_[vi], buckets_[vi * 4 + 3], f);
     progBillboard_->release();
   }
+  drawBlobs(f);
   glBindVertexArray(0);
   glBindBuffer(GL_ARRAY_BUFFER, 0);
   for (int u = 4; u >= 1; --u) {

@@ -424,6 +424,12 @@ public:
     cam_pitch_ = down;
     update();
   }
+  // Test hook: where a world point (NED) landed in the last frame's vegetation
+  // pass, in device pixels from the top left (valid after a frame was drawn).
+  QPointF worldToPixelForTest(const QVector3D &w) const {
+    const QVector4D c = lastVegVp_ * QVector4D(w, 1.0f);
+    return {(c.x() / c.w() * 0.5 + 0.5) * fbW_, (0.5 - c.y() / c.w() * 0.5) * fbH_};
+  }
   int contextGoneCount() const { return goneCount_; } // aboutToBeDestroyed seen
   bool contextWasCurrentWhenGone() const { return goneCurrent_; }
   // Drops every GL object and builds them all again in the CURRENT context,
@@ -655,6 +661,7 @@ private:
   // the grass wind — kept general so it survives with grass compiled out.
   float floraTime_ = 0.0f;
   bool animFrozenForTest_ = false;
+  QMatrix4x4 lastVegVp_; // proj * view of the last vegetation pass (tests)
 
 #ifdef VAYU_SIM_GRASS
   // Flora shader: instanced grass/flower blades, wind + distance fade + fog.

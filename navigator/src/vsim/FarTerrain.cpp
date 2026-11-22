@@ -62,6 +62,10 @@ float FarTerrain::groundZ(float x, float y, float fallback) const {
   return field_ ? -field_->height(x, y) : fallback;
 }
 
+float FarTerrain::surfaceZ(float x, float y, float fallback) const {
+  return field_ ? -procgen::streamSurfaceHeight(*field_, x, y) : fallback;
+}
+
 bool FarTerrain::update(const Window &w) {
   if (!field_)
     return false;

@@ -2257,12 +2257,17 @@ void SimRendererWidget::drawVegetation(const QMatrix4x4 &view) {
   VegFrame f;
   f.proj = proj_;
   f.view = view;
+  lastVegVp_ = proj_ * view;
   f.csm = csm_;
   f.atmo = atmo_;
   f.camEye = camEye_;
   f.sunDir = sunDir_;
   f.dronePos = droneShadowPos_;
   f.droneRadius = droneShadowR_;
+  if (farTerrain_.active()) {
+    f.droneGroundZ = farTerrain_.surfaceZ(droneShadowPos_.x(), droneShadowPos_.y(), 1e9f);
+    f.droneGroundKnown = f.droneGroundZ < 1e8f;
+  }
   f.time = floraTime_;
   f.sunIntensity = litSunInt_;
   f.ambientStrength = litAmbStr_;
