@@ -1480,6 +1480,63 @@ private slots:
     QCOMPARE(rig.r->vegetationStats().blobs, 0);
   }
 
+  // The drone's blob lies on the ground under it while it is low, is gone far
+  // above the ground, and needs the terrain field to know where the ground is.
+  // It does not depend on the vegetation: the same with trees off, vegetation
+  // off, and no vegetation loaded at all.
+  void droneBlobSitsUnderTheDrone_data() {
+    QTest::addColumn<bool>("trees");
+    QTest::addColumn<bool>("vegetation");
+    QTest::addColumn<bool>("loaded");
+    QTest::newRow("vegetation on") << true << true << true;
+    QTest::newRow("trees off") << false << true << true;
+    QTest::newRow("vegetation off") << true << false << true;
+    QTest::newRow("vegetation unloaded") << true << true << false;
+  }
+  void droneBlobSitsUnderTheDrone() {
+    QFETCH(bool, trees);
+    QFETCH(bool, vegetation);
+    QFETCH(bool, loaded);
+    World w = loneWorld(kVegTree, 1);
+    for (auto &v : w.veg)
+      for (auto &t : v)
+        t.pos.y = 60.0f; // out of view
+    FieldParams fp;
+    fp.seed = 11u;
+    fp.palette = kPalForest;
+    fp.heightM = 20.0f;
+    auto field = std::make_shared<const TerrainField>(fp);
+    Rig rig(trees);
+    rig.r->setMotorsEditable(false); // the simulator running: the drone is flying
+    rig.r->setTerrainField(field);
+    loadTerrain(rig.r, w);
+    if (loaded)
+      loadVegetation(rig.r, w);
+    rig.r->setVegetationEnabled(vegetation);
+    QVERIFY(rig.show());
+    rig.r->setSun(46.0f, 37.0f);
+    rig.r->setTerrainQuality(vsim::terrain::Quality::High);
+    const float g = surfaceHeight(*w.field, 40.0f, 0.0f, kChunkM, kRes);
+    auto frame = [&](float aboveM) {
+      aimCamera(rig.r, w, 34.0f, 0.0f, 3.5f, 0.0f, 0.3f);
+      SimSnapshot s;
+      s.pos_w = {40.0f, 0.0f, -(g + aboveM)};
+      rig.r->setSnapshot(s);
+      return settledFrame(rig.r).convertToFormat(QImage::Format_RGB32);
+    };
+    const QImage high = frame(60.0f);
+    QVERIFY(!rig.r->droneBlobDrawnForTest());
+    const QImage low = frame(1.5f);
+    QVERIFY(rig.r->droneBlobDrawnForTest());
+    // Ground under the drone, seen from behind: the blob darkens it (the drone
+    // itself is above, and the analytic sun shadow falls elsewhere).
+    const QPointF p = rig.r->worldToPixelForTest(QVector3D(40.0f, 0.0f, -g - 0.02f));
+    const double ratio = windowLuma(low, int(p.x()), int(p.y())) /
+                         windowLuma(high, int(p.x()), int(p.y()));
+    qInfo("drone blob ratio %.3f", ratio);
+    QVERIFY(ratio < 0.9);
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
 };
 
 int main(int argc, char **argv) {

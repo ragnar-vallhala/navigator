@@ -263,6 +263,11 @@ public:
   void releaseGL(); // frees every GL object; CPU data stays
   void draw(const VegFrame &f);
   bool glReady() const { return glReady_; }
+  // The drone's contact blob, independent of the vegetation flags and assets: needs
+  // only a current GL context. Uses f.proj, view, camEye, dronePos, droneRadius
+  // and the drone ground fields.
+  void drawDroneBlob(const VegFrame &f);
+  bool droneBlobDrawn() const { return droneBlobDrawn_; } // by the last drawDroneBlob()
   int liveObjects() const; // GL names currently held
 
   // True while species are still decoding/uploading or impostors still to
@@ -274,7 +279,6 @@ public:
     long long triangles = 0;
     int speciesReady = 0, impostorVariants = 0;
     int blobs = 0;         // contact blobs drawn (trees and rocks)
-    bool droneBlob = false; // the drone's own blob is among the draw
     // Trees drawn this frame per kind (procgen::kVegTreeKinds order), as meshes
     // and as impostors, and the triangles the meshes cost.
     int treeMeshes[procgen::kVegTreeKindCount] = {};
@@ -366,6 +370,10 @@ private:
   unsigned blobVao_ = 0, blobDisc_ = 0, blobInst_ = 0;
   std::vector<float> blobData_; // per frame: x, y, z, radius, darkness
   void drawBlobs(const VegFrame &f);
+  void drawBlobInstances(const VegFrame &f, const float *data, int n);
+  bool ensureBlobGl();
+  void releaseBlobGL();
+  bool blobGlTried_ = false, droneBlobDrawn_ = false;
   // Per-draw uniform locations (the per-frame ones are set by name).
   struct Locs {
     int k = -1, height = -1, sway = -1, cutout = -1, cutoff = -1, a2c = -1;

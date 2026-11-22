@@ -1020,9 +1020,6 @@ bool VegetationRenderer::buildPrograms(const VegGlsl &g) {
     progBillboard_.reset();
     progBake_.reset();
   }
-  progBlob_ = std::make_unique<QOpenGLShaderProgram>();
-  if (!linkProgram(*progBlob_, "vegetation blob", kBlobVS, kBlobFS))
-    progBlob_.reset(); // no blobs; everything else still draws
   loc_.k = prog_->uniformLocation("u_k");
   loc_.height = prog_->uniformLocation("u_height");
   loc_.sway = prog_->uniformLocation("u_sway");
@@ -1112,7 +1109,20 @@ void VegetationRenderer::freeSpeciesTextures(SpeciesGpu &s) {
   s.mats.clear();
 }
 
+void VegetationRenderer::releaseBlobGL() {
+  if (blobVao_)
+    glDeleteVertexArrays(1, &blobVao_);
+  if (blobDisc_)
+    glDeleteBuffers(1, &blobDisc_);
+  if (blobInst_)
+    glDeleteBuffers(1, &blobInst_);
+  blobVao_ = blobDisc_ = blobInst_ = 0;
+  progBlob_.reset();
+  blobGlTried_ = false;
+}
+
 void VegetationRenderer::releaseGL() {
+  releaseBlobGL(); // the blobs live apart from the vegetation GL (see drawDroneBlob)
   if (!glReady_)
     return;
   glReady_ = false;
@@ -1160,17 +1170,9 @@ void VegetationRenderer::releaseGL() {
   atlasFbo_ = atlasDepth_ = atlasTex_ = atlasMask_ = 0;
   atlasOk_ = false;
   atlasTried_ = false;
-  if (blobVao_)
-    glDeleteVertexArrays(1, &blobVao_);
-  if (blobDisc_)
-    glDeleteBuffers(1, &blobDisc_);
-  if (blobInst_)
-    glDeleteBuffers(1, &blobInst_);
-  blobVao_ = blobDisc_ = blobInst_ = 0;
   prog_.reset();
   progBillboard_.reset();
   progBake_.reset();
-  progBlob_.reset();
 }
 
 int VegetationRenderer::liveObjects() const {
@@ -1569,25 +1571,52 @@ void VegetationRenderer::drawImpostors(VariantGpu &v, const std::vector<float> &
   }
 }
 
-// The contact blobs of this frame's trees and rocks, and the drone's: one
-// instanced draw of the 16-sided disc fan, after everything that writes depth.
-void VegetationRenderer::drawBlobs(const VegFrame &f) {
+// The blob program and its buffers, built on first use. They need only a GL
+// context, not the vegetation assets, so the drone's blob can be drawn with
+// vegetation off or unloaded.
+bool VegetationRenderer::ensureBlobGl() {
+  if (progBlob_)
+    return true;
+  if (blobGlTried_)
+    return false;
+  blobGlTried_ = true;
+  initializeOpenGLFunctions();
+  progBlob_ = std::make_unique<QOpenGLShaderProgram>();
+  if (!linkProgram(*progBlob_, "vegetation blob", kBlobVS, kBlobFS))
+    progBlob_.reset(); // no blobs; everything else still draws
+  return progBlob_ != nullptr;
+}
+
+// The drone's blob: on the ground under it while it is low, on its own path
+// (not the vegetation's assets or flags: the height cue stays with vegetation
+// off). The sim widget calls it every frame.
+void VegetationRenderer::drawDroneBlob(const VegFrame &f) {
   using B = VegContactBlob;
-  if (!progBlob_)
+  droneBlobDrawn_ = false;
+  if (!f.droneGroundKnown || f.droneRadius <= 0.0f || !ensureBlobGl())
     return;
-  if (f.droneGroundKnown && f.droneRadius > 0.0f) {
-    const float h = f.droneGroundZ - f.dronePos.z(); // NED: above ground is negative z
-    if (h > 0.0f && h < B::kDroneMaxHeightM) {
-      blobData_.insert(blobData_.end(),
-                       {f.dronePos.x(), f.dronePos.y(), f.droneGroundZ,
+  const float h = f.droneGroundZ - f.dronePos.z(); // NED: above ground is negative z
+  if (h <= 0.0f || h >= B::kDroneMaxHeightM)
+    return;
+  const float one[5] = {f.dronePos.x(), f.dronePos.y(), f.droneGroundZ,
                         f.droneRadius * (1.0f + h * B::kDroneSpread),
-                        B::kDroneDarkness / (1.0f + h / B::kDroneHalfHeightM)});
-      stats_.droneBlob = true;
-    }
-  }
+                        B::kDroneDarkness / (1.0f + h / B::kDroneHalfHeightM)};
+  drawBlobInstances(f, one, 1);
+  glBindVertexArray(0);
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+  droneBlobDrawn_ = true;
+}
+
+// This frame's trees and rocks (collected by draw()): one instanced draw of
+// the 16-sided disc fan, after everything that writes depth.
+void VegetationRenderer::drawBlobs(const VegFrame &f) {
   const int n = int(blobData_.size() / 5);
-  if (n == 0)
-    return;
+  if (n > 0 && progBlob_)
+    drawBlobInstances(f, blobData_.data(), n);
+}
+
+void VegetationRenderer::drawBlobInstances(const VegFrame &f, const float *data, int n) {
+  using B = VegContactBlob;
   constexpr int kSides = 16;
   if (!blobVao_) {
     float disc[(kSides + 2) * 2] = {0.0f, 0.0f};
@@ -1615,8 +1644,8 @@ void VegetationRenderer::drawBlobs(const VegFrame &f) {
   }
   glBindVertexArray(blobVao_);
   glBindBuffer(GL_ARRAY_BUFFER, blobInst_);
-  glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(blobData_.size() * sizeof(float)),
-               blobData_.data(), GL_STREAM_DRAW);
+  glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(size_t(n) * 5 * sizeof(float)), data,
+               GL_STREAM_DRAW);
   progBlob_->bind();
   progBlob_->setUniformValue("u_vp", f.proj * f.view);
   progBlob_->setUniformValue("u_eye", f.camEye);
@@ -1723,6 +1752,7 @@ void VegetationRenderer::draw(const VegFrame &f) {
   for (std::vector<float> &b : buckets_)
     b.clear();
   blobData_.clear();
+  ensureBlobGl();
   float farthest = 0.0f;
   for (const VegSpeciesInfo &s : kTable)
     farthest = std::max(farthest, s.maxDist);
