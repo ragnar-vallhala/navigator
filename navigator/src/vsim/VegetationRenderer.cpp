@@ -441,7 +441,10 @@ void main() {
     // it. For a cone the tile only counts inside the side view's outline (half-width
     // against the quad's own up axis), so the union stays a cone.
     float hw = @CONE_W@ * clamp((@CONE_TIP@ - v_cy) / (@CONE_TIP@ - @CONE_BASE@), 0.0, 1.0);
-    mT *= mix(1.0, 1.0 - smoothstep(hw - @CONE_SOFT@, hw, abs(v_cx)), u_cone);
+    // Straight down the top tile is the whole crown (a disc), and the cone would cut
+    // it to a wedge: the clip fades out with the elevation, gone by @CONE_F1_DEG@ degrees.
+    float coneW = u_cone * (1.0 - smoothstep(@CONE_F0@, @CONE_F1@, v_el.x));
+    mT *= mix(1.0, 1.0 - smoothstep(hw - @CONE_SOFT@, hw, abs(v_cx)), coneW);
     // The side tiles stay inside the disc (so the top tile's holes show the crown
     // behind them instead of the sky) and fade out as the elevation climbs.
     float keep = 1.0 - smoothstep(@KEEP0@, @KEEP1@, lin);
@@ -665,6 +668,9 @@ static QByteArray billboardFragmentMain() {
   src.replace("@CONE_W@", QByteArray::number(double(kVegConeHalfWidth), 'f', 3));
   src.replace("@CONE_TIP@", QByteArray::number(double(kVegConeTip), 'f', 3));
   src.replace("@CONE_BASE@", QByteArray::number(double(kVegConeBase), 'f', 3));
+  src.replace("@CONE_F0@", QByteArray::number(double(std::sin(kVegConeFadeFromDeg * kPi / 180.0f)), 'f', 5));
+  src.replace("@CONE_F1@", QByteArray::number(double(std::sin(kVegConeFadeToDeg * kPi / 180.0f)), 'f', 5));
+  src.replace("@CONE_F1_DEG@", QByteArray::number(double(kVegConeFadeToDeg), 'f', 0));
   src.replace("@CONE_SOFT@", QByteArray::number(double(kVegConeSoft), 'f', 3));
   src.replace("@SPY0@", QByteArray::number(double(kVegTopSpireY0), 'f', 3));
   src.replace("@SPY1@", QByteArray::number(double(kVegTopSpireY1), 'f', 3));

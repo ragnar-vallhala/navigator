@@ -174,6 +174,11 @@ constexpr float kVegConeHalfWidth = 0.68f;
 constexpr float kVegConeTip = 0.95f;
 constexpr float kVegConeBase = -0.6f;
 constexpr float kVegConeSoft = 0.12f;
+// Seen from above the top tile is the whole crown, a disc, and the outline would cut
+// it to a wedge: the clip's weight is 1 up to kVegConeFadeFromDeg of elevation and
+// 0 from kVegConeFadeToDeg on, where the impostor is the unclipped one.
+constexpr float kVegConeFadeFromDeg = 45.0f;
+constexpr float kVegConeFadeToDeg = 70.0f;
 
 // Vertex shader source of the billboard program, with the atlas layout filled
 // in from the constants above (exposed so a test can check it).

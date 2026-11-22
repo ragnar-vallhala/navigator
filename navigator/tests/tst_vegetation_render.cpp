@@ -850,7 +850,7 @@ private slots:
       for (int var : {0, 2}) // variant 1 is the same shape as 0, and a fir has one
         if (kind == 1 || var == 0)
           for (float d : {100.0f, 160.0f})
-            for (float e : {10.0f, 20.0f, 30.0f, 45.0f})
+            for (float e : {10.0f, 20.0f, 30.0f, 45.0f, 70.0f, 85.0f})
               for (int seed : {0, 3}) // another position and heading: the mirror state changes
                 if (seed == 0 || e > 40.0f)
                   QTest::newRow(qPrintable(QString("%1 v%2 %3 m %4 deg s%5").arg(kind ? "pine" : "fir").arg(var).arg(double(d)).arg(double(e)).arg(seed)))
@@ -905,12 +905,19 @@ private slots:
     QVERIFY2(hRatio >= minHeight, qPrintable(QString("spire or trunk lost: height x%1").arg(hRatio)));
     QVERIFY2(wRatio <= 1.25, qPrintable(QString("flat saucer: widest row x%1").arg(wRatio)));
     QVERIFY2(area <= (high ? 1.25 : 1.4), qPrintable(QString("crown filled out: area x%1").arg(area)));
+    // Straight down the top tile is the whole crown, a disc: the cone's outline would cut
+    // it to a wedge (area x0.77-0.91 and widest row x0.81-0.94 of the mesh's at 70 and
+    // 85 degrees), so the clip is gone by 70 degrees and the impostor keeps its width.
+    if (elev >= 60.0f) {
+      QVERIFY2(area >= 0.95, qPrintable(QString("crown clipped to a wedge: area x%1").arg(area)));
+      QVERIFY2(wRatio >= 0.97, qPrintable(QString("crown clipped to a wedge: widest row x%1").arg(wRatio)));
+    }
     if (elev >= 20.0f)
       QVERIFY2(waist >= 0.5, qPrintable(QString("neck under the crown: x%1").arg(waist)));
     // A cone seen from 45 degrees stays a cone: the top tile's disc, as wide as the
     // base, used to make a ball on the spire (upper bands x1.27 to x1.42 of the mesh's
     // for a fir at 100 m; the cone mask in the top tile brings them to x1.17 at most).
-    if (high && dist < 135.0f)
+    if (high && elev < 60.0f && dist < 135.0f)
       QVERIFY2(over <= 1.22, qPrintable(QString("ball on the spire: upper bands x%1").arg(over)));
     if (elev >= 20.0f && !high)
       QVERIFY2(over <= 2.2, qPrintable(QString("bulb on the crown: upper bands x%1").arg(over)));
