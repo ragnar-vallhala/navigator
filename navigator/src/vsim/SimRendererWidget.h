@@ -431,6 +431,10 @@ public:
     return {(c.x() / c.w() * 0.5 + 0.5) * fbW_, (0.5 - c.y() / c.w() * 0.5) * fbH_};
   }
   // Test hook: the last frame drew the drone's contact blob.
+  void setDroneCasterOffForTest(bool off) {
+    noCasterForTest_ = off;
+    ++shadowGeomVer_;
+  }
   void setRotorCoverageForTest(float c) {
     rotorCoverageForTest_ = c;
     ++shadowGeomVer_; // the tiles hold the old coverage
@@ -599,7 +603,9 @@ private:
   // The drone drawn into the shadow map (renderShadowPass). While it is, the
   // analytic cylinder steps aside; it stays as the fallback otherwise.
   bool droneInMap_ = false;
+  bool drawingDroneBody_ = false; // set only around the drone's own lit draws
   float rotorCoverageForTest_ = -1.0f; // < 0: kRotorCoverage
+  bool noCasterForTest_ = false;       // map says "drone in map" but draws none
   float droneVisualScale() const;
   bool droneCasterReady() const;
   void drawDroneCaster(const QMatrix4x4 &lightVP);
@@ -627,6 +633,7 @@ private:
   std::unique_ptr<QOpenGLShaderProgram> progDepth_; // depth-only, light-space
   int ud_lightmvp_ = -1;
   int ud_cover_ = -1;
+  int ud_push_ = -1;
   unsigned int shadowFbo_ = 0;
   unsigned int shadowTex_ = 0;   // atlas: cascades side by side (ShadowCascades.h)
   ShadowQuality shadowQuality_ = ShadowQuality::High;

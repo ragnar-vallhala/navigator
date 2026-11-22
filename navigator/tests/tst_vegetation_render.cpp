@@ -1553,6 +1553,9 @@ private slots:
     QTest::newRow("high 1.5 m sun 50") << true << 1.5f << 50.0f;
     QTest::newRow("high 3 m sun 50") << true << 3.0f << 50.0f;
     QTest::newRow("high 1.5 m sun 20") << true << 1.5f << 20.0f;
+    // Landed: the shadow falls right under the drone, which must still get it
+    // (the map's depth bias alone would hide a caster that low).
+    QTest::newRow("high landed 0.05 m sun 50") << true << 0.05f << 50.0f;
     QTest::newRow("low 1.5 m sun 50") << false << 1.5f << 50.0f;
   }
   void droneShadowFallsDownTheSunRay() {
@@ -1620,6 +1623,12 @@ private slots:
     };
     const double r0 = high ? ratioAt(0.0f) : 0.0;
     const double rd = ratioAt(-1.0f);
+    // The same frame with no drone caster at all: what the drone's shadow does,
+    // with the drone's own pixels identical in both (so it also works landed).
+    rig.r->setDroneCasterOffForTest(true);
+    const double rOff = ratioAt(-1.0f);
+    rig.r->setDroneCasterOffForTest(false);
+    qInfo("with caster %.4f, without %.4f -> shadow x%.4f", rd, rOff, rd / rOff);
     const double r1 = high ? ratioAt(1.0f) : 0.0;
     // High: the drone is in the map. Low: its texel is too coarse, so the
     // analytic cylinder keeps the shadow.
@@ -1631,7 +1640,10 @@ private slots:
     if (!high) {
       QVERIFY(rd < 0.97); // the cylinder
     } else {
-      QVERIFY(r0 < 0.99);          // the hull shadows the ground
+      if (aboveM > 0.2f)
+        QVERIFY(r0 < 0.99);        // the hull shadows the ground (landed: the
+                                   // drone's own pixels cover it, so not here)
+      QVERIFY(rd / rOff < 0.995);  // the caster darkens the footprint, landed or not
       QVERIFY(r0 - r1 > 0.004);    // solid rotor discs add a measurable shadow
       const double frac = (r0 - rd) / (r0 - r1); // the default is a fraction of solid
       qInfo("rotor shadow fraction of solid %.3f (coverage %.2f)", frac, 0.15);

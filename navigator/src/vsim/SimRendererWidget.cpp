@@ -67,6 +67,7 @@ constexpr float kDroneMapMaxTexelM = 0.05f; // finest cascade texel that resolve
 // 5in freestyle 3 x 14.5 mm / (pi x 62 mm) x 0.79 = 0.18; 3in 0.19; 7in
 // long-range (2 blades) 0.11; 10in 0.10. 0.15 is the middle of that range and
 // coord's figure.
+constexpr float kDronePushM = 0.4f; // drone caster depth pull toward the sun [m]
 constexpr float kRotorCoverage = 0.15f;
 constexpr float kPropDiscThickM = 0.01f; // drone prop disc caster (shadow pass)
 constexpr float kFovYDeg = 60.0f; // vertical field of view (also fits the shadow cascades)
@@ -320,7 +321,11 @@ const char *kDepthVertexShader = R"GLSL(
 #version 330 core
 layout(location = 0) in vec3 a_pos;
 uniform mat4 u_lightmvp;   // lightVP * model
-void main() { gl_Position = u_lightmvp * vec4(a_pos, 1.0); }
+uniform float u_push;      // pull the depth toward the sun by this much (clip z)
+void main() {
+  gl_Position = u_lightmvp * vec4(a_pos, 1.0);
+  gl_Position.z -= u_push * gl_Position.w;
+}
 )GLSL";
 const char *kDepthFragmentShader = R"GLSL(
 #version 330 core
@@ -346,6 +351,7 @@ const char *kShadowGLSL = R"GLSL(
 uniform vec3 u_drone;     // drone position (world, NED)
 uniform float u_droner;   // drone shadow radius [m]; 0 = off
 uniform float u_dronemap; // 1 = the drone is drawn into the shadow map: no cylinder
+uniform float u_dronebody; // 1 only while the drone's own meshes are drawn
 // Analytic soft shadow of the drone: a cylinder along the sun ray from the
 // drone, with the penumbra growing with distance. The shadow map cannot
 // resolve a 0.25 m quad, and this needs no ground height, so it lands on any
@@ -362,8 +368,10 @@ float droneShadow(vec3 wpos, vec3 lightDir) {
   return 1.0 - 0.6 * cover / (1.0 + a / 150.0);
 }
 float shadowMapFactor(vec3 wpos, vec3 nrm, vec3 lightDir) {
-  // The drone is its own caster: spare its body, which would otherwise acne.
-  if (u_dronemap > 0.5 && length(wpos - u_drone) < u_droner * 1.05) return 1.0;
+  // The drone is its own caster: its own meshes (and only those) skip the map,
+  // which would otherwise acne them. Everything else, the ground under a landed
+  // drone included, gets the full shadow.
+  if (u_dronebody > 0.5 && u_dronemap > 0.5) return 1.0;
   vec3 n = normalize(nrm);
   vec3 L = normalize(lightDir);
   // The interpolated normal is smooth but the mesh is faceted: on a steep face
@@ -997,6 +1005,7 @@ void SimRendererWidget::drawDroneModel(const QMatrix4x4 &view,
   QMatrix4x4 model = modelIn;
   if (!editable_)
     model.scale(droneVisualScale());
+  drawingDroneBody_ = true;
   drawLit(modelBody_, view, model, QVector3D(1, 1, 1));
   for (int i = 0; i < 4; ++i) {
     QMatrix4x4 m = model;
@@ -1005,6 +1014,7 @@ void SimRendererWidget::drawDroneModel(const QMatrix4x4 &view,
     m.rotate(qRadiansToDegrees(rotorAngle_[i]), 0.0f, 0.0f, -1.0f);
     drawLit(modelProp_[i], view, m, QVector3D(1, 1, 1));
   }
+  drawingDroneBody_ = false;
   // Motion-blur discs, after the opaque solids: constant-alpha blend so the
   // flat-colour program needs no alpha channel.
   bool any = false;
@@ -1107,6 +1117,7 @@ void SimRendererWidget::initResources() {
   progDepth_ = buildProgram("depth", kDepthVertexShader, kDepthFragmentShader);
   ud_lightmvp_ = progDepth_->uniformLocation("u_lightmvp");
   ud_cover_ = progDepth_->uniformLocation("u_cover");
+  ud_push_ = progDepth_->uniformLocation("u_push");
   buildShadowMap();
 
   progSky_ = buildProgram("sky", kSkyVertexShader,
@@ -1485,7 +1496,9 @@ void SimRendererWidget::paintGL() {
 
   if (!hideBody) {
     if (hasMesh_) {
+      drawingDroneBody_ = true;
       drawLit(droneMesh_, view, model, QVector3D(0.80f, 0.81f, 0.85f));
+      drawingDroneBody_ = false;
     } else {
       if (modelDirty_)
         rebuildDroneModel();
@@ -1768,6 +1781,7 @@ void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks,
 #endif
   progDepth_->bind();
   progDepth_->setUniformValue(ud_cover_, 1.0f);
+  progDepth_->setUniformValue(ud_push_, 0.0f);
   for (int ci = 0; ci < csm_.count; ++ci) {
     if (!redraw[ci])
       continue;
@@ -1812,8 +1826,15 @@ void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks,
         QOpenGLVertexArrayObject::Binder b(&helipadDisk_.vao);
         glDrawArrays(GL_TRIANGLES, 0, helipadDisk_.vertex_count);
       }
-    if (droneIn[ci])
+    if (droneIn[ci] && !noCasterForTest_) {
+      // The receiver's depth bias (about 12 texels) would swallow the shadow of
+      // anything that low, a landed drone. Pulling the drone toward the sun in
+      // depth only (not sideways: the projection is orthographic) lets it shadow
+      // the ground under it without changing where the shadow falls.
+      progDepth_->setUniformValue(ud_push_, 2.0f * kDronePushM / csm_.info[ci].y());
       drawDroneCaster(lightVP);
+      progDepth_->setUniformValue(ud_push_, 0.0f);
+    }
   }
   progDepth_->release();
 #ifdef GL_DEPTH_CLAMP
@@ -1900,6 +1921,7 @@ void SimRendererWidget::drawLit(const Mesh &m, const QMatrix4x4 &view,
   progLit_->setUniformValue(ul_drone_, droneShadowPos_);
   progLit_->setUniformValue(ul_droner_, droneShadowR_);
   progLit_->setUniformValue("u_dronemap", droneInMap_ ? 1.0f : 0.0f);
+  progLit_->setUniformValue("u_dronebody", drawingDroneBody_ ? 1.0f : 0.0f);
   progLit_->setUniformValue(ul_sunint_, litSunInt_);
   progLit_->setUniformValue(ul_ambstr_, litAmbStr_);
   progLit_->setUniformValue(ul_terrain_, terrain ? 1.0f : 0.0f);
