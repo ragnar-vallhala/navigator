@@ -940,6 +940,94 @@ private slots:
   }
 
   // The impostor's coverage has no screen-door pattern where the top tile blends in.
+  // The impostor must be about as bright as the mesh it replaces. A lone tree on
+  // bare ground, the mesh forced to LOD1 and then the impostor, mean luminance of
+  // the crown pixels (green over red in the mesh view) both cover. The mesh
+  // lights a tree differently when instVary mirrors it (the winding flips, so
+  // gl_FrontFacing inverts and the whole shading normal turns over), and the
+  // impostor follows that per instance: x = 40 hashes to a mirrored tree and
+  // x = 43 to an unmirrored one (fract(sin(dot(p, (12.9898, 78.233))) * 43758.5453)
+  // is 0.60 and 0.22; mirrored above 0.5). Fir and pine are asserted to a band
+  // (mean over 0 and 45 degrees, three suns); jacaranda and island are measured
+  // and printed only: island stays 1.0-1.5 and jacaranda reaches 1.5 behind-the-
+  // crown at sun 25 (see the commit message).
+  void impostorLuminanceMatchesMesh_data() {
+    QTest::addColumn<int>("kind");
+    QTest::addColumn<bool>("mirrored");
+    for (int k = 0; k < 4; ++k)
+      for (bool m : {true, false})
+        QTest::newRow(qPrintable(QString("%1 %2").arg(k == 0 ? "fir" : k == 1 ? "pine" : k == 2 ? "jacaranda" : "island").arg(m ? "mirrored" : "unmirrored")))
+            << k << m;
+  }
+  void impostorLuminanceMatchesMesh() {
+    QFETCH(int, kind);
+    QFETCH(bool, mirrored);
+    const float px = mirrored ? 40.0f : 43.0f;
+    World w = buildWorld(kPalForest, -1, 0);
+    for (auto &v : w.veg)
+      v.clear();
+    for (size_t i = 0; i < w.cells.size(); ++i)
+      if (w.cells[i].first == 0 && w.cells[i].second == 0) {
+        VegInstance t;
+        t.species = kVegTree;
+        t.kind = uint8_t(kind);
+        t.variant = 0;
+        t.scale = 1.0f;
+        t.yaw = 0.3f;
+        t.tint = 0.5f;
+        t.pos = {px, 0.0f, -surfaceHeight(*w.field, px, 0.0f, kChunkM, kRes)};
+        w.veg[i].push_back(t);
+      }
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    QString failures;
+    for (const auto sunp : {std::pair<float, float>{46.0f, 37.0f}, {25.0f, 200.0f}, {70.0f, 300.0f}}) {
+      double sum = 0;
+      int rows = 0;
+      for (float e : {0.0f, 45.0f}) {
+        rig.r->setSun(sunp.first, sunp.second);
+        const float er = e * 3.14159f / 180.0f;
+        aimCamera(rig.r, w, px + 50.0f * std::cos(er), 0.0f, 6.0f + 50.0f * std::sin(er), 3.14159f, er);
+        rig.r->setVegetationEnabled(false);
+        const QImage off = rig.r->grabFrame().convertToFormat(QImage::Format_RGB32);
+        rig.r->setVegetationEnabled(true);
+        QImage img[4];
+        for (int lod : {1, 3}) {
+          rig.r->setVegetationForcedLod(lod);
+          QImage on = settledFrame(rig.r);
+          for (int i = 0; i < 40 && lod == 3 && rig.r->vegetationStats().impostors == 0; ++i)
+            on = rig.r->grabFrame();
+          img[lod] = on.convertToFormat(QImage::Format_RGB32);
+        }
+        rig.r->setVegetationForcedLod(-1);
+        double sm = 0, si = 0;
+        int n = 0;
+        for (int y = 0; y < off.height(); ++y)
+          for (int x = 0; x < off.width(); ++x) {
+            const QRgb o = off.pixel(x, y), a = img[1].pixel(x, y), b = img[3].pixel(x, y);
+            if (!treeDiffers(a, o) || !treeDiffers(b, o) || qGreen(a) <= qRed(a) + 4)
+              continue;
+            auto lum = [](QRgb c) { return 0.299 * qRed(c) + 0.587 * qGreen(c) + 0.114 * qBlue(c); };
+            ++n;
+            sm += lum(a);
+            si += lum(b);
+          }
+        QVERIFY2(n > 150 && sm > 0, "crown pixels not found");
+        const double r = si / sm;
+        qInfo("LUMBAND kind %d %s sun %.0f/%.0f %.0f deg: impostor/mesh crown luminance x%.2f (%d px)", kind, mirrored ? "mirrored" : "unmirrored",
+              double(sunp.first), double(sunp.second), double(e), r, n);
+        sum += r;
+        ++rows;
+      }
+      const double mean = sum / rows;
+      if (kind <= 1 && (mean < 0.75 || mean > 1.25))
+        failures += QString("[sun %1/%2: x%3] ").arg(double(sunp.first)).arg(double(sunp.second)).arg(mean, 0, 'f', 2);
+    }
+    QVERIFY2(failures.isEmpty(), qPrintable("impostor crown luminance vs mesh, outside 0.75..1.25: " + failures));
+  }
+
   void impostorTopBlendHasNoScreenDoor_data() {
     QTest::addColumn<int>("kind");
     QTest::addColumn<float>("dist");
