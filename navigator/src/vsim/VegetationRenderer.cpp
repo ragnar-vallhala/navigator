@@ -43,8 +43,8 @@ constexpr float kLodBand = 0.07f;  // cross-fade half width, fraction of the edg
 // distance otherwise). Fog is nearly opaque by ~500 m, so nothing goes farther.
 const VegSpeciesInfo kTable[] = {
     // id                       cat            size  span   lod ends         max   fb    sway  imp
-    {"fir_tree_01",             procgen::kVegTree,  procgen::kVegTreeKinds[0].heightM, false, {30, 70, 130}, 560, 300, 0.012f, true, 0.6f},
-    {"pine_sapling_medium",     procgen::kVegTree,  procgen::kVegTreeKinds[1].heightM, false, {30, 70, 130}, 560, 300, 0.012f, true, 0.75f},
+    {"fir_tree_01",             procgen::kVegTree,  procgen::kVegTreeKinds[0].heightM, false, {30, 70, 130}, 560, 300, 0.012f, true, 0.6f, 1.0f},
+    {"pine_sapling_medium",     procgen::kVegTree,  procgen::kVegTreeKinds[1].heightM, false, {30, 70, 130}, 560, 300, 0.012f, true, 0.75f, 1.0f},
     {"jacaranda_tree",          procgen::kVegTree,  procgen::kVegTreeKinds[2].heightM, false, {30, 70, 130}, 560, 300, 0.008f, true, 1.7f},
     {"island_tree_01",          procgen::kVegTree,  procgen::kVegTreeKinds[3].heightM, false, {30, 70, 130}, 560, 300, 0.008f, true, 1.95f},
     {"shrub_03",                procgen::kVegBush,  1.0f, false, {25, 60, 110}, 170, 170, 0.030f, false},
@@ -289,6 +289,7 @@ uniform float u_tile;    // first atlas tile of this variant
 out vec2 v_uv0;
 out vec2 v_uv1;
 out vec2 v_uvT;          // the top-down tile
+out float v_cx;         // the quad's own right coordinate, -1..1
 out float v_cy;         // the quad's own up coordinate, -1 (foot) .. 1 (tip)
 out vec2 v_tc;           // position in the top tile, -1..1 (outside the tile: nothing there)
 out float v_w;
@@ -351,6 +352,7 @@ void main() {
   v_top = smoothstep(@TOP_FROM@, @TOP_TO@, e);
   float cxe = vv.x * c.x;
   float cyv = (c.y + @DOWN@ * smoothstep(@DNA@, @DNB@, e) * cosE) / max(sqrt(sinE), 0.6); // the footprint lies below the crown's middle: a tall crown seen from above leans over it
+  v_cx = c.x;
   v_cy = c.y;
   v_tc = vec2(-hl.x * cxe - hl.y * cyv, hl.y * cxe - hl.x * cyv);
   v_uvT = tileUv(u_tile + @ATLAS_AZ@, 0.5 + 0.48 * v_tc);
@@ -371,6 +373,7 @@ const char *kBillFSHead = R"GLSL(
 in vec2 v_uv0;
 in vec2 v_uv1;
 in vec2 v_uvT;
+in float v_cx;
 in float v_cy;
 in vec2 v_tc;
 in float v_w;
@@ -386,6 +389,7 @@ flat in float v_mir;
 out vec4 o_color;
 uniform sampler2D u_atlas;   // display-referred colour, coverage in alpha
 uniform sampler2D u_atlasMask; // alpha: foliage share of the covered texels
+uniform float u_cone;         // 1 for a cone-shaped crown (the top tile stays inside its outline), 0 for a round one
 uniform float u_barkGain;     // per-species trunk brightness, measured against the mesh
 )GLSL";
 
@@ -432,6 +436,12 @@ void main() {
     float grow = (exp(@GROW@ * tn) - 1.0) / (exp(@GROW@) - 1.0);
     float reach = @REACH@ * sqrt(grow) + @REST@ * smoothstep(@FULL@ - 0.1, 1.0, lin);
     float mT = 1.0 - smoothstep(reach - @SOFT@, reach, length(v_tc));
+    // A cone's outline narrows toward its tip, and from above the top tile is a disc
+    // as wide as the base: left alone, it makes a ball with the spire sticking out of
+    // it. For a cone the tile only counts inside the side view's outline (half-width
+    // against the quad's own up axis), so the union stays a cone.
+    float hw = @CONE_W@ * clamp((@CONE_TIP@ - v_cy) / (@CONE_TIP@ - @CONE_BASE@), 0.0, 1.0);
+    mT *= mix(1.0, 1.0 - smoothstep(hw - @CONE_SOFT@, hw, abs(v_cx)), u_cone);
     // The side tiles stay inside the disc (so the top tile's holes show the crown
     // behind them instead of the sky) and fade out as the elevation climbs.
     float keep = 1.0 - smoothstep(@KEEP0@, @KEEP1@, lin);
@@ -652,6 +662,10 @@ static QByteArray billboardFragmentMain() {
   src.replace("@OUT0@", QByteArray::number(double(kVegTopOut0), 'f', 3));
   src.replace("@OUT1@", QByteArray::number(double(kVegTopOut1), 'f', 3));
   src.replace("@KEEP0@", QByteArray::number(double(kVegTopKeep0), 'f', 3));
+  src.replace("@CONE_W@", QByteArray::number(double(kVegConeHalfWidth), 'f', 3));
+  src.replace("@CONE_TIP@", QByteArray::number(double(kVegConeTip), 'f', 3));
+  src.replace("@CONE_BASE@", QByteArray::number(double(kVegConeBase), 'f', 3));
+  src.replace("@CONE_SOFT@", QByteArray::number(double(kVegConeSoft), 'f', 3));
   src.replace("@SPY0@", QByteArray::number(double(kVegTopSpireY0), 'f', 3));
   src.replace("@SPY1@", QByteArray::number(double(kVegTopSpireY1), 'f', 3));
   src.replace("@SPO0@", QByteArray::number(double(kVegTopSpireOut0), 'f', 3));
@@ -1484,6 +1498,7 @@ void VegetationRenderer::drawImpostors(VariantGpu &v, const std::vector<float> &
   progBillboard_->setUniformValue(loc_.tile, float(v.tile));
   progBillboard_->setUniformValue("u_k", v.k);
   progBillboard_->setUniformValue("u_barkGain", kTable[v.info].barkGain);
+  progBillboard_->setUniformValue("u_cone", kTable[v.info].cone);
   glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, n);
   ++stats_.drawCalls;
   stats_.impostors += int(n);

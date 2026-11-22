@@ -101,6 +101,7 @@ struct VegSpeciesInfo {
   float sway;                // wind bend at the top, fraction of height
   bool impostor;             // gets a baked billboard beyond LOD2
   float barkGain = 1.0f;     // impostor trunk brightness against the mesh trunk (tests measure it)
+  float cone = 0.0f;         // 1 for a conifer: the impostor's top tile stays inside a cone's outline
 };
 const VegSpeciesInfo *vegSpeciesTable(int *count);
 // Model units to metres at instance scale 1 for one variant of a species.
@@ -166,6 +167,13 @@ constexpr float kVegTopSpireY0 = 0.0f;
 constexpr float kVegTopSpireY1 = 0.35f;
 constexpr float kVegTopSpireOut0 = 0.9f;
 constexpr float kVegTopSpireOut1 = 1.0f;
+// A conifer's outline in the quad's own coordinates (the top tile counts only inside
+// it): half-width kVegConeHalfWidth at kVegConeBase of the up axis, narrowing in a
+// straight line to nothing at kVegConeTip, softened over kVegConeSoft.
+constexpr float kVegConeHalfWidth = 0.68f;
+constexpr float kVegConeTip = 0.95f;
+constexpr float kVegConeBase = -0.6f;
+constexpr float kVegConeSoft = 0.12f;
 
 // Vertex shader source of the billboard program, with the atlas layout filled
 // in from the constants above (exposed so a test can check it).

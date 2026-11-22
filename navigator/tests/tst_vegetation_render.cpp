@@ -171,20 +171,22 @@ struct Rig {
 // apart sideways (so about as far from a camera behind them), each with its own
 // yaw. Several trees keep the pixel counts of far rows large enough to compare.
 constexpr int kStandTrees = 4;
-World standWorld(int kind, int trees = kStandTrees, int variant = 0) {
+// `seed` moves a lone tree a little and turns it: the per-instance mirror and lean
+// follow its position, so other seeds are other looks of the same kind.
+World standWorld(int kind, int trees = kStandTrees, int variant = 0, int seed = 0) {
   World w = buildWorld(kPalForest, -1, 0);
   for (auto &v : w.veg)
     v.clear();
   for (size_t i = 0; i < w.cells.size(); ++i)
     if (w.cells[i].first == 0 && w.cells[i].second == 0)
       for (int n = 0; n < trees; ++n) {
-        const float y = trees == 1 ? 0.0f : -30.0f + 20.0f * float(n);
+        const float y = trees == 1 ? 0.37f * float(seed) : -30.0f + 20.0f * float(n);
         VegInstance t;
         t.species = kVegTree;
         t.kind = uint8_t(kind);
         t.variant = uint8_t(variant);
         t.scale = 1.0f;
-        t.yaw = 0.3f + 1.3f * float(n);
+        t.yaw = 0.3f + 1.3f * float(n) + 0.9f * float(seed);
         t.tint = 0.5f;
         t.pos = {40.0f, y, -surfaceHeight(*w.field, 40.0f, y, kChunkM, kRes)};
         w.veg[i].push_back(t);
@@ -843,20 +845,24 @@ private slots:
     QTest::addColumn<float>("dist");
     QTest::addColumn<float>("elev");
     QTest::addColumn<int>("variant");
+    QTest::addColumn<int>("seed");
     for (int kind : {0, 1})
       for (int var : {0, 2}) // variant 1 is the same shape as 0, and a fir has one
         if (kind == 1 || var == 0)
           for (float d : {100.0f, 160.0f})
-          for (float e : {10.0f, 20.0f, 30.0f, 45.0f})
-            QTest::newRow(qPrintable(QString("%1 v%2 %3 m %4 deg").arg(kind ? "pine" : "fir").arg(var).arg(double(d)).arg(double(e))))
-                << kind << d << e << var;
+            for (float e : {10.0f, 20.0f, 30.0f, 45.0f})
+              for (int seed : {0, 3}) // another position and heading: the mirror state changes
+                if (seed == 0 || e > 40.0f)
+                  QTest::newRow(qPrintable(QString("%1 v%2 %3 m %4 deg s%5").arg(kind ? "pine" : "fir").arg(var).arg(double(d)).arg(double(e)).arg(seed)))
+                      << kind << d << e << var << seed;
   }
   void impostorKeepsTheTreesShapeFromAbove() {
     QFETCH(int, kind);
     QFETCH(float, dist);
     QFETCH(float, elev);
     QFETCH(int, variant);
-    World w = standWorld(kind, 1, variant);
+    QFETCH(int, seed);
+    World w = standWorld(kind, 1, variant, seed);
     Rig rig(true);
     loadTerrain(rig.r, w);
     loadVegetation(rig.r, w);
@@ -897,10 +903,15 @@ private slots:
     const bool high = elev >= 40.0f;
     const double minHeight = kind == 0 ? 0.75 : 0.62;
     QVERIFY2(hRatio >= minHeight, qPrintable(QString("spire or trunk lost: height x%1").arg(hRatio)));
-    QVERIFY2(wRatio <= 1.5, qPrintable(QString("flat saucer: widest row x%1").arg(wRatio)));
-    QVERIFY2(area <= (high ? 1.5 : 1.4), qPrintable(QString("crown filled out: area x%1").arg(area)));
+    QVERIFY2(wRatio <= 1.25, qPrintable(QString("flat saucer: widest row x%1").arg(wRatio)));
+    QVERIFY2(area <= (high ? 1.25 : 1.4), qPrintable(QString("crown filled out: area x%1").arg(area)));
     if (elev >= 20.0f)
       QVERIFY2(waist >= 0.5, qPrintable(QString("neck under the crown: x%1").arg(waist)));
+    // A cone seen from 45 degrees stays a cone: the top tile's disc, as wide as the
+    // base, used to make a ball on the spire (upper bands x1.27 to x1.42 of the mesh's
+    // for a fir at 100 m; the cone mask in the top tile brings them to x1.17 at most).
+    if (high && dist < 135.0f)
+      QVERIFY2(over <= 1.22, qPrintable(QString("ball on the spire: upper bands x%1").arg(over)));
     if (elev >= 20.0f && !high)
       QVERIFY2(over <= 2.2, qPrintable(QString("bulb on the crown: upper bands x%1").arg(over)));
     QCOMPARE(rig.r->glErrorCount(), 0);
