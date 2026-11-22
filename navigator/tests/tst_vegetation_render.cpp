@@ -199,6 +199,19 @@ void aimAtStand(SimRendererWidget *r, const World &w, float d, float elevDeg) {
   aimCamera(r, w, 40.0f - d * std::cos(e), 0.0f, 6.0f + d * std::sin(e), 0.0f, e);
 }
 
+// A pixel belongs to the trees when the frame differs from the same pose with
+// vegetation off by more than this (sum of the channel differences). It has to
+// be small: a dark crown against the lit ground differs by only a few levels,
+// so a bigger cut makes the coverage depend on the crown's brightness (a dimmer
+// but identical crown would "lose" pixels). TVR_DIFF overrides it for studies.
+int coverDiff() {
+  static const int d = qEnvironmentVariableIsSet("TVR_DIFF") ? qEnvironmentVariableIntValue("TVR_DIFF") : 8;
+  return d;
+}
+inline bool treeDiffers(QRgb a, QRgb b) {
+  return std::abs(qRed(a) - qRed(b)) + std::abs(qGreen(a) - qGreen(b)) + std::abs(qBlue(a) - qBlue(b)) > coverDiff();
+}
+
 struct TreePixels {
   int foliage = 0; // green-dominant pixels that differ from the empty scene
   int all = 0;
@@ -220,8 +233,7 @@ TreePixels treeAdded(const QImage &onIn, const QImage &offIn) {
   for (int y = 0; y < on.height(); ++y)
     for (int x = 0; x < on.width(); ++x) {
       const QRgb a = on.pixel(x, y), b = off.pixel(x, y);
-      if (std::abs(qRed(a) - qRed(b)) + std::abs(qGreen(a) - qGreen(b)) +
-              std::abs(qBlue(a) - qBlue(b)) <= 24)
+      if (!treeDiffers(a, b))
         continue;
       ++t.all;
       sum += 0.299 * qRed(a) + 0.587 * qGreen(a) + 0.114 * qBlue(a);
@@ -234,8 +246,7 @@ TreePixels treeAdded(const QImage &onIn, const QImage &offIn) {
   for (int y = 0; y < H; ++y)
     for (int x = 0; x < W; ++x) {
       const QRgb a = on.pixel(x, y), b = off.pixel(x, y);
-      cov[size_t(y) * size_t(W) + size_t(x)] =
-          std::abs(qRed(a) - qRed(b)) + std::abs(qGreen(a) - qGreen(b)) + std::abs(qBlue(a) - qBlue(b)) > 24 ? 1 : 0;
+      cov[size_t(y) * size_t(W) + size_t(x)] = treeDiffers(a, b) ? 1 : 0;
     }
   for (int y = 1; y + 1 < H; ++y)
     for (int x = 1; x + 1 < W; ++x) {
@@ -292,8 +303,7 @@ Outline outlineOf(const QImage &onIn, const QImage &offIn) {
   for (int y = 0; y < H; ++y)
     for (int x = 0; x < W; ++x) {
       const QRgb a = on.pixel(x, y), b = off.pixel(x, y);
-      cov[size_t(y) * size_t(W) + size_t(x)] =
-          std::abs(qRed(a) - qRed(b)) + std::abs(qGreen(a) - qGreen(b)) + std::abs(qBlue(a) - qBlue(b)) > 24 ? 1 : 0;
+      cov[size_t(y) * size_t(W) + size_t(x)] = treeDiffers(a, b) ? 1 : 0;
     }
   // A closing (dilate, then erode, 5x5): the sparse needle cards and the
   // impostor's holes fill in, the silhouette stays.
