@@ -413,8 +413,13 @@ private slots:
           best = std::max(best, meanLum(m));
       return best;
     };
-    const double broad = std::min(cutoutLum("jacaranda_tree"), cutoutLum("island_tree_01"));
+    const double jac = cutoutLum("jacaranda_tree"), isl = cutoutLum("island_tree_01");
+    const double broad = std::min(jac, isl);
     QVERIFY(broad > 0.01);
+    // The island leaf scan is the darker one; the grade lifts it so the island crown
+    // is not far darker than the jacaranda's (it was 0.78 of it before).
+    qInfo("leaf luminance: island %.4f jacaranda %.4f (ratio %.2f)", isl, jac, isl / jac);
+    QVERIFY2(isl >= 0.88 * jac, qPrintable(QString("island %1 vs jacaranda %2").arg(isl).arg(jac)));
     for (const char *id : {"fir_tree_01", "pine_sapling_medium"}) {
       const double c = cutoutLum(id);
       qInfo("%s needle luminance %.4f, broadleaf %.4f", id, c, broad);

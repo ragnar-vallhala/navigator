@@ -90,6 +90,9 @@ SMALL = (3000, 800, 150)
 # Broadleaf foliage: the scans are olive-yellow (hue about 70 deg); natural leaf
 # green sits near 90-100. (hue rotation in degrees, chroma and value factors)
 GRADE_LEAF = (-22.0, 0.95, 0.85)
+# The island tree's crown reads darker than the jacaranda's next to it; its leaf
+# scan is the darker one, so its value factor is 15% higher (0.85 -> 0.98).
+GRADE_ISLAND_LEAF = (-22.0, 0.95, 0.98)
 BIG_CONIFER = (32000, 7000, 1200)
 BIG_BROADLEAF = (36000, 7000, 1200)
 JACARANDA = (36000, 7000, 3000)
@@ -147,7 +150,7 @@ SPECIES = [
                # test drops once the leaf texture is minified), so its impostor
                # holds 1.5 to 3 times the mesh's pixels; a higher cut-off in the bake
                # alone brings it down. The mesh LODs keep the 0.5.
-               'island_tree_01_leaves': dict(weight=0.78, cutout=True, key_black=True, cull=True, grade=GRADE_LEAF,
+               'island_tree_01_leaves': dict(weight=0.78, cutout=True, key_black=True, cull=True, grade=GRADE_ISLAND_LEAF,
                                              size=1024, scale_cap=(3.5, 4.5, 6.0), tris_per_comp=2,
                                              impostor_cutoff=0.7),
                'island_tree_01_branches': dict(weight=0.12, cutout=False, cull=True, size=512,
