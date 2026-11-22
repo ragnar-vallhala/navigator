@@ -289,6 +289,50 @@ private slots:
       }
   }
 
+  // Seen from 70-130 m the pine must not turn into a bare pole with a tuft: the
+  // vertical extent of the needle triangles, binned at 1% of the height, leaves no
+  // run of bare trunk longer than 12% of the height (LOD2 once had 27-36%: three
+  // tiers spread over the crown), and covers about as much of the height as LOD1
+  // (the card-built fir's coarsest level covers 78% or more).
+  void pineLodsKeepTheCrownClosed() {
+    const VegSpeciesAssets *s = assets_.find("pine_sapling_medium");
+    QVERIFY(s);
+    for (const VegVariant &v : s->variants) {
+      double covered[kVegLodCount] = {};
+      for (int l = 0; l < kVegLodCount; ++l) {
+        const VegMesh &m = v.lods[l];
+        const VegSubmesh &sm = m.submeshes[1]; // needles
+        const float H = m.bboxMax.y();
+        std::vector<char> bin(100, 0);
+        for (uint32_t i = sm.firstIndex; i + 2 < sm.firstIndex + sm.indexCount; i += 3) {
+          float lo = H, hi = 0;
+          for (int k = 0; k < 3; ++k) {
+            const float y = m.vertices[size_t(m.indices[i + uint32_t(k)]) * VegMesh::kFloatsPerVertex + 1];
+            lo = std::min(lo, y);
+            hi = std::max(hi, y);
+          }
+          for (int b = int(std::max(lo, 0.0f) / H * 100.0f); b <= std::min(99, int(hi / H * 100.0f)); ++b)
+            bin[size_t(b)] = 1;
+        }
+        int top = 99;
+        while (top > 0 && !bin[size_t(top)])
+          --top;
+        int run = 0, gap = 0, n = 0;
+        for (int b = 0; b <= top; ++b) {
+          n += bin[size_t(b)];
+          run = bin[size_t(b)] ? 0 : run + 1;
+          gap = std::max(gap, run);
+        }
+        covered[l] = double(n) / double(top + 1);
+        qInfo("%s lod%d: needles cover %.0f%% of the height, longest bare run %d%%", qPrintable(v.name), l,
+              100.0 * covered[l], gap);
+        QVERIFY2(gap <= 12, qPrintable(QString("%1 lod%2: bare run %3% of the height").arg(v.name).arg(l).arg(gap)));
+      }
+      QVERIFY2(covered[2] >= 0.62 && covered[2] >= 0.9 * covered[1],
+               qPrintable(QString("%1 lod2 covers %2, lod1 %3").arg(v.name).arg(covered[2]).arg(covered[1])));
+    }
+  }
+
   // The pine's trunk is sturdy and tapers (measured on the trunk submesh at
   // every LOD), and its whorls are widest low down and narrow toward the top.
   void pineTrunkTapersAndWhorlsNarrow() {
