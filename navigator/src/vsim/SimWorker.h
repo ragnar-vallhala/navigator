@@ -56,6 +56,9 @@ struct SimSnapshot {
   float batt_current = 0.0f;  // [A]
   float batt_mah_used = 0.0f; // [mAh]
   float batt_soc = 0.0f;      // [0,1]
+  // impact and crash (pose proto v5); zero from a module without the tail.
+  uint32_t crash_flags = 0;   // VSIM_POSE_CRASHED
+  float peak_impact = 0.0f;   // strongest contact normal speed since reset [m/s]
 };
 
 // SimWorker -- in-process RTOS SITL engine driver (+ external pose-stream attach).

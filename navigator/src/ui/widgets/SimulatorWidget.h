@@ -473,6 +473,7 @@ private:
   std::function<float(float, float)> m_terrainRawHeightAt;
   QVector3D m_lastDronePos{0, 0, 0};
   QVector3D m_lastDroneVel; // NED [m/s]; feeds the collision look-ahead
+  bool m_crashLogged = false; // the crash line is logged once per crash
   void liftDroneToSurface(); // re-drop the drone above the surface if buried
 
   // Helipad landing platforms scattered deterministically on flat ground. Each

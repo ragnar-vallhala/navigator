@@ -19,6 +19,7 @@
 #include "../../vsim/SimWorker.h"
 
 #include <QString>
+#include <cstdint>
 #include <QVector>
 #include <QWidget>
 #include <array>
@@ -59,6 +60,8 @@ private:
 
   QString status_;                        // flight-state name
   QString mode_;                          // flight mode (STABILISE / ACRO)
+  uint32_t crashFlags_ = 0;               // pose proto v5: VSIM_POSE_CRASHED
+  float peak_ = 0.0f;                     // strongest impact since reset [m/s]
   std::array<QVector<float>, 3> accHist_; // m/s² X Y Z
   std::array<QVector<float>, 3> gyrHist_; // deg/s X Y Z
 };

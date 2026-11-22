@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 #include "SimHudWidget.h"
+#include "CrashStatus.h"
 
 #include "core/Units.h"
 
@@ -41,7 +42,8 @@ void SimHudWidget::setSnapshot(const vsim::SimSnapshot &s) {
   const float gs = std::hypot(s.vel_w.x(), s.vel_w.y()); // ground speed
   const float vs = -s.vel_w.z();                         // +up
   if (roll == roll_ && pitch == pitch_ && yaw == yaw_ && alt == alt_ &&
-      gs == gs_ && vs == vs_ && s.motor_duty == motor_)
+      gs == gs_ && vs == vs_ && s.motor_duty == motor_ &&
+      s.crash_flags == crashFlags_ && s.peak_impact == peak_)
     return; // nothing the HUD draws has moved
   roll_ = roll;
   pitch_ = pitch;
@@ -50,6 +52,8 @@ void SimHudWidget::setSnapshot(const vsim::SimSnapshot &s) {
   gs_ = gs;
   vs_ = vs;
   motor_ = s.motor_duty;
+  crashFlags_ = s.crash_flags;
+  peak_ = s.peak_impact;
   update();
   emit changed();
 }
@@ -311,6 +315,19 @@ void SimHudWidget::paintEvent(QPaintEvent *) {
       pen(mcol, 1.3);
       p.drawRect(mb);
       p.drawText(mb, Qt::AlignCenter, mlabel);
+    }
+
+    // Crash pill below the mode pill: the one state that needs the user to act
+    // (the engine cuts the motors until a reset), so it is red and says how to
+    // recover.
+    const QString crashText = vsim::crash::bannerText(crashFlags_, peak_);
+    if (!crashText.isEmpty()) {
+      const double top = 12 + 18 + 4 + (mode_.isEmpty() ? 0 : 18 + 4);
+      const QRectF cb(12, top, fm.horizontalAdvance(crashText) + 16, 18);
+      p.fillRect(cb, box);
+      pen(warn, 1.6);
+      p.drawRect(cb);
+      p.drawText(cb, Qt::AlignCenter, crashText);
     }
   }
 

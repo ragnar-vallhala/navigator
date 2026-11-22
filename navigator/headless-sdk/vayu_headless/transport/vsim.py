@@ -24,7 +24,7 @@ original sim/host/sitl_lab.py so behaviour is identical):
 import math
 import struct
 
-MAGIC, VERSION = 0x4D495356, 3
+MAGIC, VERSION = 0x4D495356, 5
 FRAME_POSE = 3
 
 # vsim_ctl_* subtypes (see vsim_proto.h).
@@ -34,10 +34,19 @@ CTL_SET_WORLD = 6
 CTL_SET_WORLD_MESH = 10
 CTL_SET_TESTRIG = 12
 CTL_SET_WIND = 14
+CTL_SET_CRASH_LIMIT = 20
 
 HDR = struct.Struct("<IHHII")
-POSE = struct.Struct("<II3f4f3f3f4f4f3fffffff")   # v3 body, 128 B
-assert HDR.size == 16 and POSE.size == 128
+# The pose body is APPEND-ONLY (vsim_proto.h): a field is added at the tail and
+# an existing one never moves, so a reader decodes the prefix it knows and
+# ignores the rest. POSE_V3 is the oldest layout this decoder accepts; POSE is
+# the current one (v4 air_density_ratio, v5 crash_flags + peak_impact).
+_POSE_V3_FMT = "II3f4f3f3f4f4f3fffffff"                  # 128 B
+POSE_V3 = struct.Struct("<" + _POSE_V3_FMT)
+POSE = struct.Struct("<" + _POSE_V3_FMT + "f" + "If")  # v5 body, 140 B
+POSE_V4_SIZE = POSE_V3.size + 4
+assert HDR.size == 16 and POSE_V3.size == 128 and POSE.size == 140
+POSE_CRASHED = 0x1      # crash_flags bit 0
 
 
 def vhdr(typ, plen, seq=0):
@@ -71,6 +80,13 @@ def wind(steady=(0, 0, 0), turb=0.0, enable=True):
                steady[2], 0.0, 0.0, turb, 1.0, 1 if enable else 0))
 
 
+def set_crash_limit(mps):
+    """vsim_ctl_crash_limit_t: a contact whose normal speed exceeds `mps` [m/s]
+    crashes the vehicle (motors cut until a reset). 0, negative or non-finite
+    turns the model off, which is the engine's own default."""
+    return ctl(CTL_SET_CRASH_LIMIT, struct.pack("<f", float(mps)))
+
+
 def world_mesh(path, nverts, ntris, nodes, restitution, double_sided):
     """vsim_ctl_world_mesh_t: counts + flags + restitution + the BVH file path
     the daemon mmaps. Counts must match the blob header (daemon cross-checks)."""
@@ -102,12 +118,21 @@ def parse_pose(buf):
             continue
         if pos + HDR.size + plen > len(buf):
             break
-        if t == FRAME_POSE and plen >= POSE.size:
-            p = POSE.unpack_from(buf, pos + HDR.size)
+        if t == FRAME_POSE and plen >= POSE_V3.size:
+            body = pos + HDR.size
+            p = POSE_V3.unpack_from(buf, body)
+            # Tail fields exist only when the sim is new enough to send them;
+            # a missing tail reads as "not crashed", never as garbage.
+            crash_flags, peak = 0, 0.0
+            if plen >= POSE.size:
+                crash_flags, peak = struct.unpack_from(
+                    "<If", buf, body + POSE_V4_SIZE)
             truth = {
                 "pos": p[2:5], "quat": p[5:9], "vel": p[9:12],
                 "omega": p[12:15], "motor_omega": p[15:19],
                 "wind": p[23:26],
+                "crash_flags": crash_flags, "peak_impact": peak,
+                "crashed": bool(crash_flags & POSE_CRASHED),
             }
         pos += HDR.size + plen
     del buf[:pos]
