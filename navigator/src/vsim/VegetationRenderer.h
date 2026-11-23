@@ -137,16 +137,24 @@ struct VegContactBlob {
 constexpr float kVegCasterMaxTexelM = 0.3f;
 constexpr int kVegCasterLod = 2;
 // The casters are pulled this far [m] away from the sun in depth (the drone's
-// caster is pulled toward it). A crown seen from the sun's side is drawn from a
-// finer LOD than the coarse hull in the map, and the receiver's bias is only
-// about 0.5 m in the finest cascade: without this the hull shades the leaves
-// next to it (a 20-27% darker crown). The push also lifts the start of a shadow
-// off the ground by that much along the sun ray, so with the sun low it opens a
-// gap at the trunk's foot: measured on a lone jacaranda at 30 deg the shadow
-// starts 0.55 m from the base with no push, 0.9 m at -1 m and 1.8 m at -2 m
-// (none above 45 deg). -1 m leaves the crown within 13% (it varies with the
-// tree's sway); -2 m would keep it within 7%.
-constexpr float kVegCasterPushM = -1.0f;
+// caster is pulled toward it), in full from kVegCasterRampM1 above the instance
+// base and not at all below kVegCasterRampM0 (a smoothstep between). A crown
+// seen from the sun's side is drawn from a finer LOD than the coarse hull in
+// the map, and the receiver's bias is only about 0.5 m in the finest cascade:
+// without the push the hull shades the leaves next to it (a 20-27% darker
+// crown). A push also lifts the start of a shadow off the ground along the sun
+// ray, so a flat one opens a gap at the trunk's foot with the sun low; scaling
+// it with the height above the base keeps the foot attached. Measured on a
+// lone jacaranda at sun 30 deg (the shadow starts this far from the base):
+// 0.55 m with no push, 0.90 m flat -1, 1.80 m flat -2, 0.55 m here (none
+// above 45 deg). Crown luminance with casters over without in the finest
+// cascade, jacaranda / fir: 0.79 / 0.73 with no push, 0.87 / 0.86 flat -1,
+// 0.93 / 0.97 flat -2, 0.93 / 0.93 here; 0.99 or better in cascade 1. What
+// is left: the fir's skirt reaches the ground, so its lowest ~2 m still
+// shade themselves at close to the no-push level.
+constexpr float kVegCasterPushM = -2.0f;
+constexpr float kVegCasterRampM0 = 0.5f;
+constexpr float kVegCasterRampM1 = 3.0f;
 
 // Which asset species stand in for each procgen species, and their sizes and
 // ranges: the one table to tune the look. Distances are metres from the eye.
