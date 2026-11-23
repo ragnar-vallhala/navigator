@@ -1910,12 +1910,14 @@ private slots:
   }
 
   // The push that keeps a crown clear of its own hull also lifts the start of a
-  // shadow; with the sun low it must not detach the trunk's shadow from its
-  // foot: at 30 deg the ground beside a lone jacaranda is shadowed from within
-  // 1.2 m of the base (0.55 m with no push, 0.9 m at -1 m, 1.8 m at -2 m).
+  // shadow; scaled with the height above the base it must not detach the trunk's
+  // shadow from its foot: at 30 deg the ground beside a lone jacaranda is
+  // shadowed from within 0.7 m of the base (0.55 m with no push and with the
+  // ramp, 0.9 m flat -1, 1.8 m flat -2).
   void lowSunShadowStaysAtTheTrunkFoot() {
     World w = loneWorld(kVegTree, 2);
     Rig rig(true);
+    rig.r->freezeAnimationForTest(true); // clock stays 0, as in the caster pass
     loadTerrain(rig.r, w);
     loadVegetation(rig.r, w);
     QVERIFY(rig.show());
@@ -1941,13 +1943,19 @@ private slots:
     }
     qInfo("shadow starts %.2f m from the trunk's foot", double(onset));
     QVERIFY2(onset > 0.0f, "the tree casts a shadow on the ground beside it");
-    QVERIFY2(onset < 1.2f, "the shadow starts at the trunk's foot");
+    QVERIFY2(onset < 0.7f, "the shadow starts at the trunk's foot");
   }
 
+  // The clock is frozen at 0 in this test and the one above: the wind sways the
+  // trees in the main pass (floraTime_) but the caster pass draws them at time
+  // 0, so the ratios would vary with the sway otherwise.
   // The crowns are not darkened by their own caster: seen from the sun's side the
   // lit face of a crown keeps its brightness with casters on (a coarse LOD
   // shadowing the finer mesh behind it would show as acne), in the finest
-  // cascade and in cascade 1.
+  // cascade and in cascade 1. The bound is 0.88: pinned on llvmpipe the ratios
+  // are 0.922 jacaranda and 0.903 fir in the finest cascade (margin 0.003 over
+  // 0.9, thin for another driver), 0.98 and 0.994 in cascade 1; with the flat
+  // 1 m push they are 0.863 and 0.852, and with no push 0.785 and 0.699.
   void crownsDoNotShadowThemselves_data() {
     QTest::addColumn<int>("kind");
     QTest::addColumn<float>("distM");
@@ -1961,6 +1969,7 @@ private slots:
     QFETCH(float, distM);
     World w = loneWorld(kVegTree, kind);
     Rig rig(true);
+    rig.r->freezeAnimationForTest(true); // clock stays 0, as in the caster pass
     loadTerrain(rig.r, w);
     loadVegetation(rig.r, w);
     QVERIFY(rig.show());
@@ -1989,7 +1998,7 @@ private slots:
     QVERIFY2(n > 300, "the tree is in view");
     const double ratio = lumOn / lumOff;
     qInfo("crown luminance with casters / without: %.3f (%ld px)", ratio, n);
-    QVERIFY2(ratio > 0.85, "a crown's lit face keeps its brightness");
+    QVERIFY2(ratio > 0.88, "a crown's lit face keeps its brightness");
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
 
