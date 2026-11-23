@@ -213,7 +213,9 @@ public:
   // imported world mesh and chunks are mutually exclusive in practice.
   void setWorldChunk(qint64 key, const std::vector<QVector3D> &positions,
                      const std::vector<QVector3D> &normals,
-                     const std::vector<QVector3D> &colors);
+                     const std::vector<QVector3D> &colors,
+                     const std::vector<QVector3D> &edge = {},
+                     const std::vector<QVector3D> &edgeColors = {});
   void removeWorldChunk(qint64 key);
   void clearWorldChunks();
   // The streaming biome's field: drives the coarse far-terrain ring beyond the
@@ -538,7 +540,10 @@ private:
   void uploadLitMesh(Mesh &m, const std::vector<float> &interleaved);
   // As uploadLitMesh, but the array is [px,py,pz,nx,ny,nz,r,g,b] and vertex
   // colors (attribute 2) are enabled — used for the colored world mesh.
-  void uploadColoredMesh(Mesh &m, const std::vector<float> &interleaved);
+  // 9 floats per vertex (position, normal, colour), or 14 with the terrain's
+  // border-track data (signed and unsigned distance, then the track colour).
+  void uploadColoredMesh(Mesh &m, const std::vector<float> &interleaved,
+                         int floatsPerVertex = 9);
 
   // ---- gizmo editing (Blender-style; active only when editable_) ----
   enum class Tool { None, Move, Rotate, Scale };
@@ -814,7 +819,7 @@ private:
   struct PendingChunk {
     qint64 key;
     std::vector<float> data;
-  }; // 9 floats/vert
+  }; // 14 floats/vert (uploadColoredMesh)
   std::vector<PendingChunk> pendingChunkUploads_;
   std::vector<qint64> pendingChunkRemovals_;
   bool chunksDirty_ = false;

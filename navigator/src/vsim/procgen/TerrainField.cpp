@@ -224,7 +224,21 @@ PgVec3 TerrainField::color(float h, float flatness) const {
 GroundCover::Sample TerrainField::colorAt(float wx, float wy, float h,
                                           float flatness) const {
   const float t = clamp01(p_.heightM > 0.0f ? h / p_.heightM : 0.0f);
-  GroundCover::Sample s = cover_.sample(wx, wy, color(h, flatness), t, flatness);
+  return withWater(cover_.sample(wx, wy, color(h, flatness), t, flatness), wx, wy, h);
+}
+
+GroundCover::Sample TerrainField::colorAtSplit(float wx, float wy, float h,
+                                               float flatness) const {
+  const float t = clamp01(p_.heightM > 0.0f ? h / p_.heightM : 0.0f);
+  GroundCover::Sample s =
+      withWater(cover_.sampleSplit(wx, wy, color(h, flatness), t, flatness), wx, wy, h);
+  // edgePc becomes the full ground colour on a track (after ponds), edgeK spent.
+  s.edgePc = mix(s.color, s.edgePc, s.edgeK);
+  return s;
+}
+
+GroundCover::Sample TerrainField::withWater(GroundCover::Sample s, float wx, float wy,
+                                            float h) const {
   if (!water_.enabled())
     return s;
   // Pond bed and wet shore. Under the water mesh this is the lake bed; with the
@@ -353,6 +367,7 @@ ProcMesh meshFieldChunk(const TerrainField &f, int cx, int cy, float chunkM,
   std::vector<PgVec3> pos(static_cast<std::size_t>(verts) * verts);
   std::vector<PgVec3> nrm(static_cast<std::size_t>(verts) * verts);
   std::vector<PgVec3> col(static_cast<std::size_t>(verts) * verts);
+  std::vector<PgVec3> edge(col.size()), edgeCol(col.size());
   for (int j = 0; j < verts; ++j) {
     for (int i = 0; i < verts; ++i) {
       const float h = gh(i, j);
@@ -371,17 +386,24 @@ ProcMesh meshFieldChunk(const TerrainField &f, int cx, int cy, float chunkM,
                       y0 + step * static_cast<float>(j), -h};
       nrm[k] = PgVec3{nx, ny, nz};
       const float flatness = nz < 0.0f ? -nz : 0.0f;
-      col[k] = f.colorAt(pos[k].x, pos[k].y, h, flatness).color;
+      const GroundCover::Sample sm = f.colorAtSplit(pos[k].x, pos[k].y, h, flatness);
+      col[k] = sm.color;
+      edge[k] = PgVec3{sm.edgeS, sm.edgeA, 0.0f};
+      edgeCol[k] = sm.edgePc;
     }
   }
 
   m.positions.reserve(static_cast<std::size_t>(res) * res * 6);
   m.normals.reserve(static_cast<std::size_t>(res) * res * 6);
   m.colors.reserve(static_cast<std::size_t>(res) * res * 6);
+  m.edge.reserve(static_cast<std::size_t>(res) * res * 6);
+  m.edgeColors.reserve(static_cast<std::size_t>(res) * res * 6);
   auto push = [&](std::size_t k) {
     m.positions.push_back(pos[k]);
     m.normals.push_back(nrm[k]);
     m.colors.push_back(col[k]);
+    m.edge.push_back(edge[k]);
+    m.edgeColors.push_back(edgeCol[k]);
   };
   for (int j = 0; j < res; ++j) {
     for (int i = 0; i < res; ++i) {

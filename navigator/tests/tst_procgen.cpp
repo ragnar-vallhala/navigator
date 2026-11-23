@@ -24,6 +24,7 @@
 
 #include "ChunkStreamer.h"
 #include "procgen/Flora.h"
+#include "procgen/EdgeTrack.h"
 #include "procgen/GroundCover.h"
 #include "procgen/Heightfield.h"
 #include "procgen/Helipads.h"
@@ -72,6 +73,8 @@ private slots:
   void groundCoverDeterministicAndBounded();
   void groundCoverGivesVarietyInEveryPalette();
   void groundCoverPondsAndTracksExist();
+  void edgeTrackRuleAndSplitAgree();
+  void edgeTrackNodesInterpolateWithoutFalseLines();
   void fieldMeshColoursVary();
   void fieldChunksTileSeamlessly();
   void fieldChunkSoupIntegrity();
@@ -690,6 +693,87 @@ void TstProcgen::groundCoverPondsAndTracksExist() {
   dp.palette = kPalDesert;
   const TerrainField desert(dp);
   QVERIFY(desert.water().bodiesIn(desert.heightSource(), -2000, -2000, 2000, 2000).empty());
+}
+
+void TstProcgen::edgeTrackRuleAndSplitAgree() {
+  // The shared rule: full track on the border, none at 2 m, none where the
+  // unsigned distance says no border is near (the sign-jump guard).
+  QCOMPARE(edgeTrackWeight(0.0f, 0.0f), kEdgeTrackMax);
+  QCOMPARE(edgeTrackWeight(-0.3f, 0.3f), edgeTrackWeight(0.3f, 0.3f));
+  QCOMPARE(edgeTrackWeight(kEdgeTrackD1, 0.0f), 0.0f);
+  QCOMPARE(edgeTrackWeight(0.0f, kEdgeValidMax), 0.0f);
+  QVERIFY(edgeTrackWeight(1.4f, 1.4f) > 0.0f && edgeTrackWeight(1.4f, 1.4f) < kEdgeTrackMax);
+
+  // sampleSplit() is sample() with the border track taken out: identical where
+  // that track has no weight, and it reports the track the shader must add.
+  FieldParams p;
+  p.seed = 11u;
+  p.palette = 7; // hills: parcels with tracked borders
+  p.heightM = 30.0f;
+  const GroundCover gc(p.seed, p.palette);
+  int onTrack = 0, off = 0;
+  for (int i = 0; i < 4000; ++i) {
+    const float x = -300.0f + 0.37f * float(i % 1600), y = -250.0f + 0.61f * float(i / 4) * 0.5f;
+    const PgVec3 base{0.3f, 0.5f, 0.2f};
+    const GroundCover::Sample a = gc.sample(x, y, base, 0.3f, 0.99f);
+    const GroundCover::Sample b = gc.sampleSplit(x, y, base, 0.3f, 0.99f);
+    if (edgeTrackWeight(b.edgeS, b.edgeA) > 0.0f) {
+      ++onTrack;
+      QVERIFY(b.edgeK > 0.0f);
+    } else {
+      ++off;
+      QCOMPARE(a.color.x, b.color.x);
+      QCOMPARE(a.color.y, b.color.y);
+      QCOMPARE(a.color.z, b.color.z);
+      QCOMPARE(a.grass, b.grass);
+    }
+  }
+  QVERIFY2(onTrack > 20 && off > 20, "the probe grid must cover track and ground");
+}
+
+void TstProcgen::edgeTrackNodesInterpolateWithoutFalseLines() {
+  FieldParams p;
+  p.seed = 11u;
+  p.palette = 7;
+  p.heightM = 30.0f;
+  const TerrainField f(p);
+  const float step = kStreamChunkM / float(kStreamChunkRes);
+  auto node = [&](int ix, int iy) {
+    const float x = float(ix) * step, y = float(iy) * step;
+    const float h = f.height(x, y);
+    const PgVec3 n = f.normal(x, y, step);
+    return f.colorAtSplit(x, y, h, n.z < 0.0f ? -n.z : 0.0f);
+  };
+  int probes = 0, bad = 0, falseLine = 0;
+  double worst = 0.0;
+  for (int iy = -60; iy < 60; ++iy)
+    for (int ix = -60; ix < 60; ++ix) {
+      const auto c00 = node(ix, iy), c10 = node(ix + 1, iy), c01 = node(ix, iy + 1), c11 = node(ix + 1, iy + 1);
+      for (float fy : {0.25f, 0.75f})
+        for (float fx : {0.25f, 0.75f}) {
+          const float x = (float(ix) + fx) * step, y = (float(iy) + fy) * step;
+          auto lerp2 = [&](float a, float b, float c, float d) {
+            return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy;
+          };
+          const float s = lerp2(c00.edgeS, c10.edgeS, c01.edgeS, c11.edgeS);
+          const float a = lerp2(c00.edgeA, c10.edgeA, c01.edgeA, c11.edgeA);
+          const float h = f.height(x, y);
+          const PgVec3 n = f.normal(x, y, step);
+          const auto fine = f.colorAtSplit(x, y, h, n.z < 0.0f ? -n.z : 0.0f);
+          const float wi = edgeTrackWeight(s, a), wf = edgeTrackWeight(fine.edgeS, fine.edgeA);
+          ++probes;
+          worst = std::max(worst, double(std::fabs(wi - wf)));
+          if (std::fabs(wi - wf) > 0.05f)
+            ++bad;
+          if (fine.edgeA >= kEdgeFar && wi > 0.0f)
+            ++falseLine; // a track where no border is within 8 m
+        }
+    }
+  qInfo("edge track nodes: %d probes, %d off by >0.05 (worst %.3f), %d false lines", probes, bad, worst, falseLine);
+  // A parcel's tracked-border choice can switch inside one cell, so a handful of
+  // probes next to such a cusp may differ; a sign-jump line would be thousands.
+  QVERIFY(falseLine * 10000 <= probes);
+  QVERIFY(bad * 100 <= probes);
 }
 
 void TstProcgen::fieldMeshColoursVary() {

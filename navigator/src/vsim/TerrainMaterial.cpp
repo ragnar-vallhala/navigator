@@ -1,5 +1,7 @@
 #include "TerrainTextures.h"
 
+#include "procgen/EdgeTrack.h"
+
 #include <QImage>
 #include <QOpenGLContext>
 #include <QOpenGLExtraFunctions>
@@ -157,6 +159,13 @@ QByteArray terrainMaterialGLSL() {
       .replace(QStringLiteral("%3"), f(kRockNoise))
       .replace(QStringLiteral("%2"), f(kRockSlope1))
       .replace(QStringLiteral("%1"), f(kRockSlope0));
+  // The parcel-border track weight, from the constants of procgen/EdgeTrack.h
+  // (the C++ rule is edgeTrackWeight() there).
+  s += QStringLiteral("\nfloat edgeTrackWeight(vec2 trk) { // x signed, y unsigned distance [m]\n"
+                     "  if (trk.y >= %1) return 0.0;\n"
+                     "  return %4 * (1.0 - smoothstep(%2, %3, abs(trk.x)));\n}\n")
+           .arg(f(procgen::kEdgeValidMax), f(procgen::kEdgeTrackD0), f(procgen::kEdgeTrackD1),
+                f(procgen::kEdgeTrackMax));
   return s.toLatin1();
 }
 

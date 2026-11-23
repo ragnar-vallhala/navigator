@@ -1204,9 +1204,9 @@ void SimulatorWidget::onChunkMeshed(qint64 key, const BuiltChunk &built) {
   m_chunkCache[key] =
       std::make_shared<const vsim::procgen::ProcMesh>(built.collMesh);
   const vsim::ChunkMeshData d = vsim::toChunkMeshData(key, built.mesh);
-  m_renderer->setWorldChunk(d.key, d.positions, d.normals, d.colors);
+  m_renderer->setWorldChunk(d.key, d.positions, d.normals, d.colors, d.edge, d.edgeColors);
   if (m_downRenderer)
-    m_downRenderer->setWorldChunk(d.key, d.positions, d.normals, d.colors);
+    m_downRenderer->setWorldChunk(d.key, d.positions, d.normals, d.colors, d.edge, d.edgeColors);
   if (m_renderer->vegetationEnabled()) {
     const float cm = m_chunkStreamer.config().chunkM;
     const float vx = (vsim::ChunkStreamer::cxOf(key) + 0.5f) * cm;

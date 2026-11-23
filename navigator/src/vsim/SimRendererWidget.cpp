@@ -16,6 +16,7 @@
  */
 #include "SimRendererWidget.h"
 
+#include "procgen/EdgeTrack.h"
 #include "procgen/PropStyle.h"
 
 #include <QCursor>
@@ -110,11 +111,15 @@ const char *kLitVertexShader = R"GLSL(
 layout(location=0) in vec3 a_pos;
 layout(location=1) in vec3 a_normal;
 layout(location=2) in vec3 a_color;
+layout(location=3) in vec2 a_trk;   // terrain: signed, unsigned distance to a parcel-border track
+layout(location=4) in vec3 a_trkc;  // terrain: the ground's colour on that track
 uniform mat4 u_mvp;
 uniform mat4 u_model;
 uniform mat3 u_nmat;
 out vec3 v_normal;
 out vec3 v_color;
+out vec2 v_trk;
+out vec3 v_trkc;
 out vec3 v_world;
 out vec3 v_local;
 void main() {
@@ -123,6 +128,8 @@ void main() {
   gl_Position = u_mvp * vec4(a_pos, 1.0);
   v_normal = u_nmat * a_normal;
   v_color = a_color;
+  v_trk = a_trk;
+  v_trkc = a_trkc;
 }
 )GLSL";
 
@@ -130,6 +137,8 @@ const char *kLitFragmentHead = R"GLSL(
 #version 330 core
 in vec3 v_normal;
 in vec3 v_color;
+in vec2 v_trk;
+in vec3 v_trkc;
 in vec3 v_world;
 in vec3 v_local;             // object-space position (unit solids)
 out vec4 o_color;
@@ -203,12 +212,16 @@ void main() {
   // Hemispheric ambient: NED up is -Z, so up-facing (n.z<0) catches sky light.
   // Cool-but-warmed overcast ambient (shadows read soft teal, not cold).
   vec3 ambient = ambientLight(n) * u_ambstr;
-  vec3 base = u_color * v_color;
+  // Parcel-border tracks are drawn per pixel from the interpolated distance, not
+  // baked into the node colour (EdgeTrack.h).
+  vec3 vcol = v_color;
+  if (u_terrain > 0.5) vcol = mix(v_color, v_trkc, edgeTrackWeight(v_trk));
+  vec3 base = u_color * vcol;
   if (u_terrain > 0.5) {
     vec2 p = v_world.xy;
     if (u_matq > 0.5) {
       // Textured ground (TerrainMaterial.cpp): albedo and normal from photos.
-      terrainMaterial(v_color, p, dist, base, n);
+      terrainMaterial(vcol, p, dist, base, n);
       wrap = clamp(dot(n, sun) * 0.45 + 0.55, 0.0, 1.0); wrap *= wrap;
       ambient = ambientLight(n) * u_ambstr;
     } else {
@@ -1944,6 +1957,10 @@ void SimRendererWidget::drawLit(const Mesh &m, const QMatrix4x4 &view,
   // u_color*a_color == u_color. Meshes with a real color array (world mesh)
   // enable attribute 2 and override this.
   glVertexAttrib3f(2, 1.0f, 1.0f, 1.0f);
+  // The same for the terrain's border-track data: "no track near", for every
+  // mesh that does not carry it.
+  glVertexAttrib2f(3, procgen::kEdgeFar, procgen::kEdgeFar);
+  glVertexAttrib3f(4, 0.0f, 0.0f, 0.0f);
   glDrawArrays(GL_TRIANGLES, 0, m.vertex_count);
   progLit_->release();
 }
@@ -2072,7 +2089,8 @@ void SimRendererWidget::uploadLitMesh(Mesh &m, const std::vector<float> &data) {
 }
 
 void SimRendererWidget::uploadColoredMesh(Mesh &m,
-                                          const std::vector<float> &data) {
+                                          const std::vector<float> &data,
+                                          int fpv) {
   if (!m.vao.isCreated())
     m.vao.create();
   m.vao.bind();
@@ -2080,7 +2098,7 @@ void SimRendererWidget::uploadColoredMesh(Mesh &m,
     m.vbo.create();
   m.vbo.bind();
   m.vbo.allocate(data.data(), int(data.size() * sizeof(float)));
-  const int stride = 9 * sizeof(float);
+  const int stride = fpv * int(sizeof(float));
   glEnableVertexAttribArray(0);
   glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
   glEnableVertexAttribArray(1);
@@ -2089,12 +2107,20 @@ void SimRendererWidget::uploadColoredMesh(Mesh &m,
   glEnableVertexAttribArray(2);
   glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride,
                         reinterpret_cast<void *>(6 * sizeof(float)));
+  if (fpv >= 14) { // terrain: border-track distances and colour
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, stride,
+                          reinterpret_cast<void *>(9 * sizeof(float)));
+    glEnableVertexAttribArray(4);
+    glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, stride,
+                          reinterpret_cast<void *>(11 * sizeof(float)));
+  }
   m.vbo.release();
   m.vao.release();
-  m.vertex_count = int(data.size() / 9);
+  m.vertex_count = int(data.size() / size_t(fpv));
   m.primitive = GL_TRIANGLES;
   m.bmin = m.bmax = QVector3D();
-  for (size_t i = 0; i + 8 < data.size(); i += 9) {
+  for (size_t i = 0; i + size_t(fpv) - 1 < data.size(); i += size_t(fpv)) {
     const QVector3D p(data[i], data[i + 1], data[i + 2]);
     if (i == 0)
       m.bmin = m.bmax = p;
@@ -2289,19 +2315,26 @@ void SimRendererWidget::setWorldMesh(const std::vector<QVector3D> &positions,
 void SimRendererWidget::setWorldChunk(qint64 key,
                                       const std::vector<QVector3D> &positions,
                                       const std::vector<QVector3D> &normals,
-                                      const std::vector<QVector3D> &colors) {
-  // Interleave [px,py,pz, nx,ny,nz, r,g,b] now (UI thread, no GL) and queue the
-  // VBO upload for paintGL.
+                                      const std::vector<QVector3D> &colors,
+                                      const std::vector<QVector3D> &edge,
+                                      const std::vector<QVector3D> &edgeColors) {
+  // Interleave [px,py,pz, nx,ny,nz, r,g,b, signed, unsigned, er,eg,eb] now (UI
+  // thread, no GL) and queue the VBO upload for paintGL. A chunk without border
+  // tracks gets "no track near" (EdgeTrack.h kEdgeFar).
   PendingChunk pc;
   pc.key = key;
-  pc.data.reserve(positions.size() * 9);
+  pc.data.reserve(positions.size() * 14);
+  const QVector3D far(procgen::kEdgeFar, procgen::kEdgeFar, 0.0f);
   for (size_t i = 0; i < positions.size(); ++i) {
     const QVector3D &p = positions[i];
     const QVector3D n = (i < normals.size()) ? normals[i] : QVector3D(0, 0, -1);
     const QVector3D c =
         (i < colors.size()) ? colors[i] : QVector3D(0.4f, 0.5f, 0.3f);
+    const QVector3D e = (i < edge.size()) ? edge[i] : far;
+    const QVector3D ec = (i < edgeColors.size()) ? edgeColors[i] : c;
     pc.data.insert(pc.data.end(), {p.x(), p.y(), p.z(), n.x(), n.y(), n.z(),
-                                   c.x(), c.y(), c.z()});
+                                   c.x(), c.y(), c.z(), e.x(), e.y(), ec.x(),
+                                   ec.y(), ec.z()});
   }
   pendingChunkUploads_.push_back(std::move(pc));
   chunksDirty_ = true;
@@ -2537,7 +2570,7 @@ void SimRendererWidget::flushChunkUpdates() {
     std::unique_ptr<Mesh> &mesh = worldChunks_[pc.key];
     if (!mesh)
       mesh = std::make_unique<Mesh>();
-    uploadColoredMesh(*mesh, pc.data);
+    uploadColoredMesh(*mesh, pc.data, 14);
     if (chunkCpuMode())
       chunkCpu_[pc.key] = std::move(pc.data);
   }
