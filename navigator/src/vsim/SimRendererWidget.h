@@ -432,6 +432,11 @@ public:
     const QVector4D c = lastVegVp_ * QVector4D(w, 1.0f);
     return {(c.x() / c.w() * 0.5 + 0.5) * fbW_, (0.5 - c.y() / c.w() * 0.5) * fbH_};
   }
+  // Test hook: draw the ground without the survey grid (to measure its contrast).
+  void setGridOffForTest(bool off) {
+    gridOffForTest_ = off;
+    update();
+  }
   // Test hook: the last frame drew the drone's contact blob.
   void setDroneCasterOffForTest(bool off) {
     noCasterForTest_ = off;
@@ -624,6 +629,8 @@ private:
   int ul_sunint_ = -1;
   int ul_ambstr_ = -1;
   int ul_terrain_ = -1;
+  int ul_grid_ = -1;
+  bool gridOffForTest_ = false;
   int ul_bands_ = -1;
   int ul_matq_ = -1;
   vsim::terrain::TerrainTextures terrainTex_;

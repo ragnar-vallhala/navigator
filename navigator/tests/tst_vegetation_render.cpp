@@ -133,6 +133,19 @@ int distinctColours(const QImage &img) {
   return int(s.size());
 }
 
+// Share of pixels that differ at all (any channel) between two frames.
+double anyDiffFraction(const QImage &a, const QImage &b) {
+  const QImage x = a.convertToFormat(QImage::Format_RGB32);
+  const QImage y = b.convertToFormat(QImage::Format_RGB32);
+  if (x.size() != y.size())
+    return 1.0;
+  long n = 0;
+  for (int j = 0; j < x.height(); ++j)
+    for (int i = 0; i < x.width(); ++i)
+      n += x.pixel(i, j) != y.pixel(i, j);
+  return double(n) / double(x.width() * x.height());
+}
+
 // Share of pixels whose colour differs noticeably between two frames.
 double changedFraction(const QImage &a, const QImage &b) {
   const QImage x = a.convertToFormat(QImage::Format_RGB32);
@@ -1318,6 +1331,51 @@ private slots:
     QVERIFY(fn.contains("trk.y >= " + f(vsim::procgen::kEdgeValidMax)));
     QVERIFY(fn.contains(f(vsim::procgen::kEdgeTrackMax) + " * (1.0 - smoothstep(" + f(vsim::procgen::kEdgeTrackD0) +
                         ", " + f(vsim::procgen::kEdgeTrackD1) + ", abs(trk.x)))"));
+  }
+
+  // The survey grid is a close-ground hint: present 30 m from the eye, gone by
+  // 60 m (its long straight lines read as seams from the air). Measured as the
+  // pixels a frame changes between grid on and grid off, looking straight down
+  // from 30 m and from 60 m over flat ground.
+  void surveyGridIsGoneBeyondSixtyMetres_data() {
+    QTest::addColumn<bool>("high");
+    QTest::newRow("High") << true;
+    QTest::newRow("Low") << false;
+  }
+  void surveyGridIsGoneBeyondSixtyMetres() {
+    QFETCH(bool, high);
+    Rig rig;
+    QVERIFY(rig.show());
+    rig.r->setTerrainQuality(high ? vsim::terrain::Quality::High : vsim::terrain::Quality::Low);
+    rig.r->setVegetationEnabled(false);
+    World w;
+    FieldParams fp;
+    fp.seed = 11u;
+    fp.palette = kPalForest;
+    fp.heightM = 3.0f; // flat: the grid only draws on level ground
+    w.field = std::make_unique<TerrainField>(fp);
+    for (int cy = -1; cy <= 1; ++cy)
+      for (int cx = -1; cx <= 1; ++cx) {
+        w.keys.push_back(ChunkStreamer::keyOf(cx, cy));
+        w.cells.push_back({cx, cy});
+      }
+    loadTerrain(rig.r, w);
+    double changed[3] = {};
+    const float eye[3] = {20.0f, 30.0f, 60.0f};
+    for (int i = 0; i < 3; ++i) {
+      aimCamera(rig.r, w, 0.0f, 0.0f, eye[i], 0.0f, 1.5f);
+      rig.r->setGridOffForTest(false);
+      const QImage on = settledFrame(rig.r, 3);
+      rig.r->setGridOffForTest(true);
+      const QImage off = settledFrame(rig.r, 3);
+      changed[i] = anyDiffFraction(on, off);
+      if (i == 0)
+        QVERIFY2(changed[0] > 0.0, "the grid must show at 20 m");
+    }
+    qInfo("ZZ grid pixels changed by the grid: 20 m %.5f, 30 m %.5f, 60 m %.5f", changed[0], changed[1], changed[2]);
+    QVERIFY2(changed[1] > 0.0, "the grid lines are still there at 30 m");
+    QCOMPARE(changed[2], 0.0);
+    QCOMPARE(rig.r->glErrorCount(), 0);
   }
 
   void impostorTopBlendHasNoScreenDoor_data() {

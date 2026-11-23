@@ -144,6 +144,7 @@ in vec3 v_local;             // object-space position (unit solids)
 out vec4 o_color;
 uniform vec3 u_color;
 uniform float u_terrain;     // 1 = ground: procedural albedo detail + grid
+uniform float u_grid;        // 1 = draw the survey grid on that ground
 uniform float u_bands;       // >0: pole painted in this many 1 m red/white bands
 )GLSL";
 
@@ -236,13 +237,16 @@ void main() {
     vec3 macroTint = vec3(1.0 + 0.30 * m1 + 0.10 * m2, 1.0 + 0.10 * m1, 1.0 - 0.26 * m1 - 0.08 * m2);
     base *= (1.0 + v) * macroTint;
     }
-    // Survey grid: a calm hint, not a net. The fine lines fade out within ~30 m,
-    // the 10 m lines by ~250 m, and only the 100 m lines reach the horizon.
-    float up = smoothstep(0.55, 0.85, -n.z);       // grid only on level ground
-    float g = 0.030 * gridLine(p, 1.0, 0.012) * (1.0 - smoothstep(6.0, 30.0, dist)) +
-              0.060 * gridLine(p, 10.0, 0.004) * (1.0 - smoothstep(60.0, 260.0, dist)) +
-              0.100 * gridLine(p, 100.0, 0.0015) * (1.0 - smoothstep(300.0, 900.0, dist));
-    base = mix(base, base * 0.55 + vec3(0.40, 0.41, 0.38), clamp(g * up, 0.0, 0.2));
+    // Survey grid: a calm hint for the close ground, not a net. The fine lines
+    // fade out within ~30 m and every line is gone by 60 m: from the air the
+    // long straight lines read as seams in the ground, not as a scale.
+    if (u_grid > 0.5) {
+      float up = smoothstep(0.55, 0.85, -n.z);       // grid only on level ground
+      float g = 0.030 * gridLine(p, 1.0, 0.012) * (1.0 - smoothstep(6.0, 30.0, dist)) +
+                0.060 * gridLine(p, 10.0, 0.004) * (1.0 - smoothstep(30.0, 60.0, dist)) +
+                0.100 * gridLine(p, 100.0, 0.0015) * (1.0 - smoothstep(30.0, 60.0, dist));
+      base = mix(base, base * 0.55 + vec3(0.40, 0.41, 0.38), clamp(g * up, 0.0, 0.2));
+    }
   }
   if (u_bands > 0.5) {                              // survey pole: 1 m bands
     float k = floor((v_local.z + 0.5) * u_bands);
@@ -1122,6 +1126,7 @@ void SimRendererWidget::initResources() {
   ul_sunint_ = progLit_->uniformLocation("u_sunint");
   ul_ambstr_ = progLit_->uniformLocation("u_ambstr");
   ul_terrain_ = progLit_->uniformLocation("u_terrain");
+  ul_grid_ = progLit_->uniformLocation("u_grid");
   ul_bands_ = progLit_->uniformLocation("u_bands");
   ul_matq_ = progLit_->uniformLocation("u_matq");
   terrainDefault_ = vsim::terrain::defaultQuality(
@@ -1938,6 +1943,7 @@ void SimRendererWidget::drawLit(const Mesh &m, const QMatrix4x4 &view,
   progLit_->setUniformValue(ul_sunint_, litSunInt_);
   progLit_->setUniformValue(ul_ambstr_, litAmbStr_);
   progLit_->setUniformValue(ul_terrain_, terrain ? 1.0f : 0.0f);
+  progLit_->setUniformValue(ul_grid_, gridOffForTest_ ? 0.0f : 1.0f);
   {
     // The textures upload on first use; a missing resource leaves the plain look.
     const bool mat = terrain &&
