@@ -637,11 +637,11 @@ private:
   bool drawingDroneBody_ = false; // set only around the drone's own lit draws
   float rotorCoverageForTest_ = -1.0f; // < 0: kRotorCoverage
   bool noCasterForTest_ = false;       // map says "drone in map" but draws none
-  // Trees and rocks as shadow casters: the cascades from this one on whose texel
+  // Trees and rocks as shadow casters: the cascades from this one on (the finest, 0) whose texel
   // is fine enough (kVegCasterMaxTexelM) get them. vegCasterKey_ is what the
   // tiles were last drawn with (the vegetation's version, which cascades); a
   // change bumps shadowGeomVer_.
-  int vegCasterFirst_ = 1;
+  int vegCasterFirst_ = 0;
   float vegCasterPushM_ = kVegCasterPushM; // depth pull toward the sun (negative: away)
   bool vegCastersOffForTest_ = false;
   quint64 vegCasterKey_ = 0;
