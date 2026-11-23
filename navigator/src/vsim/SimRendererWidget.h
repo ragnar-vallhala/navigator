@@ -451,6 +451,19 @@ public:
     ++shadowGeomVer_; // the tiles hold the old coverage
   }
   bool droneInShadowMapForTest() const { return droneInMap_; }
+  // Tests: trees and rocks out of the shadow map (the drone and ground stay);
+  // the first cascade that gets them (default 1; 0 adds the finest one).
+  void setVegCastersOffForTest(bool off) { vegCastersOffForTest_ = off; }
+  void setVegCasterFirstCascadeForTest(int ci) { vegCasterFirst_ = ci; }
+  void setVegCasterPushForTest(float m) {
+    vegCasterPushM_ = m;
+    ++shadowGeomVer_;
+  }
+  // The vegetation caster counts of the last pass of each cascade.
+  const VegetationRenderer::CasterStats &vegCasterStatsForTest() const {
+    static const VegetationRenderer::CasterStats none;
+    return veg_ ? veg_->casterStats() : none;
+  }
   bool droneBlobDrawnForTest() const { return veg_ && veg_->droneBlobDrawn(); }
   int contextGoneCount() const { return goneCount_; } // aboutToBeDestroyed seen
   bool contextWasCurrentWhenGone() const { return goneCurrent_; }
@@ -624,6 +637,14 @@ private:
   bool drawingDroneBody_ = false; // set only around the drone's own lit draws
   float rotorCoverageForTest_ = -1.0f; // < 0: kRotorCoverage
   bool noCasterForTest_ = false;       // map says "drone in map" but draws none
+  // Trees and rocks as shadow casters: the cascades from this one on (the finest, 0) whose texel
+  // is fine enough (kVegCasterMaxTexelM) get them. vegCasterKey_ is what the
+  // tiles were last drawn with (the vegetation's version, which cascades); a
+  // change bumps shadowGeomVer_.
+  int vegCasterFirst_ = 0;
+  float vegCasterPushM_ = kVegCasterPushM; // depth pull toward the sun (negative: away)
+  bool vegCastersOffForTest_ = false;
+  quint64 vegCasterKey_ = 0;
   float droneVisualScale() const;
   bool droneCasterReady() const;
   void drawDroneCaster(const QMatrix4x4 &lightVP);

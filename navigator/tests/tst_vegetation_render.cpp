@@ -173,6 +173,10 @@ struct Rig {
     r = new SimRendererWidget;
     r->setGlErrorCheck(true);
     r->setVegetationTreesEnabled(trees); // explicit, whatever the default is
+    // The caster tests switch the shadow casters on. Every other test measures
+    // the trees against the same frame without them: a cast shadow on the ground
+    // is a change those counts would take for foliage.
+    r->setVegCastersOffForTest(true);
     auto *box = QWidget::createWindowContainer(r, &host);
     box->setFixedSize(800, 500);
     lay->addWidget(box);
@@ -425,6 +429,23 @@ World loneWorld(uint8_t species, int kind) {
       w.veg[i].push_back(t);
     }
   return w;
+}
+
+// Trees and rocks as shadow casters: a lone tree `distM` ahead of a raised
+// camera with the sun in the north (behind the tree), so its shadow falls on the
+// ground toward the camera.
+QPoint casterGroundPx(SimRendererWidget *r, const World &w, float x, float y) {
+  const float g = surfaceHeight(*w.field, x, y, kChunkM, kRes);
+  const QPointF p = r->worldToPixelForTest(QVector3D(x, y, -g));
+  return QPoint(int(std::lround(p.x())), int(std::lround(p.y())));
+}
+// High shadows, the sun in the north, the camera 14 m up and distM before x = 40.
+void casterScene(SimRendererWidget *r, const World &w, float distM, float sunEl = 30.0f,
+                 float down = 0.2f) {
+  r->setSun(sunEl, 0.0f);
+  r->setTerrainQuality(vsim::terrain::Quality::High);
+  r->setShadowQuality(ShadowQuality::High);
+  aimCamera(r, w, 40.0f - distM, 0.0f, 14.0f, 0.0f, down);
 }
 
 } // namespace
@@ -1733,6 +1754,242 @@ private slots:
     QVERIFY2(nm >= 8 && ni >= 8, "trunk texels not found");
     QVERIFY2(std::abs(imp - mesh) <= 0.15 * std::max(imp, mesh),
              qPrintable(QString("mesh %1 vs impostor %2").arg(mesh).arg(imp)));
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // ---- trees and rocks as shadow casters ----------------------------------
+  void treesCastIntoTheFirstCascades_data() {
+    QTest::addColumn<int>("kind");
+    QTest::addColumn<float>("distM");
+    QTest::addColumn<int>("maxTrisPerInstance"); // the coarsest LOD, not LOD0/1
+    QTest::newRow("jacaranda c1") << 2 << 70.0f << 5900;
+    QTest::newRow("fir c1") << 0 << 70.0f << 300;
+    QTest::newRow("island c1") << 3 << 70.0f << 1500;
+  }
+  // The ground in a tree's shadow is darker with casters on than off, ground
+  // beside it is not, and what was drawn is the coarsest LOD in cascade 1 only.
+  void treesCastIntoTheFirstCascades() {
+    QFETCH(int, kind);
+    QFETCH(float, distM);
+    QFETCH(int, maxTrisPerInstance);
+    World w = loneWorld(kVegTree, kind);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    casterScene(rig.r, w, distM);
+    rig.r->setVegCasterFirstCascadeForTest(1);
+    rig.r->setVegCastersOffForTest(true);
+    const QImage off = settledFrame(rig.r).convertToFormat(QImage::Format_RGB32);
+    rig.r->setVegCastersOffForTest(false);
+    const QImage on = settledFrame(rig.r).convertToFormat(QImage::Format_RGB32);
+    const auto &cs = rig.r->vegCasterStatsForTest();
+    QVERIFY2(cs.instances[1] >= 1, "the tree is drawn into cascade 1");
+    QCOMPARE(cs.instances[0], 0);
+    QCOMPARE(cs.instances[2], 0);
+    QVERIFY2(cs.triangles[1] / cs.instances[1] <= maxTrisPerInstance, "coarsest LOD");
+    const QPoint a = casterGroundPx(rig.r, w, 40.0f - 12.0f, 0.0f);
+    const QPoint b = casterGroundPx(rig.r, w, 40.0f - 12.0f, 14.0f);
+    const double shadowRatio = windowLuma(on, a.x(), a.y()) / windowLuma(off, a.x(), a.y());
+    const double controlRatio = windowLuma(on, b.x(), b.y()) / windowLuma(off, b.x(), b.y());
+    qInfo("caster probe: shadow %.3f control %.3f (tris/instance %lld)", shadowRatio, controlRatio,
+          cs.triangles[1] / cs.instances[1]);
+    QVERIFY2(shadowRatio < 0.9, "ground in the tree's shadow is darker with casters");
+    QVERIFY2(controlRatio > 0.97, "ground beside the shadow is not");
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // The flags decide: trees off, vegetation off, Low quality, and the test switch
+  // each leave the frame as it is without casters, and switching one back on with
+  // the camera still shows the shadow again (a tile reused from before the switch
+  // would not).
+  void casterFlagsAndLowGateTheShadow() {
+    World w = loneWorld(kVegTree, 2);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    casterScene(rig.r, w, 70.0f);
+    rig.r->setVegCasterFirstCascadeForTest(1);
+    settledFrame(rig.r); // the projection the probe needs is the drawn one
+    const QPoint a = casterGroundPx(rig.r, w, 28.0f, 0.0f);
+    auto ratio = [&](const QImage &x, const QImage &y) {
+      return windowLuma(x, a.x(), a.y()) / windowLuma(y, a.x(), a.y());
+    };
+    auto frame = [&]() { return settledFrame(rig.r).convertToFormat(QImage::Format_RGB32); };
+    rig.r->setVegCastersOffForTest(true);
+    const QImage none = frame();
+    rig.r->setVegCastersOffForTest(false);
+    const QImage withTrees = frame();
+    QVERIFY(ratio(withTrees, none) < 0.9);
+    // Trees off: the shadow goes (a stale tile would keep it).
+    rig.r->setVegetationTreesEnabled(false);
+    QVERIFY2(ratio(frame(), none) > 0.97, "trees off");
+    rig.r->setVegetationTreesEnabled(true);
+    QVERIFY2(ratio(frame(), none) < 0.9, "trees back on");
+    // Vegetation off altogether, then on.
+    rig.r->setVegetationEnabled(false);
+    rig.r->grabFrame();
+    const QImage vegOff = frame();
+    rig.r->setVegetationEnabled(true);
+    QVERIFY2(ratio(frame(), vegOff) < 0.9, "vegetation back on");
+    // Low: one 1024 map over 150 m (texel 0.35 m): no casters at all.
+    rig.r->setShadowQuality(ShadowQuality::Low);
+    const QImage lowOn = frame();
+    const auto &cs = rig.r->vegCasterStatsForTest();
+    const int passes = cs.passes;
+    rig.r->setVegCastersOffForTest(true);
+    const QImage lowOff = frame();
+    QCOMPARE(cs.passes, passes); // never drawn at Low
+    QVERIFY2(changedFraction(lowOn, lowOff) < 0.001, "Low is the same with or without casters");
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // The finest cascade (texel 5 cm, the drone's) takes trees too, so ground near
+  // the camera is shadowed like the rest: a tree 24 m ahead shadows the ground
+  // 6 m in front of it. Without the finest cascade it does not.
+  void treesCastIntoTheFinestCascade() {
+    World w = loneWorld(kVegTree, 2);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    casterScene(rig.r, w, 24.0f, 30.0f, 0.5f);
+    settledFrame(rig.r); // the projection the probes need is the drawn one
+    const QPoint a = casterGroundPx(rig.r, w, 40.0f - 6.0f, 0.0f);
+    const QPoint c = casterGroundPx(rig.r, w, 40.0f - 6.0f, 14.0f);
+    auto frame = [&]() { return settledFrame(rig.r).convertToFormat(QImage::Format_RGB32); };
+    rig.r->setVegCastersOffForTest(true);
+    const QImage none = frame();
+    rig.r->setVegCastersOffForTest(false);
+    frame(); // as the renderer ships: the finest cascade has them
+    qInfo("default casters: %d/%d/%d passes %d", rig.r->vegCasterStatsForTest().instances[0],
+          rig.r->vegCasterStatsForTest().instances[1], rig.r->vegCasterStatsForTest().instances[2],
+          rig.r->vegCasterStatsForTest().passes);
+    QVERIFY2(rig.r->vegCasterStatsForTest().instances[0] >= 1, "the default includes cascade 0");
+    rig.r->setVegCasterFirstCascadeForTest(1);
+    const QImage c1only = frame();
+    QCOMPARE(rig.r->vegCasterStatsForTest().instances[0], 0);
+    rig.r->setVegCasterFirstCascadeForTest(0);
+    const QImage withC0 = frame();
+    QVERIFY(rig.r->vegCasterStatsForTest().instances[0] >= 1);
+    const double r1 = windowLuma(c1only, a.x(), a.y()) / windowLuma(none, a.x(), a.y());
+    const double r0 = windowLuma(withC0, a.x(), a.y()) / windowLuma(none, a.x(), a.y());
+    const double rc = windowLuma(withC0, c.x(), c.y()) / windowLuma(none, c.x(), c.y());
+    qInfo("finest cascade: c1 only %.3f, with c0 %.3f, control %.3f", r1, r0, rc);
+    QVERIFY2(r1 > 0.97, "without the finest cascade the near ground is not shadowed");
+    QVERIFY2(r0 < 0.9, "with it, it is");
+    QVERIFY2(rc > 0.97, "ground beside it is not");
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // The casters are culled to the light window: a forest seen from its corner
+  // draws far fewer than the forest holds.
+  void casterListIsCulledToTheLightWindow() {
+    World w = buildWorld(kPalForest, -2, 2);
+    size_t held = 0;
+    for (const auto &v : w.veg)
+      for (const VegInstance &t : v)
+        held += (t.species == kVegTree || t.species == kVegRock) ? 1 : 0;
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    rig.r->setSun(30.0f, 0.0f);
+    rig.r->setTerrainQuality(vsim::terrain::Quality::High);
+    rig.r->setShadowQuality(ShadowQuality::High);
+    rig.r->setVegCastersOffForTest(false);
+    rig.r->setVegCasterFirstCascadeForTest(0);
+    aimCamera(rig.r, w, -380.0f, -380.0f, 12.0f, 3.1f, 0.2f); // corner, looking out
+    settledFrame(rig.r);
+    const auto &cs = rig.r->vegCasterStatsForTest();
+    const int drawn = cs.instances[0] + cs.instances[1];
+    qInfo("culled casters: drew %d of %zu", drawn, held);
+    QVERIFY(drawn > 0);
+    QVERIFY2(size_t(drawn) < held / 3, "casters outside the cascade windows are skipped");
+  }
+
+  // The push that keeps a crown clear of its own hull also lifts the start of a
+  // shadow; with the sun low it must not detach the trunk's shadow from its
+  // foot: at 30 deg the ground beside a lone jacaranda is shadowed from within
+  // 1.2 m of the base (0.55 m with no push, 0.9 m at -1 m, 1.8 m at -2 m).
+  void lowSunShadowStaysAtTheTrunkFoot() {
+    World w = loneWorld(kVegTree, 2);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    rig.r->setTerrainQuality(vsim::terrain::Quality::High);
+    rig.r->setShadowQuality(ShadowQuality::High);
+    rig.r->setVegCasterFirstCascadeForTest(0);
+    rig.r->setSun(30.0f, 90.0f);
+    aimCamera(rig.r, w, 33.0f, 0.0f, 1.5f, 0.0f, 0.18f);
+    rig.r->setVegCastersOffForTest(true);
+    const QImage off = settledFrame(rig.r).convertToFormat(QImage::Format_RGB32);
+    rig.r->setVegCastersOffForTest(false);
+    const QImage on = settledFrame(rig.r).convertToFormat(QImage::Format_RGB32);
+    float onset = -1.0f;
+    for (int i = 3; i <= 70 && onset < 0.0f; ++i) {
+      const float t = 0.05f * float(i);
+      const QPoint a = casterGroundPx(rig.r, w, 40.0f, -t);
+      const QPoint b = casterGroundPx(rig.r, w, 40.0f, -t - 0.15f);
+      QVERIFY(a.x() > 4 && a.y() > 4 && a.x() < on.width() - 4 && a.y() < on.height() - 4);
+      const double ra = windowLuma(on, a.x(), a.y()) / windowLuma(off, a.x(), a.y());
+      const double rb = windowLuma(on, b.x(), b.y()) / windowLuma(off, b.x(), b.y());
+      if (ra < 0.85 && rb < 0.85)
+        onset = t;
+    }
+    qInfo("shadow starts %.2f m from the trunk's foot", double(onset));
+    QVERIFY2(onset > 0.0f, "the tree casts a shadow on the ground beside it");
+    QVERIFY2(onset < 1.2f, "the shadow starts at the trunk's foot");
+  }
+
+  // The crowns are not darkened by their own caster: seen from the sun's side the
+  // lit face of a crown keeps its brightness with casters on (a coarse LOD
+  // shadowing the finer mesh behind it would show as acne), in the finest
+  // cascade and in cascade 1.
+  void crownsDoNotShadowThemselves_data() {
+    QTest::addColumn<int>("kind");
+    QTest::addColumn<float>("distM");
+    QTest::newRow("jacaranda c0") << 2 << 24.0f;
+    QTest::newRow("fir c0") << 0 << 24.0f;
+    QTest::newRow("jacaranda c1") << 2 << 80.0f;
+    QTest::newRow("island c1") << 3 << 80.0f;
+  }
+  void crownsDoNotShadowThemselves() {
+    QFETCH(int, kind);
+    QFETCH(float, distM);
+    World w = loneWorld(kVegTree, kind);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    casterScene(rig.r, w, distM, 50.0f);
+    rig.r->setSun(50.0f, 180.0f); // behind the camera: the visible face is the lit one
+    rig.r->setVegCasterFirstCascadeForTest(0);
+    rig.r->setVegetationEnabled(false);
+    rig.r->grabFrame();
+    const QImage bare = rig.r->grabFrame().convertToFormat(QImage::Format_RGB32);
+    rig.r->setVegetationEnabled(true);
+    rig.r->setVegCastersOffForTest(true);
+    const QImage off = settledFrame(rig.r).convertToFormat(QImage::Format_RGB32);
+    rig.r->setVegCastersOffForTest(false);
+    const QImage on = settledFrame(rig.r).convertToFormat(QImage::Format_RGB32);
+    // Crown pixels: the trees' pixels with casters off; their mean luminance.
+    double lumOff = 0.0, lumOn = 0.0;
+    long n = 0;
+    for (int y = 0; y < off.height(); ++y)
+      for (int x = 0; x < off.width(); ++x)
+        if (treeDiffers(off.pixel(x, y), bare.pixel(x, y))) {
+          const QRgb p = off.pixel(x, y), q = on.pixel(x, y);
+          lumOff += 0.299 * qRed(p) + 0.587 * qGreen(p) + 0.114 * qBlue(p);
+          lumOn += 0.299 * qRed(q) + 0.587 * qGreen(q) + 0.114 * qBlue(q);
+          ++n;
+        }
+    QVERIFY2(n > 300, "the tree is in view");
+    const double ratio = lumOn / lumOff;
+    qInfo("crown luminance with casters / without: %.3f (%ld px)", ratio, n);
+    QVERIFY2(ratio > 0.85, "a crown's lit face keeps its brightness");
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
 
