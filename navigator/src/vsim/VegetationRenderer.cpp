@@ -20,6 +20,7 @@
 #include <QOpenGLContext>
 #include <QOpenGLShaderProgram>
 #include <QSettings>
+#include <QVector2D>
 
 #include <algorithm>
 #include <cmath>
@@ -102,6 +103,7 @@ uniform float u_height;  // variant height, model units
 uniform float u_sway;    // wind bend at the top, fraction of the height
 uniform float u_time;
 uniform float u_push;    // shadow pass: pull the depth toward the sun (clip z); 0 otherwise
+uniform vec2 u_pushRamp; // shadow pass: height above the base [m] where the push is 0 and full
 out vec3 v_world;
 out vec3 v_nrm;
 out vec2 v_uv;
@@ -158,7 +160,8 @@ void main() {
   v_paint = i_misc.w;
   v_hm = g.y * s;
   gl_Position = u_vp * vec4(v_world, 1.0);
-  gl_Position.z -= u_push * gl_Position.w;
+  gl_Position.z -= u_push * smoothstep(u_pushRamp.x, max(u_pushRamp.y, u_pushRamp.x + 1e-3), v_hm) *
+                   gl_Position.w;
 }
 )GLSL";
 
@@ -1754,6 +1757,7 @@ int VegetationRenderer::drawShadowCasters(const QMatrix4x4 &lightVP, int cascade
   progShadow_->bind();
   progShadow_->setUniformValue("u_vp", lightVP);
   progShadow_->setUniformValue("u_push", push);
+  progShadow_->setUniformValue("u_pushRamp", QVector2D(kVegCasterRampM0, kVegCasterRampM1));
   progShadow_->setUniformValue("u_time", 0.0f);
   progShadow_->setUniformValue("u_diffuse", 2);
   glActiveTexture(GL_TEXTURE2);
