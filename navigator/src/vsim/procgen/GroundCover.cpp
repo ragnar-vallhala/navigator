@@ -16,6 +16,8 @@
  */
 #include "GroundCover.h"
 
+#include "EdgeTrack.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -180,6 +182,17 @@ GroundCover::GroundCover(uint32_t seed, int palette)
 
 GroundCover::Sample GroundCover::sample(float wx, float wy, const PgVec3 &base,
                                         float h01, float flatness) const {
+  return sampleImpl(wx, wy, base, h01, flatness, false);
+}
+
+GroundCover::Sample GroundCover::sampleSplit(float wx, float wy, const PgVec3 &base,
+                                             float h01, float flatness) const {
+  return sampleImpl(wx, wy, base, h01, flatness, true);
+}
+
+GroundCover::Sample GroundCover::sampleImpl(float wx, float wy, const PgVec3 &base,
+                                            float h01, float flatness,
+                                            bool split) const {
   const CoverStyle &s = styleFor(pal_);
   // Cover fades out with altitude (alpine), and keeps off the spawn pad's
   // immediate surroundings for water/rock so the drone does not start in a pond.
@@ -188,6 +201,7 @@ GroundCover::Sample GroundCover::sample(float wx, float wy, const PgVec3 &base,
   const float spawn = smoothstep(16.0f, 28.0f, r);
   const float flat = smoothstep(0.90f, 0.985f, flatness);
   float grass = 1.0f;
+  Sample edge; // the split-off border track (sampleSplit only)
 
   // Macro tint: a hundreds-of-metres warm/cool drift over the whole world.
   const float nt = 0.5f + 0.5f * tint_.fbm(wx / 260.0f, wy / 260.0f, 3, 2.0f, 0.5f) * 1.4f;
@@ -199,6 +213,7 @@ GroundCover::Sample GroundCover::sample(float wx, float wy, const PgVec3 &base,
 
   // Parcels of fields / paving zones on a rotated grid with wobbly edges.
   float edgeTrack = 0.0f;
+  float edgeS = kEdgeFar; // signed distance to the nearest tracked border
   if (s.fieldsAmt > 0.0f && s.nCrops > 0) {
     const float c = std::cos(rot_), sn = std::sin(rot_);
     const float wob = 14.0f * patch_.fbm(wx / 90.0f + 3.0f, wy / 90.0f, 2, 2.0f, 0.5f);
@@ -218,7 +233,18 @@ GroundCover::Sample GroundCover::sample(float wx, float wy, const PgVec3 &base,
     const uint32_t hb = hash2(iu, iv, 92u), ht = hash2(iu, iv + 1, 92u);
     const float dl = (fu < 0.5f ? (hl % 3u == 0u) : (hr % 3u == 0u)) ? du : 1e3f;
     const float db = (fv < 0.5f ? (hb % 3u == 0u) : (ht % 3u == 0u)) ? dv : 1e3f;
-    edgeTrack = 1.0f - smoothstep(0.9f, 2.0f, std::min(dl, db));
+    edgeTrack = 1.0f - smoothstep(kEdgeTrackD0, kEdgeTrackD1, std::min(dl, db));
+    // The same distance, signed: the offset from the border line the parcel's
+    // nearer side has (left of the middle, else right), 1e3 where that border
+    // carries no track.
+    const bool tu = fu < 0.5f ? (hl % 3u == 0u) : (hr % 3u == 0u);
+    const bool tv = fv < 0.5f ? (hb % 3u == 0u) : (ht % 3u == 0u);
+    const float su = (fu < 0.5f ? fu : fu - 1.0f) * s.fieldW;
+    const float sv = (fv < 0.5f ? fv : fv - 1.0f) * s.fieldH;
+    if (tu && (!tv || std::fabs(su) <= std::fabs(sv)))
+      edgeS = std::clamp(su, -kEdgeFar, kEdgeFar);
+    else if (tv)
+      edgeS = std::clamp(sv, -kEdgeFar, kEdgeFar);
   }
 
   // Patches A and B (dry / lush / loam ...), ragged edges, fading with height.
@@ -245,8 +271,13 @@ GroundCover::Sample GroundCover::sample(float wx, float wy, const PgVec3 &base,
 
   // Tracks: zero-crossings of a meandering noise field, width from the field's
   // gradient so they stay a constant ~2 m wide.
+  PgVec3 colS = col; // `col` without the border track (the High shader draws that)
+  if (split && s.fieldsAmt > 0.0f) { // the shader's track needs these even where the node has none
+    edge.edgeK = smoothstep(0.82f, 0.93f, flatness) * alt;
+    edge.edgePc = scale(s.pathCol, 0.9f + 0.2f * (0.5f + 0.5f * rag));
+  }
   if (s.pathAmt > 0.0f || edgeTrack > 0.0f) {
-    float pm = edgeTrack;
+    float pathPm = 0.0f; // the meandering track
     if (s.pathAmt > 0.0f) {
       const float k = 1.0f / 170.0f;
       const float e = 2.0f;
@@ -254,12 +285,16 @@ GroundCover::Sample GroundCover::sample(float wx, float wy, const PgVec3 &base,
       const float n0 = pn(wx, wy);
       const float gx = (pn(wx + e, wy) - n0) / e, gy = (pn(wx, wy + e) - n0) / e;
       const float d = std::fabs(n0) / (std::sqrt(gx * gx + gy * gy) + 1e-5f);
-      pm = std::max(pm, (1.0f - smoothstep(s.pathHalfW * 0.7f, s.pathHalfW * 1.6f, d)) * s.pathAmt);
+      pathPm = (1.0f - smoothstep(s.pathHalfW * 0.7f, s.pathHalfW * 1.6f, d)) * s.pathAmt;
     }
-    pm *= smoothstep(0.82f, 0.93f, flatness) * alt;
+    const float pm = std::max(edgeTrack, pathPm);
+    const float k = smoothstep(0.82f, 0.93f, flatness) * alt;
     const PgVec3 pc = scale(s.pathCol, 0.9f + 0.2f * (0.5f + 0.5f * rag));
-    col = mix(col, pc, pm);
-    grass *= 1.0f - pm;
+    grass *= 1.0f - pm * k;
+    colS = mix(col, pc, pathPm * k); // only the meandering track
+    col = mix(col, pc, pm * k);      // both, as it always was
+    edge.edgeK = k;
+    edge.edgePc = pc;
   }
 
   // Mown stripes (racing lawn).
@@ -268,12 +303,26 @@ GroundCover::Sample GroundCover::sample(float wx, float wy, const PgVec3 &base,
     const float u = (wx * c + wy * sn) / 7.0f;
     const float band = smoothstep(0.42f, 0.58f, u - std::floor(u));
     col = scale(col, 1.0f + s.stripeAmt * (band * 2.0f - 1.0f));
+    colS = scale(colS, 1.0f + s.stripeAmt * (band * 2.0f - 1.0f));
   }
 
   col.x = clamp01(col.x);
   col.y = clamp01(col.y);
   col.z = clamp01(col.z);
-  return {col, clamp01(grass)};
+  colS.x = clamp01(colS.x);
+  colS.y = clamp01(colS.y);
+  colS.z = clamp01(colS.z);
+  Sample out;
+  out.split = colS;
+  out.color = col;
+  out.grass = clamp01(grass);
+  if (split) {
+    out.edgeS = edgeS;
+    out.edgeA = std::fabs(edgeS);
+    out.edgeK = edge.edgeK;
+    out.edgePc = edge.edgePc;
+  }
+  return out;
 }
 
 } // namespace vsim::procgen

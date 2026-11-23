@@ -47,6 +47,9 @@ struct ChunkMeshData {
   std::vector<QVector3D> positions;
   std::vector<QVector3D> normals;
   std::vector<QVector3D> colors;
+  std::vector<QVector3D> splitColors; // colors without the parcel-border track (High)
+  std::vector<QVector3D> edge;       // x signed, y unsigned track distance (EdgeTrack.h)
+  std::vector<QVector3D> edgeColors; // the ground's colour on a track
 };
 
 // A chunk that needs meshing, identified by both its key and cell coords.

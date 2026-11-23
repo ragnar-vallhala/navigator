@@ -18,6 +18,7 @@
 
 #include "FlowLayout.h"
 #include "SimPanelsCommon.h"
+#include "../../vsim/SimRendererWidget.h"
 #include "../../vsim/VegetationRenderer.h"
 
 #include <QApplication>
@@ -595,6 +596,17 @@ void SimulatorWidget::buildSimControls(QWidget *host) {
     applyVegetationTrees();
   });
   sv->addWidget(treesChk);
+  auto *gridChk = new QCheckBox(tr("Survey grid"), simBody);
+  gridChk->setChecked(vsim::SimRendererWidget::surveyGridByConfig());
+  gridChk->setToolTip(
+      tr("Draw the faint 1 m / 10 m / 100 m survey lines on level ground "
+         "close to the camera (they fade out by 60 m). Off by default. "
+         "Applies immediately."));
+  connect(gridChk, &QCheckBox::toggled, this, [this](bool on) {
+    QSettings().setValue(QStringLiteral("sim/surveyGrid"), on);
+    applySurveyGrid();
+  });
+  sv->addWidget(gridChk);
 
   m_logPathLabel = new ui::ElidedLabel(simBody);
   m_logPathLabel->setFullText(tr("Current log: (none)"));

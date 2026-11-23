@@ -44,6 +44,12 @@ struct ProcMesh {
   std::vector<PgVec3> positions;
   std::vector<PgVec3> normals;
   std::vector<PgVec3> colors;
+  // Terrain only, empty elsewhere (EdgeTrack.h): per vertex (x signed, y
+  // unsigned distance to the nearest parcel-border track) and the colour the
+  // ground takes on that track. `colors` then holds the colour WITHOUT it.
+  std::vector<PgVec3> splitColors; // colors without the parcel-border track
+  std::vector<PgVec3> edge;
+  std::vector<PgVec3> edgeColors;
 
   std::size_t triangleCount() const { return positions.size() / 3; }
   bool empty() const { return positions.empty(); }

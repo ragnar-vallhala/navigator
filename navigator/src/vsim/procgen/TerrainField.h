@@ -104,6 +104,10 @@ public:
   // fields) at world (wx, wy). Meshing uses this; `grass` in the result is the
   // fraction of the ground that may carry grass there.
   GroundCover::Sample colorAt(float wx, float wy, float h, float flatness) const;
+  // As colorAt(), with the parcel-border tracks left out of `color` and given
+  // as distances for the shader (GroundCover::sampleSplit, EdgeTrack.h). Used
+  // for the streamed chunk mesh; the far ring keeps colorAt().
+  GroundCover::Sample colorAtSplit(float wx, float wy, float h, float flatness) const;
   // Grass density multiplier at (wx, wy) (0 on tracks/water/rock/bare patches).
   float grassFactor(float wx, float wy, float h, float flatness) const {
     return colorAt(wx, wy, h, flatness).grass;
@@ -120,6 +124,8 @@ private:
   Noise relief_;
   GroundCover cover_;
   WaterField water_;
+  // Ponds, shore and wet bank over a ground-cover sample (colorAt / colorAtSplit).
+  GroundCover::Sample withWater(GroundCover::Sample s, float wx, float wy, float h) const;
   float baseHeight(float wx, float wy) const override; // before the basins
   float rawHeight(float wx, float wy) const; // before the spawn pad
   float duneHeight(float wx, float wy) const;

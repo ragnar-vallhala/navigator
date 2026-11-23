@@ -309,6 +309,7 @@ set(GCS_SITL_HEADERS
     src/vsim/ProceduralWorld.h
     src/vsim/ChunkStreamer.h
     src/vsim/procgen/ProcgenTypes.h
+    src/vsim/procgen/EdgeTrack.h
     src/vsim/procgen/Noise.h
     src/vsim/procgen/Heightfield.h
     src/vsim/procgen/TerrainGen.h

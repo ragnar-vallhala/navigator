@@ -85,6 +85,10 @@ public:
   QString logText() const { return w_.m_log->toPlainText(); }
   void clearLog() { w_.m_log->clear(); }
   bool treesShown() const { return w_.m_renderer->vegetationTreesEnabled(); }
+  bool gridShown() const { return w_.m_renderer->surveyGrid(); }
+  bool downGridShown() const {
+    return !w_.m_downRenderer || w_.m_downRenderer->surveyGrid();
+  }
   bool downTreesShown() const {
     return !w_.m_downRenderer || w_.m_downRenderer->vegetationTreesEnabled();
   }
@@ -274,6 +278,27 @@ private slots:
     box->setChecked(before);
     QCOMPARE(a_->treesShown(), before);
     QCOMPARE(QSettings().value("sim/vegetationTrees").toBool(), before);
+  }
+
+  // The Sim controls "Survey grid" checkbox is off by default, switches the
+  // grid in the 3D views live and stores the choice.
+  void surveyGridCheckboxTogglesLiveAndPersists() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    QCheckBox *box = nullptr;
+    for (QCheckBox *c : w_->findChildren<QCheckBox *>())
+      if (c->text() == QLatin1String("Survey grid"))
+        box = c;
+    QVERIFY2(box, "no Survey grid checkbox in the Sim controls");
+    QVERIFY(!box->isChecked()); // off unless the user stored otherwise
+    QCOMPARE(a_->gridShown(), box->isChecked());
+    box->setChecked(true);
+    QVERIFY(a_->gridShown());
+    QVERIFY(a_->downGridShown());
+    QCOMPARE(QSettings().value("sim/surveyGrid").toBool(), true);
+    box->setChecked(false);
+    QVERIFY(!a_->gridShown());
+    QCOMPARE(QSettings().value("sim/surveyGrid").toBool(), false);
   }
 
   // Sim Stopped: every world change parks the vehicle on the new ground.

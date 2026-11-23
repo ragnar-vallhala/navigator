@@ -68,14 +68,32 @@ public:
     // 1 = grass may grow here, 0 = path / water / rock / bare (CPU grass
     // scatter multiplies its density by this).
     float grass = 1.0f;
+    // The same colour without the parcel-border track (equal to `color` where
+    // there is none). Valid from sample() and sampleSplit(), but the edge fields
+    // below only from sampleSplit(). The High shader draws the border track per
+    // pixel on top of `split` (see EdgeTrack.h); `color` keeps it baked in.
+    PgVec3 split;
+    // Only from sampleSplit(): edgeS / edgeA are the signed / unsigned distance to the
+    // nearest tracked border (kEdgeFar when none), edgePc the track colour and
+    // edgeK how much of it the ground takes (flat, below the alpine line).
+    // TerrainField::colorAtSplit folds edgeK in: edgePc is then the ground's
+    // colour on a track, and the shader mixes it in by the per-pixel weight.
+    float edgeS = 8.0f, edgeA = 8.0f, edgeK = 0.0f;
+    PgVec3 edgePc;
   };
 
   // `base` is the height/slope colour, h01 the elevation as a fraction of the
   // field's heightM, flatness 1 = level .. 0 = vertical.
   Sample sample(float wx, float wy, const PgVec3 &base, float h01,
                 float flatness) const;
+  // As sample(), but the parcel-border tracks are left out of `color` and
+  // returned as data for the shader to draw per pixel. `grass` is unchanged.
+  Sample sampleSplit(float wx, float wy, const PgVec3 &base, float h01,
+                     float flatness) const;
 
 private:
+  Sample sampleImpl(float wx, float wy, const PgVec3 &base, float h01,
+                    float flatness, bool split) const;
   int pal_;
   float rot_; // field-grid heading [rad], from the seed
   Noise tint_, patch_, fine_, path_, rock_;
