@@ -1734,6 +1734,27 @@ void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks,
                            float(fbW_) / std::max(1, fbH_),
                            high ? kMaxCascades : 1, tile, shadowSnap_);
 
+  // Trees and rocks cast into the cascades whose texel is fine enough for them.
+  // What they put in the tiles is the vegetation's own state, so its version and
+  // the cascade set are part of the geometry version: a change redraws the tiles.
+  bool vegCast[kMaxCascades] = {false, false, false};
+  bool anyVegCast = false;
+  if (veg_ && vegEnabled_ && worldVisible_ && !vegCastersOffForTest_ && veg_->glReady())
+    for (int ci = vegCasterFirst_; ci < csm_.count; ++ci) {
+      vegCast[ci] = csm_.info[ci].x() <= kVegCasterMaxTexelM;
+      anyVegCast = anyVegCast || vegCast[ci];
+    }
+  {
+    const quint64 key = !anyVegCast ? 0
+                                    : (quint64(veg_->casterVersion()) << 3 |
+                                       quint64((vegCast[0] ? 1 : 0) | (vegCast[1] ? 2 : 0) |
+                                               (vegCast[2] ? 4 : 0))) + 1;
+    if (key != vegCasterKey_) {
+      vegCasterKey_ = key;
+      ++shadowGeomVer_;
+    }
+  }
+
   // Which cascades need drawing: a cascade whose casters, sun, size and
   // visibility are unchanged and whose window moved by < kReuseTexels keeps its
   // tile (and the matrices that tile was rendered with).
@@ -1876,6 +1897,12 @@ void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks,
         QOpenGLVertexArrayObject::Binder b(&helipadDisk_.vao);
         glDrawArrays(GL_TRIANGLES, 0, helipadDisk_.vertex_count);
       }
+    if (veg_ && !vegCast[ci])
+      veg_->clearCasterStats(ci);
+    if (vegCast[ci]) {
+      veg_->drawShadowCasters(lightVP, ci, 2.0f * vegCasterPushM_ / csm_.info[ci].y());
+      progDepth_->bind(); // the vegetation drew with its own program
+    }
     if (droneIn[ci] && !noCasterForTest_) {
       // The receiver's depth bias (about 12 texels) would swallow the shadow of
       // anything that low, a landed drone. Pulling the drone toward the sun in
