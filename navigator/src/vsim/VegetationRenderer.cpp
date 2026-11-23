@@ -1486,6 +1486,7 @@ void VegetationRenderer::setCommonUniforms(QOpenGLShaderProgram &p, const VegFra
   p.setUniformValue("u_time", f.time);
   p.setUniformValue("u_drone", f.dronePos);
   p.setUniformValue("u_droner", f.droneRadius);
+  p.setUniformValue("u_dronemap", f.droneInMap ? 1.0f : 0.0f);
   if (&p == prog_.get()) { // only the lit program receives shadows
     if (csmLocs_.vp < 0)
       csmLocs_.resolve(&p);

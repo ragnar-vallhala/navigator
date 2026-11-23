@@ -1537,6 +1537,120 @@ private slots:
     QVERIFY(ratio < 0.9);
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
+
+  // The drone casts a real shadow: its hull (solid) and its rotors (full radius,
+  // dithered to the blade solidity kRotorCoverage) are drawn into the sun's depth
+  // map, so the ground down the sun ray is darker with the drone low than with it
+  // 60 m up in the same frame. The camera looks south from the shadow's side, so
+  // the drone is behind its own shadow and hides nothing. Rotor coverage 0 / default / 1 is rendered for each row:
+  // the default must darken the footprint a little more than no rotor shadow and
+  // far less than a solid disc, which pins the dither to its coverage.
+  void droneShadowFallsDownTheSunRay_data() {
+    QTest::addColumn<bool>("high");
+    QTest::addColumn<float>("aboveM");
+    QTest::addColumn<float>("sunEl");
+    QTest::newRow("high 0.5 m sun 50") << true << 0.5f << 50.0f;
+    QTest::newRow("high 1.5 m sun 50") << true << 1.5f << 50.0f;
+    QTest::newRow("high 3 m sun 50") << true << 3.0f << 50.0f;
+    QTest::newRow("high 1.5 m sun 20") << true << 1.5f << 20.0f;
+    // Landed: the shadow falls right under the drone, which must still get it
+    // (the map's depth bias alone would hide a caster that low).
+    QTest::newRow("high landed 0.05 m sun 50") << true << 0.05f << 50.0f;
+    QTest::newRow("low 1.5 m sun 50") << false << 1.5f << 50.0f;
+  }
+  void droneShadowFallsDownTheSunRay() {
+    QFETCH(bool, high);
+    QFETCH(float, aboveM);
+    QFETCH(float, sunEl);
+    World w = loneWorld(kVegTree, 1);
+    for (auto &v : w.veg)
+      for (auto &t : v)
+        t.pos.y = 60.0f; // out of view
+    FieldParams fp;
+    fp.seed = 11u;
+    fp.palette = kPalForest;
+    fp.heightM = 20.0f;
+    auto field = std::make_shared<const TerrainField>(fp);
+    Rig rig(true);
+    rig.r->setMotorsEditable(false);
+    rig.r->setTerrainField(field);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    rig.r->setShadowQuality(high ? vsim::ShadowQuality::High : vsim::ShadowQuality::Low);
+    rig.r->setSun(sunEl, 180.0f); // from the south: the shadow falls north, away
+    rig.r->setTerrainQuality(vsim::terrain::Quality::High);
+    const float g = surfaceHeight(*w.field, 40.0f, 0.0f, kChunkM, kRes);
+    auto frame = [&](float above) {
+      aimCamera(rig.r, w, 50.0f, 0.0f, 12.0f, 3.14159265f, 0.9f);
+      SimSnapshot s;
+      s.pos_w = {40.0f, 0.0f, -(g + above)};
+      rig.r->setSnapshot(s);
+      return settledFrame(rig.r).convertToFormat(QImage::Format_RGB32);
+    };
+    const QImage far = frame(60.0f);
+    // Where the sun ray from the drone meets the terrain (it slopes about 10%).
+    const float tanEl = std::tan(qDegreesToRadians(sunEl));
+    float sx = 40.0f;
+    for (int i = 0; i < 20; ++i)
+      sx = 40.0f + (g + aboveM - surfaceHeight(*w.field, sx, 0.0f, kChunkM, kRes)) / tanEl;
+    const float sg = surfaceHeight(*w.field, sx, 0.0f, kChunkM, kRes);
+    // The drone's footprint (rotor span about 0.64 m), and its mean luma.
+    constexpr float kHalf = 0.32f;
+    int x0 = 1 << 20, x1 = -1, y0 = 1 << 20, y1 = -1;
+    for (int c = 0; c < 4; ++c) {
+      const QPointF q = rig.r->worldToPixelForTest(QVector3D(
+          sx + ((c & 1) ? kHalf : -kHalf),
+          ((c & 2) ? kHalf : -kHalf), -sg - 0.02f));
+      x0 = std::min(x0, int(q.x())), x1 = std::max(x1, int(q.x()));
+      y0 = std::min(y0, int(q.y())), y1 = std::max(y1, int(q.y()));
+    }
+    auto meanLuma = [&](const QImage &im) {
+      double sum = 0;
+      int n = 0;
+      for (int y = y0; y <= y1; ++y)
+        for (int x = x0; x <= x1; ++x, ++n) {
+          const QRgb c = im.pixel(x, y);
+          sum += 0.299 * qRed(c) + 0.587 * qGreen(c) + 0.114 * qBlue(c);
+        }
+      return n ? sum / n : 0.0;
+    };
+    const double ref = meanLuma(far);
+    auto ratioAt = [&](float cover) {
+      rig.r->setRotorCoverageForTest(cover);
+      const QImage near = frame(aboveM);
+      return meanLuma(near) / ref;
+    };
+    const double r0 = high ? ratioAt(0.0f) : 0.0;
+    const double rd = ratioAt(-1.0f);
+    // The same frame with no drone caster at all: what the drone's shadow does,
+    // with the drone's own pixels identical in both (so it also works landed).
+    rig.r->setDroneCasterOffForTest(true);
+    const double rOff = ratioAt(-1.0f);
+    rig.r->setDroneCasterOffForTest(false);
+    qInfo("with caster %.4f, without %.4f -> shadow x%.4f", rd, rOff, rd / rOff);
+    const double r1 = high ? ratioAt(1.0f) : 0.0;
+    // High: the drone is in the map. Low: its texel is too coarse, so the
+    // analytic cylinder keeps the shadow.
+    QCOMPARE(rig.r->droneInShadowMapForTest(), high);
+    qInfo("drone shadow %s %.1f m sun %.0f: footprint %dx%d px, ratio hull-only %.4f, "
+          "default %.4f, solid rotors %.4f",
+          high ? "high" : "low", double(aboveM), double(sunEl), x1 - x0 + 1, y1 - y0 + 1, r0,
+          rd, r1);
+    if (!high) {
+      QVERIFY(rd < 0.97); // the cylinder
+    } else {
+      if (aboveM > 0.2f)
+        QVERIFY(r0 < 0.99);        // the hull shadows the ground (landed: the
+                                   // drone's own pixels cover it, so not here)
+      QVERIFY(rd / rOff < 0.995);  // the caster darkens the footprint, landed or not
+      QVERIFY(r0 - r1 > 0.004);    // solid rotor discs add a measurable shadow
+      const double frac = (r0 - rd) / (r0 - r1); // the default is a fraction of solid
+      qInfo("rotor shadow fraction of solid %.3f (coverage %.2f)", frac, 0.15);
+      QVERIFY(frac > 0.05 && frac < 0.25);
+    }
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
 };
 
 int main(int argc, char **argv) {
