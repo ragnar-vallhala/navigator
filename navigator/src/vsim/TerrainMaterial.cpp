@@ -120,7 +120,11 @@ void terrainMaterial(vec3 vcol, vec2 p, float dist, inout vec3 base, inout vec3 
   // the photo's brightness detail, relative to the photo's own mean so the
   // overall level stays the cover's. Rock and dirt show their own colour.
   float m0 = max(tmLuma(textureLod(u_t0, vec2(0.5), 10.0).rgb), 0.02);
-  float detail = clamp(tmLuma(a0) / m0, 0.35, 1.9);
+  // own_k never reaches 1 (0.85 rock, 0.55 dirt), so the grass term is still
+  // blended in at rockW or dirtW = 1. When useG skipped the photo (a0 = 0) its
+  // detail must be neutral, not clamp(0) = 0.35: that drew the track dark
+  // wherever the cover crossed dirtW = 0.999 (hard-edged slivers, High only).
+  float detail = useG ? clamp(tmLuma(a0) / m0, 0.35, 1.9) : 1.0;
   vec3 cover = mix(vec3(tmLuma(vcol)), vcol, 0.8);
   vec3 grass = cover * detail;
   float lvl = clamp(tmLuma(vcol) / 0.38, 0.55, 1.5);
