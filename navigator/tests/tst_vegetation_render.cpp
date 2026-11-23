@@ -1952,7 +1952,10 @@ private slots:
   // The crowns are not darkened by their own caster: seen from the sun's side the
   // lit face of a crown keeps its brightness with casters on (a coarse LOD
   // shadowing the finer mesh behind it would show as acne), in the finest
-  // cascade and in cascade 1.
+  // cascade and in cascade 1. The bound is 0.88: pinned on llvmpipe the ratios
+  // are 0.922 jacaranda and 0.903 fir in the finest cascade (margin 0.003 over
+  // 0.9, thin for another driver), 0.98 and 0.994 in cascade 1; with the flat
+  // 1 m push they are 0.863 and 0.852, and with no push 0.785 and 0.699.
   void crownsDoNotShadowThemselves_data() {
     QTest::addColumn<int>("kind");
     QTest::addColumn<float>("distM");
@@ -1995,7 +1998,7 @@ private slots:
     QVERIFY2(n > 300, "the tree is in view");
     const double ratio = lumOn / lumOff;
     qInfo("crown luminance with casters / without: %.3f (%ld px)", ratio, n);
-    QVERIFY2(ratio > 0.9, "a crown's lit face keeps its brightness");
+    QVERIFY2(ratio > 0.88, "a crown's lit face keeps its brightness");
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
 
