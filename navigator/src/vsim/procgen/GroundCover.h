@@ -68,8 +68,12 @@ public:
     // 1 = grass may grow here, 0 = path / water / rock / bare (CPU grass
     // scatter multiplies its density by this).
     float grass = 1.0f;
-    // Only from sampleSplit(): the parcel-border track kept out of `color` (see
-    // EdgeTrack.h). edgeS / edgeA are the signed / unsigned distance to the
+    // The same colour without the parcel-border track (equal to `color` where
+    // there is none). Valid from sample() and sampleSplit(), but the edge fields
+    // below only from sampleSplit(). The High shader draws the border track per
+    // pixel on top of `split` (see EdgeTrack.h); `color` keeps it baked in.
+    PgVec3 split;
+    // Only from sampleSplit(): edgeS / edgeA are the signed / unsigned distance to the
     // nearest tracked border (kEdgeFar when none), edgePc the track colour and
     // edgeK how much of it the ground takes (flat, below the alpine line).
     // TerrainField::colorAtSplit folds edgeK in: edgePc is then the ground's

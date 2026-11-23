@@ -89,7 +89,7 @@ void loadTerrain(SimRendererWidget *r, const World &w) {
     const ProcMesh m = meshFieldChunk(*w.field, w.cells[i].first, w.cells[i].second,
                                       kChunkM, kRes);
     const ChunkMeshData d = toChunkMeshData(w.keys[i], m);
-    r->setWorldChunk(d.key, d.positions, d.normals, d.colors, d.edge, d.edgeColors);
+    r->setWorldChunk(d.key, d.positions, d.normals, d.colors, d.splitColors, d.edge, d.edgeColors);
   }
 }
 
@@ -529,24 +529,19 @@ BandEdges bandEdges(const QImage &imgIn) {
     return out;
   }
 
-  // The same ground twice, as the renderer gets it: the new mesh (track as
-  // distances) and the old one (track baked into the node colour, no distances).
-  void loadHillsTerrain(SimRendererWidget *r, const World &w, bool split) {
-    for (size_t i = 0; i < w.keys.size(); ++i) {
-      ProcMesh m = meshFieldChunk(*w.field, w.cells[i].first, w.cells[i].second, kChunkM, kRes);
-      if (!split) { // the old node colour: the full sample (track included)
-        for (size_t k = 0; k < m.positions.size(); ++k) {
-          const PgVec3 p = m.positions[k];
-          const PgVec3 n = m.normals[k];
-          m.colors[k] = w.field->colorAt(p.x, p.y, -p.z, n.z < 0.0f ? -n.z : 0.0f).color;
-        }
-        m.edge.clear();
-        m.edgeColors.clear();
-      }
-      const ChunkMeshData d = toChunkMeshData(w.keys[i], m);
-      r->setWorldChunk(d.key, d.positions, d.normals, d.colors, d.edge, d.edgeColors);
-    }
+// The same ground twice, as the renderer gets it: the new mesh data (baked
+// colour plus the track-free colour and track distances) and the old one (the
+// baked colour only, which is what the mesher gave before).
+void loadHillsTerrain(SimRendererWidget *r, const World &w, bool split) {
+  for (size_t i = 0; i < w.keys.size(); ++i) {
+    const ProcMesh m = meshFieldChunk(*w.field, w.cells[i].first, w.cells[i].second, kChunkM, kRes);
+    const ChunkMeshData d = toChunkMeshData(w.keys[i], m);
+    if (split)
+      r->setWorldChunk(d.key, d.positions, d.normals, d.colors, d.splitColors, d.edge, d.edgeColors);
+    else
+      r->setWorldChunk(d.key, d.positions, d.normals, d.colors);
   }
+}
 
 } // namespace
 
@@ -1241,7 +1236,6 @@ private slots:
     QTest::addColumn<bool>("high");
     QTest::newRow("High h6") << 6.0f << 0.8f << true;
     QTest::newRow("High h10") << 10.0f << 0.9f << true;
-    QTest::newRow("Low h10") << 10.0f << 0.9f << false; // Low draws the track per pixel too
   }
   void borderTrackIsStraightAndCrisp() {
     QFETCH(float, aboveM);
@@ -1250,6 +1244,7 @@ private slots:
     Rig rig;
     QVERIFY(rig.show());
     rig.r->setTerrainQuality(high ? vsim::terrain::Quality::High : vsim::terrain::Quality::Low);
+    QVERIFY(high); // Low keeps the baked track: see lowKeepsTheBakedBorderTracks
     rig.r->setVegetationEnabled(false);
     World w;
     FieldParams fp;
@@ -1282,6 +1277,55 @@ private slots:
     QVERIFY(res[1].rms < 0.6 * res[0].rms);
     QVERIFY(res[1].rms < 3.5);
     QVERIFY(res[1].width < 0.75 * res[0].width);
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // Low keeps the old baked border tracks: the chunk's node colour is exactly
+  // colorAt() (what the mesher gave before), and with the new per-pixel data
+  // present the frame equals the one drawn from that colour alone, pixel for
+  // pixel. A live switch to High and back changes nothing at Low.
+  void lowKeepsTheBakedBorderTracks() {
+    Rig rig;
+    QVERIFY(rig.show());
+    rig.r->setTerrainQuality(vsim::terrain::Quality::Low);
+    rig.r->setVegetationEnabled(false);
+    World w;
+    FieldParams fp;
+    fp.seed = 11u;
+    fp.palette = kPalHills;
+    fp.heightM = 30.0f;
+    w.field = std::make_unique<TerrainField>(fp);
+    for (int cy = -1; cy <= 1; ++cy)
+      for (int cx = -1; cx <= 1; ++cx) {
+        w.keys.push_back(ChunkStreamer::keyOf(cx, cy));
+        w.cells.push_back({cx, cy});
+      }
+    const ProcMesh m = meshFieldChunk(*w.field, 0, 0, kChunkM, kRes);
+    int differs = 0, trackNodes = 0;
+    for (size_t k = 0; k < m.positions.size(); k += 7) {
+      const PgVec3 p = m.positions[k], n = m.normals[k];
+      const PgVec3 c = w.field->colorAt(p.x, p.y, -p.z, n.z < 0.0f ? -n.z : 0.0f).color;
+      differs += (c.x != m.colors[k].x || c.y != m.colors[k].y || c.z != m.colors[k].z);
+      trackNodes += (m.colors[k].x != m.splitColors[k].x || m.colors[k].y != m.splitColors[k].y);
+    }
+    QCOMPARE(differs, 0);
+    QVERIFY2(trackNodes > 20, "the chunk must hold baked border tracks for this to mean anything");
+    const float D = 10.0f / std::tan(0.6f);
+    QImage f[2];
+    for (int split = 0; split < 2; ++split) {
+      rig.r->clearWorldChunks();
+      loadHillsTerrain(rig.r, w, split == 1);
+      aimCamera(rig.r, w, 8.0f - D, 12.0f, 10.0f, 0.0f, 0.6f);
+      f[split] = settledFrame(rig.r, 3);
+    }
+    QCOMPARE(anyDiffFraction(f[0], f[1]), 0.0);
+    // High with the same data differs (the track is drawn per pixel), and back
+    // to Low is the baked frame again.
+    rig.r->setTerrainQuality(vsim::terrain::Quality::High);
+    const QImage hi = settledFrame(rig.r, 3);
+    QVERIFY(anyDiffFraction(f[1], hi) > 0.0);
+    rig.r->setTerrainQuality(vsim::terrain::Quality::Low);
+    QCOMPARE(anyDiffFraction(f[1], settledFrame(rig.r, 3)), 0.0);
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
 
@@ -1366,9 +1410,9 @@ private slots:
     const float eye[3] = {20.0f, 30.0f, 60.0f};
     for (int i = 0; i < 3; ++i) {
       aimCamera(rig.r, w, 0.0f, 0.0f, eye[i], 0.0f, 1.5f);
-      rig.r->setGridOffForTest(false);
+      rig.r->setSurveyGrid(true);
       const QImage on = settledFrame(rig.r, 3);
-      rig.r->setGridOffForTest(true);
+      rig.r->setSurveyGrid(false);
       const QImage off = settledFrame(rig.r, 3);
       changed[i] = anyDiffFraction(on, off);
       if (i == 0)
@@ -1378,6 +1422,63 @@ private slots:
     QVERIFY2(changed[1] > 0.0, "the grid lines are still there at 30 m");
     QCOMPARE(changed[2], 0.0);
     QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // The survey grid is a View option, off by default and stored under
+  // "sim/surveyGrid": a renderer made with nothing stored has it off and draws
+  // no grid pixel (identical to an explicit off, at 20 m over flat ground where
+  // the grid is strongest); the stored value is read back and applied.
+  void surveyGridIsAnOffByDefaultSetting() {
+    QStandardPaths::setTestModeEnabled(true);
+    {
+      QSettings s;
+      s.remove("sim/surveyGrid");
+    }
+    QVERIFY(!SimRendererWidget::surveyGridByConfig());
+    Rig rig;
+    QVERIFY(rig.show());
+    QVERIFY(!rig.r->surveyGrid());
+    rig.r->setVegetationEnabled(false);
+    World w;
+    FieldParams fp;
+    fp.seed = 11u;
+    fp.palette = kPalForest;
+    fp.heightM = 3.0f;
+    w.field = std::make_unique<TerrainField>(fp);
+    for (int cy = -1; cy <= 1; ++cy)
+      for (int cx = -1; cx <= 1; ++cx) {
+        w.keys.push_back(ChunkStreamer::keyOf(cx, cy));
+        w.cells.push_back({cx, cy});
+      }
+    loadTerrain(rig.r, w);
+    aimCamera(rig.r, w, 0.0f, 0.0f, 20.0f, 0.0f, 1.5f);
+    const QImage byDefault = settledFrame(rig.r, 3);
+    rig.r->setSurveyGrid(false);
+    QCOMPARE(anyDiffFraction(byDefault, settledFrame(rig.r, 3)), 0.0);
+    rig.r->setSurveyGrid(true);
+    QVERIFY2(anyDiffFraction(byDefault, settledFrame(rig.r, 3)) > 0.01, "switching it on must show lines");
+    rig.r->setSurveyGrid(false);
+    QCOMPARE(anyDiffFraction(byDefault, settledFrame(rig.r, 3)), 0.0); // and off again: zero grid pixels
+    // The setting round-trips and a renderer built after it follows it.
+    {
+      QSettings s;
+      s.setValue("sim/surveyGrid", true);
+    }
+    QVERIFY(SimRendererWidget::surveyGridByConfig());
+    {
+      Rig on;
+      QVERIFY(on.show());
+      QVERIFY(on.r->surveyGrid());
+    }
+    {
+      QSettings s;
+      s.setValue("sim/surveyGrid", false);
+    }
+    QVERIFY(!SimRendererWidget::surveyGridByConfig());
+    {
+      QSettings s;
+      s.remove("sim/surveyGrid");
+    }
   }
 
   void impostorTopBlendHasNoScreenDoor_data() {

@@ -214,6 +214,7 @@ public:
   void setWorldChunk(qint64 key, const std::vector<QVector3D> &positions,
                      const std::vector<QVector3D> &normals,
                      const std::vector<QVector3D> &colors,
+                     const std::vector<QVector3D> &splitColors = {},
                      const std::vector<QVector3D> &edge = {},
                      const std::vector<QVector3D> &edgeColors = {});
   void removeWorldChunk(qint64 key);
@@ -432,11 +433,14 @@ public:
     const QVector4D c = lastVegVp_ * QVector4D(w, 1.0f);
     return {(c.x() / c.w() * 0.5 + 0.5) * fbW_, (0.5 - c.y() / c.w() * 0.5) * fbH_};
   }
-  // Test hook: draw the ground without the survey grid (to measure its contrast).
-  void setGridOffForTest(bool off) {
-    gridOffForTest_ = off;
+  // The survey grid (1/10/100 m lines on level ground, faded out by 60 m) is a
+  // View option, off unless QSettings "sim/surveyGrid" is true.
+  static bool surveyGridByConfig();
+  void setSurveyGrid(bool on) {
+    gridOn_ = on;
     update();
   }
+  bool surveyGrid() const { return gridOn_; }
   // Test hook: the last frame drew the drone's contact blob.
   void setDroneCasterOffForTest(bool off) {
     noCasterForTest_ = off;
@@ -497,12 +501,14 @@ private:
     int vertex_count = 0;
     GLenum primitive = GL_TRIANGLES;
     QVector3D bmin, bmax; // position bounds (uploadColoredMesh), for culling
+    bool trackData = false; // carries the parcel-border track attributes (3..5)
     // Frees the GL objects (context must be current) and returns the mesh to
     // its never-uploaded state, so a later build/upload recreates them.
     void release() {
       vbo.destroy();
       vao.destroy();
       vertex_count = 0;
+      trackData = false;
     }
     int liveObjects() const {
       return (vao.isCreated() ? 1 : 0) + (vbo.isCreated() ? 1 : 0);
@@ -597,17 +603,19 @@ private:
 
   // Lit shader: position + normal, directional Lambert + ambient, plus aerial
   // perspective (distance fog into the sky) and an ACES tonemap.
-  std::unique_ptr<QOpenGLShaderProgram> progLit_;
-  int ul_mvp_ = -1;
-  int ul_model_ = -1;
-  int ul_nmat_ = -1;
-  int ul_color_ = -1;
-  int ul_campos_ = -1;
-  int ul_fogdensity_ = -1;
-  int ul_fogstart_ = -1;
-  CascadeUniforms litCsm_;
-  int ul_drone_ = -1;
-  int ul_droner_ = -1;
+  // Two builds of it: progLit_ (everything, no per-pixel border tracks) and
+  // progLitEdge_ (TERRAIN_EDGE: the High chunk look, which draws the parcel-border
+  // track per pixel and so carries eight more interpolants). Low and all other
+  // meshes use the first, so they pay nothing for the second.
+  struct LitLocs {
+    int mvp = -1, model = -1, nmat = -1, color = -1, campos = -1;
+    int fogdensity = -1, fogstart = -1, drone = -1, droner = -1, sunint = -1;
+    int ambstr = -1, terrain = -1, grid = -1, bands = -1, matq = -1;
+    CascadeUniforms csm;
+    void resolve(QOpenGLShaderProgram *p);
+  };
+  std::unique_ptr<QOpenGLShaderProgram> progLit_, progLitEdge_;
+  LitLocs litLoc_, litLocEdge_;
   QVector3D droneShadowPos_;  // drone position for the analytic shadow
   float droneShadowR_ = 0.0f; // shadow radius [m]; 0 = off
   // The drone drawn into the shadow map (renderShadowPass). While it is, the
@@ -626,13 +634,7 @@ private:
   bool droneKeyReady_ = false;
   bool shadowCacheDroneIn_[kMaxCascades] = {false, false, false};
   quint64 shadowCacheDroneVer_[kMaxCascades] = {0, 0, 0};
-  int ul_sunint_ = -1;
-  int ul_ambstr_ = -1;
-  int ul_terrain_ = -1;
-  int ul_grid_ = -1;
-  bool gridOffForTest_ = false;
-  int ul_bands_ = -1;
-  int ul_matq_ = -1;
+  bool gridOn_ = surveyGridByConfig();
   vsim::terrain::TerrainTextures terrainTex_;
   vsim::terrain::Quality terrainQuality_ = vsim::terrain::Quality::High;
   vsim::terrain::Quality terrainDefault_ = vsim::terrain::Quality::High;

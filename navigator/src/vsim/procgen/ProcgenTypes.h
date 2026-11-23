@@ -47,6 +47,7 @@ struct ProcMesh {
   // Terrain only, empty elsewhere (EdgeTrack.h): per vertex (x signed, y
   // unsigned distance to the nearest parcel-border track) and the colour the
   // ground takes on that track. `colors` then holds the colour WITHOUT it.
+  std::vector<PgVec3> splitColors; // colors without the parcel-border track
   std::vector<PgVec3> edge;
   std::vector<PgVec3> edgeColors;
 

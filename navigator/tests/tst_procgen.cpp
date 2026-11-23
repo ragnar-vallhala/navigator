@@ -704,8 +704,9 @@ void TstProcgen::edgeTrackRuleAndSplitAgree() {
   QCOMPARE(edgeTrackWeight(0.0f, kEdgeValidMax), 0.0f);
   QVERIFY(edgeTrackWeight(1.4f, 1.4f) > 0.0f && edgeTrackWeight(1.4f, 1.4f) < kEdgeTrackMax);
 
-  // sampleSplit() is sample() with the border track taken out: identical where
-  // that track has no weight, and it reports the track the shader must add.
+  // sampleSplit() keeps sample()'s colour exactly (the baked track, what Low
+  // draws) and adds the track-free colour the High shader draws the track over:
+  // equal to the baked one wherever the track has no weight.
   FieldParams p;
   p.seed = 11u;
   p.palette = 7; // hills: parcels with tracked borders
@@ -717,15 +718,18 @@ void TstProcgen::edgeTrackRuleAndSplitAgree() {
     const PgVec3 base{0.3f, 0.5f, 0.2f};
     const GroundCover::Sample a = gc.sample(x, y, base, 0.3f, 0.99f);
     const GroundCover::Sample b = gc.sampleSplit(x, y, base, 0.3f, 0.99f);
+    QCOMPARE(a.color.x, b.color.x);
+    QCOMPARE(a.color.y, b.color.y);
+    QCOMPARE(a.color.z, b.color.z);
+    QCOMPARE(a.grass, b.grass);
     if (edgeTrackWeight(b.edgeS, b.edgeA) > 0.0f) {
       ++onTrack;
       QVERIFY(b.edgeK > 0.0f);
     } else {
       ++off;
-      QCOMPARE(a.color.x, b.color.x);
-      QCOMPARE(a.color.y, b.color.y);
-      QCOMPARE(a.color.z, b.color.z);
-      QCOMPARE(a.grass, b.grass);
+      QCOMPARE(b.split.x, b.color.x);
+      QCOMPARE(b.split.y, b.color.y);
+      QCOMPARE(b.split.z, b.color.z);
     }
   }
   QVERIFY2(onTrack > 20 && off > 20, "the probe grid must cover track and ground");

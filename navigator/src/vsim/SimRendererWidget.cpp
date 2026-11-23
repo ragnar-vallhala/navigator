@@ -19,6 +19,7 @@
 #include "procgen/EdgeTrack.h"
 #include "procgen/PropStyle.h"
 
+#include <QSettings>
 #include <QCursor>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -111,15 +112,21 @@ const char *kLitVertexShader = R"GLSL(
 layout(location=0) in vec3 a_pos;
 layout(location=1) in vec3 a_normal;
 layout(location=2) in vec3 a_color;
+#ifdef TERRAIN_EDGE
 layout(location=3) in vec2 a_trk;   // terrain: signed, unsigned distance to a parcel-border track
 layout(location=4) in vec3 a_trkc;  // terrain: the ground's colour on that track
+layout(location=5) in vec3 a_split; // terrain: a_color without the border track
+#endif
 uniform mat4 u_mvp;
 uniform mat4 u_model;
 uniform mat3 u_nmat;
 out vec3 v_normal;
 out vec3 v_color;
+#ifdef TERRAIN_EDGE
 out vec2 v_trk;
 out vec3 v_trkc;
+out vec3 v_split;
+#endif
 out vec3 v_world;
 out vec3 v_local;
 void main() {
@@ -128,8 +135,11 @@ void main() {
   gl_Position = u_mvp * vec4(a_pos, 1.0);
   v_normal = u_nmat * a_normal;
   v_color = a_color;
+#ifdef TERRAIN_EDGE
   v_trk = a_trk;
   v_trkc = a_trkc;
+  v_split = a_split;
+#endif
 }
 )GLSL";
 
@@ -137,8 +147,11 @@ const char *kLitFragmentHead = R"GLSL(
 #version 330 core
 in vec3 v_normal;
 in vec3 v_color;
+#ifdef TERRAIN_EDGE
 in vec2 v_trk;
 in vec3 v_trkc;
+in vec3 v_split;
+#endif
 in vec3 v_world;
 in vec3 v_local;             // object-space position (unit solids)
 out vec4 o_color;
@@ -216,7 +229,13 @@ void main() {
   // Parcel-border tracks are drawn per pixel from the interpolated distance, not
   // baked into the node colour (EdgeTrack.h).
   vec3 vcol = v_color;
-  if (u_terrain > 0.5) vcol = mix(v_color, v_trkc, edgeTrackWeight(v_trk));
+#ifdef TERRAIN_EDGE
+  // High draws the parcel-border track per pixel over the track-free colour;
+  // Low (and any other mesh) is the other program and keeps it baked in v_color;
+  // a chunk sent without a track-free colour (negative) does too.
+  if (u_terrain > 0.5 && v_split.x >= 0.0)
+    vcol = mix(v_split, v_trkc, edgeTrackWeight(v_trk));
+#endif
   vec3 base = u_color * vcol;
   if (u_terrain > 0.5) {
     vec2 p = v_world.xy;
@@ -730,7 +749,7 @@ int SimRendererWidget::liveGlObjects() const {
   for (const auto &kv : worldChunks_)
     n += kv.second->liveObjects();
   n += skyVao_.isCreated() ? 1 : 0;
-  n += (prog_ ? 1 : 0) + (progLit_ ? 1 : 0) + (progDepth_ ? 1 : 0) +
+  n += (prog_ ? 1 : 0) + (progLit_ ? 1 : 0) + (progLitEdge_ ? 1 : 0) + (progDepth_ ? 1 : 0) +
        (progSky_ ? 1 : 0);
   n += (shadowFbo_ ? 1 : 0) + (shadowTex_ ? 1 : 0);
   n += terrainTex_.loaded() ? 6 : 0;
@@ -858,6 +877,7 @@ void SimRendererWidget::releaseGLResources(bool readBack) {
   skyVao_.destroy();
   prog_.reset();
   progLit_.reset();
+  progLitEdge_.reset();
   progDepth_.reset();
   progSky_.reset();
   if (shadowFbo_)
@@ -1084,6 +1104,25 @@ buildProgram(const char *name, const QByteArray &vs, const QByteArray &fs) {
 }
 } // namespace
 
+void SimRendererWidget::LitLocs::resolve(QOpenGLShaderProgram *p) {
+  mvp = p->uniformLocation("u_mvp");
+  model = p->uniformLocation("u_model");
+  nmat = p->uniformLocation("u_nmat");
+  color = p->uniformLocation("u_color");
+  campos = p->uniformLocation("u_campos");
+  fogdensity = p->uniformLocation("u_fogdensity");
+  fogstart = p->uniformLocation("u_fogstart");
+  csm.resolve(p);
+  drone = p->uniformLocation("u_drone");
+  droner = p->uniformLocation("u_droner");
+  sunint = p->uniformLocation("u_sunint");
+  ambstr = p->uniformLocation("u_ambstr");
+  terrain = p->uniformLocation("u_terrain");
+  grid = p->uniformLocation("u_grid");
+  bands = p->uniformLocation("u_bands");
+  matq = p->uniformLocation("u_matq");
+}
+
 void SimRendererWidget::initResources() {
   // A new context: anything still held belongs to the previous one and is
   // released first, so init can run any number of times without leaking or
@@ -1108,27 +1147,19 @@ void SimRendererWidget::initResources() {
   u_mvp_ = prog_->uniformLocation("u_mvp");
   u_color_ = prog_->uniformLocation("u_color");
 
-  progLit_ = buildProgram("lit", kLitVertexShader,
-                          QByteArray(kLitFragmentHead) + kAtmosphereGLSL + kFogGLSL +
+  {
+    const QByteArray fsBody = QByteArray(kLitFragmentHead) + kAtmosphereGLSL + kFogGLSL +
                               kLightingGLSL + kCascadeShadowGLSL + kShadowGLSL +
-                              vsim::terrain::terrainMaterialGLSL() +
-                              kLitFragmentMain);
-  ul_mvp_ = progLit_->uniformLocation("u_mvp");
-  ul_model_ = progLit_->uniformLocation("u_model");
-  ul_nmat_ = progLit_->uniformLocation("u_nmat");
-  ul_color_ = progLit_->uniformLocation("u_color");
-  ul_campos_ = progLit_->uniformLocation("u_campos");
-  ul_fogdensity_ = progLit_->uniformLocation("u_fogdensity");
-  ul_fogstart_ = progLit_->uniformLocation("u_fogstart");
-  litCsm_.resolve(progLit_.get());
-  ul_drone_ = progLit_->uniformLocation("u_drone");
-  ul_droner_ = progLit_->uniformLocation("u_droner");
-  ul_sunint_ = progLit_->uniformLocation("u_sunint");
-  ul_ambstr_ = progLit_->uniformLocation("u_ambstr");
-  ul_terrain_ = progLit_->uniformLocation("u_terrain");
-  ul_grid_ = progLit_->uniformLocation("u_grid");
-  ul_bands_ = progLit_->uniformLocation("u_bands");
-  ul_matq_ = progLit_->uniformLocation("u_matq");
+                              vsim::terrain::terrainMaterialGLSL() + kLitFragmentMain;
+    // The edge build is the same source with TERRAIN_EDGE defined after #version.
+    auto withEdge = [](QByteArray src) {
+      return src.replace("#version 330 core\n", "#version 330 core\n#define TERRAIN_EDGE 1\n");
+    };
+    progLit_ = buildProgram("lit", kLitVertexShader, fsBody);
+    progLitEdge_ = buildProgram("lit+edge", withEdge(kLitVertexShader), withEdge(fsBody));
+    litLoc_.resolve(progLit_.get());
+    litLocEdge_.resolve(progLitEdge_.get());
+  }
   terrainDefault_ = vsim::terrain::defaultQuality(
       reinterpret_cast<const char *>(glGetString(GL_RENDERER)));
 
@@ -1374,6 +1405,7 @@ void SimRendererWidget::paintGL() {
 
   // Sky-dome background (gradient + sun glow along the per-pixel view ray).
   // Drawn first with depth test off so the scene paints over it.
+  applyAtmosphere(progLitEdge_.get());
   applyAtmosphere(progLit_.get()); // once per frame; uniforms persist per program
 #ifdef VAYU_SIM_GRASS
   applyAtmosphere(progFlora_.get());
@@ -1923,37 +1955,39 @@ void SimRendererWidget::drawLit(const Mesh &m, const QMatrix4x4 &view,
                                 bool terrain, float bands) {
   if (m.vertex_count == 0)
     return;
-  progLit_->bind();
-  progLit_->setUniformValue(ul_mvp_, proj_ * view * model);
-  progLit_->setUniformValue(ul_model_, model);
-  progLit_->setUniformValue(ul_nmat_, model.normalMatrix());
-  progLit_->setUniformValue(ul_color_, color);
-  progLit_->setUniformValue(ul_campos_, camEye_);
+  // The textures upload on first use; a missing resource leaves the plain look.
+  const bool mat = terrain && terrainQuality() == vsim::terrain::Quality::High &&
+                   (terrainTex_.loaded() || terrainTex_.load(this));
+  // High ground that carries the border-track data takes the per-pixel build;
+  // everything else (Low, other meshes) the one without those interpolants.
+  const bool edge = mat && m.trackData && progLitEdge_ && progLitEdge_->isLinked();
+  QOpenGLShaderProgram *prog = edge ? progLitEdge_.get() : progLit_.get();
+  const LitLocs &L = edge ? litLocEdge_ : litLoc_;
+  prog->bind();
+  prog->setUniformValue(L.mvp, proj_ * view * model);
+  prog->setUniformValue(L.model, model);
+  prog->setUniformValue(L.nmat, model.normalMatrix());
+  prog->setUniformValue(L.color, color);
+  prog->setUniformValue(L.campos, camEye_);
   // Aerial perspective: gentle haze that fully veils the streamed-terrain edge.
-  progLit_->setUniformValue(ul_fogdensity_, atmo_.fogDensity);
-  progLit_->setUniformValue(ul_fogstart_, atmo_.fogStartM);
-  progLit_->setUniformValue("u_fogbase", fogBaseZ_);
-  progLit_->setUniformValue("u_fogheight", atmo_.fogHeightM);
-  progLit_->setUniformValue("u_ringclip", drawingFarRing_ ? QVector4D(farTerrain_.clipRect()[0], farTerrain_.clipRect()[1], farTerrain_.clipRect()[2], farTerrain_.clipRect()[3]) : QVector4D());
-  litCsm_.upload(progLit_.get(), csm_, shadowOn_);
-  progLit_->setUniformValue(ul_drone_, droneShadowPos_);
-  progLit_->setUniformValue(ul_droner_, droneShadowR_);
-  progLit_->setUniformValue("u_dronemap", droneInMap_ ? 1.0f : 0.0f);
-  progLit_->setUniformValue("u_dronebody", drawingDroneBody_ ? 1.0f : 0.0f);
-  progLit_->setUniformValue(ul_sunint_, litSunInt_);
-  progLit_->setUniformValue(ul_ambstr_, litAmbStr_);
-  progLit_->setUniformValue(ul_terrain_, terrain ? 1.0f : 0.0f);
-  progLit_->setUniformValue(ul_grid_, gridOffForTest_ ? 0.0f : 1.0f);
-  {
-    // The textures upload on first use; a missing resource leaves the plain look.
-    const bool mat = terrain &&
-                     terrainQuality() == vsim::terrain::Quality::High &&
-                     (terrainTex_.loaded() || terrainTex_.load(this));
-    progLit_->setUniformValue(ul_matq_, mat ? 1.0f : 0.0f);
-    if (mat)
-      terrainTex_.bind(this, progLit_.get());
-  }
-  progLit_->setUniformValue(ul_bands_, bands);
+  prog->setUniformValue(L.fogdensity, atmo_.fogDensity);
+  prog->setUniformValue(L.fogstart, atmo_.fogStartM);
+  prog->setUniformValue("u_fogbase", fogBaseZ_);
+  prog->setUniformValue("u_fogheight", atmo_.fogHeightM);
+  prog->setUniformValue("u_ringclip", drawingFarRing_ ? QVector4D(farTerrain_.clipRect()[0], farTerrain_.clipRect()[1], farTerrain_.clipRect()[2], farTerrain_.clipRect()[3]) : QVector4D());
+  L.csm.upload(prog, csm_, shadowOn_);
+  prog->setUniformValue(L.drone, droneShadowPos_);
+  prog->setUniformValue(L.droner, droneShadowR_);
+  prog->setUniformValue("u_dronemap", droneInMap_ ? 1.0f : 0.0f);
+  prog->setUniformValue("u_dronebody", drawingDroneBody_ ? 1.0f : 0.0f);
+  prog->setUniformValue(L.sunint, litSunInt_);
+  prog->setUniformValue(L.ambstr, litAmbStr_);
+  prog->setUniformValue(L.terrain, terrain ? 1.0f : 0.0f);
+  prog->setUniformValue(L.grid, gridOn_ ? 1.0f : 0.0f);
+  prog->setUniformValue(L.matq, mat ? 1.0f : 0.0f);
+  if (mat)
+    terrainTex_.bind(this, prog);
+  prog->setUniformValue(L.bands, bands);
   glActiveTexture(GL_TEXTURE1);
   glBindTexture(GL_TEXTURE_2D, shadowTex_);
   glActiveTexture(GL_TEXTURE0);
@@ -1963,12 +1997,8 @@ void SimRendererWidget::drawLit(const Mesh &m, const QMatrix4x4 &view,
   // u_color*a_color == u_color. Meshes with a real color array (world mesh)
   // enable attribute 2 and override this.
   glVertexAttrib3f(2, 1.0f, 1.0f, 1.0f);
-  // The same for the terrain's border-track data: "no track near", for every
-  // mesh that does not carry it.
-  glVertexAttrib2f(3, procgen::kEdgeFar, procgen::kEdgeFar);
-  glVertexAttrib3f(4, 0.0f, 0.0f, 0.0f);
   glDrawArrays(GL_TRIANGLES, 0, m.vertex_count);
-  progLit_->release();
+  prog->release();
 }
 
 // Tree crown: blobs of the crown colour packed inside the obstacle's sphere
@@ -2113,13 +2143,17 @@ void SimRendererWidget::uploadColoredMesh(Mesh &m,
   glEnableVertexAttribArray(2);
   glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride,
                         reinterpret_cast<void *>(6 * sizeof(float)));
-  if (fpv >= 14) { // terrain: border-track distances and colour
+  if (fpv >= 17) { // terrain: border-track distances, colour, track-free colour
     glEnableVertexAttribArray(3);
     glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, stride,
                           reinterpret_cast<void *>(9 * sizeof(float)));
     glEnableVertexAttribArray(4);
     glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, stride,
                           reinterpret_cast<void *>(11 * sizeof(float)));
+    glEnableVertexAttribArray(5);
+    glVertexAttribPointer(5, 3, GL_FLOAT, GL_FALSE, stride,
+                          reinterpret_cast<void *>(14 * sizeof(float)));
+    m.trackData = true;
   }
   m.vbo.release();
   m.vao.release();
@@ -2322,14 +2356,17 @@ void SimRendererWidget::setWorldChunk(qint64 key,
                                       const std::vector<QVector3D> &positions,
                                       const std::vector<QVector3D> &normals,
                                       const std::vector<QVector3D> &colors,
+                                      const std::vector<QVector3D> &splitColors,
                                       const std::vector<QVector3D> &edge,
                                       const std::vector<QVector3D> &edgeColors) {
-  // Interleave [px,py,pz, nx,ny,nz, r,g,b, signed, unsigned, er,eg,eb] now (UI
-  // thread, no GL) and queue the VBO upload for paintGL. A chunk without border
-  // tracks gets "no track near" (EdgeTrack.h kEdgeFar).
+  // Interleave [px,py,pz, nx,ny,nz, r,g,b, signed, unsigned, er,eg,eb, sr,sg,sb]
+  // now (UI thread, no GL) and queue the VBO upload for paintGL. The colour is
+  // the baked one (track included); High takes the track-free one (sr..sb) and
+  // draws the track per pixel. A chunk without the data gets "no track near"
+  // (EdgeTrack.h kEdgeFar) and "no track-free colour" (negative).
   PendingChunk pc;
   pc.key = key;
-  pc.data.reserve(positions.size() * 14);
+  pc.data.reserve(positions.size() * 17);
   const QVector3D far(procgen::kEdgeFar, procgen::kEdgeFar, 0.0f);
   for (size_t i = 0; i < positions.size(); ++i) {
     const QVector3D &p = positions[i];
@@ -2338,9 +2375,10 @@ void SimRendererWidget::setWorldChunk(qint64 key,
         (i < colors.size()) ? colors[i] : QVector3D(0.4f, 0.5f, 0.3f);
     const QVector3D e = (i < edge.size()) ? edge[i] : far;
     const QVector3D ec = (i < edgeColors.size()) ? edgeColors[i] : c;
+    const QVector3D sc = (i < splitColors.size()) ? splitColors[i] : QVector3D(-1, -1, -1);
     pc.data.insert(pc.data.end(), {p.x(), p.y(), p.z(), n.x(), n.y(), n.z(),
                                    c.x(), c.y(), c.z(), e.x(), e.y(), ec.x(),
-                                   ec.y(), ec.z()});
+                                   ec.y(), ec.z(), sc.x(), sc.y(), sc.z()});
   }
   pendingChunkUploads_.push_back(std::move(pc));
   chunksDirty_ = true;
@@ -2412,6 +2450,10 @@ void SimRendererWidget::clearChunkVegetation() {
   if (veg_)
     veg_->clearChunks();
 }
+bool SimRendererWidget::surveyGridByConfig() {
+  return QSettings().value(QStringLiteral("sim/surveyGrid"), false).toBool();
+}
+
 void SimRendererWidget::setVegetationEnabled(bool on) {
   vegEnabled_ = on;
   update();
@@ -2576,7 +2618,7 @@ void SimRendererWidget::flushChunkUpdates() {
     std::unique_ptr<Mesh> &mesh = worldChunks_[pc.key];
     if (!mesh)
       mesh = std::make_unique<Mesh>();
-    uploadColoredMesh(*mesh, pc.data, 14);
+    uploadColoredMesh(*mesh, pc.data, 17);
     if (chunkCpuMode())
       chunkCpu_[pc.key] = std::move(pc.data);
   }

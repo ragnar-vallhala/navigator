@@ -271,6 +271,7 @@ GroundCover::Sample GroundCover::sampleImpl(float wx, float wy, const PgVec3 &ba
 
   // Tracks: zero-crossings of a meandering noise field, width from the field's
   // gradient so they stay a constant ~2 m wide.
+  PgVec3 colS = col; // `col` without the border track (the High shader draws that)
   if (split && s.fieldsAmt > 0.0f) { // the shader's track needs these even where the node has none
     edge.edgeK = smoothstep(0.82f, 0.93f, flatness) * alt;
     edge.edgePc = scale(s.pathCol, 0.9f + 0.2f * (0.5f + 0.5f * rag));
@@ -286,18 +287,14 @@ GroundCover::Sample GroundCover::sampleImpl(float wx, float wy, const PgVec3 &ba
       const float d = std::fabs(n0) / (std::sqrt(gx * gx + gy * gy) + 1e-5f);
       pathPm = (1.0f - smoothstep(s.pathHalfW * 0.7f, s.pathHalfW * 1.6f, d)) * s.pathAmt;
     }
-    const float pm = std::max(edgeTrack, pathPm);              // for the grass
-    const float pmCol = std::max(edgeTrack * kEdgeTrackMax, pathPm); // for the colour
+    const float pm = std::max(edgeTrack, pathPm);
     const float k = smoothstep(0.82f, 0.93f, flatness) * alt;
     const PgVec3 pc = scale(s.pathCol, 0.9f + 0.2f * (0.5f + 0.5f * rag));
     grass *= 1.0f - pm * k;
-    if (split) { // the border track is the shader's: keep only the meandering one
-      col = mix(col, pc, pathPm * k);
-      edge.edgeK = k;
-      edge.edgePc = pc;
-    } else {
-      col = mix(col, pc, pmCol * k);
-    }
+    colS = mix(col, pc, pathPm * k); // only the meandering track
+    col = mix(col, pc, pm * k);      // both, as it always was
+    edge.edgeK = k;
+    edge.edgePc = pc;
   }
 
   // Mown stripes (racing lawn).
@@ -306,12 +303,17 @@ GroundCover::Sample GroundCover::sampleImpl(float wx, float wy, const PgVec3 &ba
     const float u = (wx * c + wy * sn) / 7.0f;
     const float band = smoothstep(0.42f, 0.58f, u - std::floor(u));
     col = scale(col, 1.0f + s.stripeAmt * (band * 2.0f - 1.0f));
+    colS = scale(colS, 1.0f + s.stripeAmt * (band * 2.0f - 1.0f));
   }
 
   col.x = clamp01(col.x);
   col.y = clamp01(col.y);
   col.z = clamp01(col.z);
+  colS.x = clamp01(colS.x);
+  colS.y = clamp01(colS.y);
+  colS.z = clamp01(colS.z);
   Sample out;
+  out.split = colS;
   out.color = col;
   out.grass = clamp01(grass);
   if (split) {
