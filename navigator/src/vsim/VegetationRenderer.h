@@ -54,6 +54,7 @@
 #include <QVector>
 #include <QVector3D>
 
+#include <algorithm>
 #include <array>
 #include <future>
 #include <map>
@@ -127,6 +128,21 @@ struct VegContactBlob {
   static constexpr float kDroneMaxHeightM = 40.0f;
   static constexpr int kMaxInstances = 6000;
 };
+
+// Shadow casters (see VegetationRenderer::drawShadowCasters). Trees and rocks go
+// into the shadow cascades whose texel is at most kVegCasterMaxTexelM (a trunk
+// is one texel at 0.3 m; coarser maps give noise, and Low is 0.35), as the
+// coarsest mesh LOD, whatever the distance: a cascade's tile is reused while the
+// camera moves, so what it holds must not depend on the camera.
+constexpr float kVegCasterMaxTexelM = 0.3f;
+constexpr int kVegCasterLod = 2;
+// The casters are pulled this far [m] away from the sun in depth (the drone's
+// caster is pulled toward it). A crown seen from the sun's side is drawn from a
+// finer LOD than the coarse hull in the map, and the receiver's bias is only
+// about 0.5 m in the finest cascade: without this the hull shades the leaves
+// next to it (a 20-27% darker crown). The cost is the first 2 m of a shadow at
+// the trunk's foot, where the contact blob already darkens the ground.
+constexpr float kVegCasterPushM = -2.0f;
 
 // Which asset species stand in for each procgen species, and their sizes and
 // ranges: the one table to tune the look. Distances are metres from the eye.
@@ -264,6 +280,31 @@ public:
   void releaseGL(); // frees every GL object; CPU data stays
   void draw(const VegFrame &f);
   bool glReady() const { return glReady_; }
+  // Shadow pass: draws the trees and rocks whose bounding sphere touches the
+  // light window of `lightVP` (world -> light clip, orthographic) as depth,
+  // coarsest LOD, with the cut-out alpha test; `push` pulls them toward the sun
+  // in clip z. The shadow framebuffer is bound, its viewport and scissor set.
+  // `cascade` only labels the statistics. Returns the instances drawn. Not for
+  // frame-rate use: the caller redraws a cascade only when its tile is stale.
+  int drawShadowCasters(const QMatrix4x4 &lightVP, int cascade, float push);
+  // Changes whenever what drawShadowCasters would draw changes (chunks, trees
+  // flag, assets or species turning ready, GL rebuilt): the renderer redraws the
+  // shadow tiles on a new value.
+  unsigned casterVersion() const { return casterVer_; }
+  struct CasterStats {
+    int instances[3] = {};          // last pass of each cascade
+    long long triangles[3] = {};
+    int drawCalls[3] = {};
+    int passes = 0;                 // drawShadowCasters calls so far
+  };
+  const CasterStats &casterStats() const { return casterStats_; }
+  // A cascade was redrawn without casters: its counts are zero.
+  void clearCasterStats(int cascade) {
+    const int ci = std::clamp(cascade, 0, 2);
+    casterStats_.instances[ci] = 0;
+    casterStats_.triangles[ci] = 0;
+    casterStats_.drawCalls[ci] = 0;
+  }
   // The drone's contact blob, independent of the vegetation flags and assets: needs
   // only a current GL context. Uses f.proj, view, camEye, dronePos, droneRadius
   // and the drone ground fields.
@@ -384,6 +425,10 @@ private:
   unsigned atlasTex_ = 0, atlasFbo_ = 0, atlasDepth_ = 0, atlasMask_ = 0;
   bool bakeStats_ = false;
   int forcedLod_ = -1;
+  unsigned casterVer_ = 1;
+  CasterStats casterStats_;
+  std::unique_ptr<QOpenGLShaderProgram> progShadow_;
+  std::vector<std::vector<float>> casterBuckets_; // per variant, 8 floats an instance
   BakeStats bakeStatsOut_;
   bool atlasOk_ = false, glReady_ = false, atlasTried_ = false, treesOn_ = false;
   bool a2c_ = false; // alpha-to-coverage this frame (multisampled target)

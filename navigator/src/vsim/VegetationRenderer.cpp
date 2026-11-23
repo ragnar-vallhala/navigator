@@ -101,6 +101,7 @@ uniform float u_k;       // model unit -> metres at instance scale 1
 uniform float u_height;  // variant height, model units
 uniform float u_sway;    // wind bend at the top, fraction of the height
 uniform float u_time;
+uniform float u_push;    // shadow pass: pull the depth toward the sun (clip z); 0 otherwise
 out vec3 v_world;
 out vec3 v_nrm;
 out vec2 v_uv;
@@ -157,6 +158,22 @@ void main() {
   v_paint = i_misc.w;
   v_hm = g.y * s;
   gl_Position = u_vp * vec4(v_world, 1.0);
+  gl_Position.z -= u_push * gl_Position.w;
+}
+)GLSL";
+
+// Shadow-pass fragment: depth only. A cut-out leaf card drops the texels the
+// colour pass would drop (same texture, same cutoff), so a crown casts the
+// shadow of its leaves, not of its card.
+const char *kShadowFS = R"GLSL(
+#version 330 core
+in vec2 v_uv;
+uniform sampler2D u_diffuse;
+uniform float u_cutout;
+uniform float u_cutoff;
+void main() {
+  if (u_cutout > 0.5 && texture(u_diffuse, v_uv).a < u_cutoff)
+    discard;
 }
 )GLSL";
 
@@ -828,6 +845,7 @@ void VegetationRenderer::setTreesEnabled(bool on) {
   if (on == treesOn_)
     return;
   treesOn_ = on;
+  ++casterVer_;
   for (auto &kv : chunks_) // re-resolve with / without the trees
     kv.second.resolved = false;
 }
@@ -865,6 +883,7 @@ void VegetationRenderer::setChunk(qint64 key, std::vector<procgen::VegInstance> 
       return ok;
     });
   }
+  ++casterVer_;
   Chunk &c = chunks_[key];
   c.src = std::move(inst);
   c.recs.clear();
@@ -883,8 +902,14 @@ void VegetationRenderer::setChunk(qint64 key, std::vector<procgen::VegInstance> 
   c.zHi = hi + 3.0f;
 }
 
-void VegetationRenderer::removeChunk(qint64 key) { chunks_.erase(key); }
-void VegetationRenderer::clearChunks() { chunks_.clear(); }
+void VegetationRenderer::removeChunk(qint64 key) {
+  chunks_.erase(key);
+  ++casterVer_;
+}
+void VegetationRenderer::clearChunks() {
+  chunks_.clear();
+  ++casterVer_;
+}
 
 std::vector<procgen::VegExclusion>
 vegExclusionsFor(const std::vector<QVector3D> &pads,
@@ -917,8 +942,10 @@ void VegetationRenderer::exclude(const std::vector<procgen::VegExclusion> &ex) {
                                  return false;
                                }),
                 c.src.end());
-    if (c.src.size() != before)
+    if (c.src.size() != before) {
       c.resolved = false;
+      ++casterVer_;
+    }
   }
 }
 
@@ -1014,6 +1041,10 @@ bool VegetationRenderer::buildPrograms(const VegGlsl &g) {
   const bool billOk = linkProgram(
       *progBillboard_, "vegetation billboard", vegBillboardVertexSource(),
       QByteArray(kBillFSHead) + g.atmosphere + g.lighting + kCommonGLSL + billboardFragmentMain());
+  progShadow_ = std::make_unique<QOpenGLShaderProgram>();
+  if (!linkProgram(*progShadow_, "vegetation shadow", QByteArray(kVS) + kCommonGLSL + kVSMain,
+                   kShadowFS))
+    progShadow_.reset(); // no casters; the colour pass is unaffected
   progBake_ = std::make_unique<QOpenGLShaderProgram>();
   const bool bakeOk = linkProgram(*progBake_, "vegetation bake", kBakeVS, kBakeFS);
   if (!billOk || !bakeOk) {
@@ -1096,6 +1127,7 @@ bool VegetationRenderer::initGL(const VegGlsl &glsl) {
     glGetFloatv(0x84FF /* GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT */, &maxAniso_);
   atlasTried_ = false; // the impostor atlas is built when trees are first drawn
   glReady_ = true;
+  ++casterVer_;
   return true;
 }
 
@@ -1171,12 +1203,14 @@ void VegetationRenderer::releaseGL() {
   atlasOk_ = false;
   atlasTried_ = false;
   prog_.reset();
+  progShadow_.reset();
   progBillboard_.reset();
   progBake_.reset();
+  ++casterVer_;
 }
 
 int VegetationRenderer::liveObjects() const {
-  int n = (prog_ ? 1 : 0) + (progBillboard_ ? 1 : 0) + (progBake_ ? 1 : 0) + (progBlob_ ? 1 : 0);
+  int n = (prog_ ? 1 : 0) + (progShadow_ ? 1 : 0) + (progBillboard_ ? 1 : 0) + (progBake_ ? 1 : 0) + (progBlob_ ? 1 : 0);
   n += (blobVao_ ? 1 : 0) + (blobDisc_ ? 1 : 0) + (blobInst_ ? 1 : 0);
   n += (atlasFbo_ ? 1 : 0) + (atlasDepth_ ? 1 : 0) + (atlasTex_ ? 1 : 0) + (atlasMask_ ? 1 : 0);
   for (const SpeciesGpu &s : sp_)
@@ -1298,6 +1332,7 @@ void VegetationRenderer::uploadSpecies(int si) {
   }
   glBindTexture(GL_TEXTURE_2D, 0);
   s.state = SpState::Ready;
+  ++casterVer_; // its trees can cast now
 }
 
 void VegetationRenderer::ensureMesh(VariantGpu &v, int lod) {
@@ -1666,6 +1701,105 @@ void VegetationRenderer::drawBlobInstances(const VegFrame &f, const float *data,
   ++stats_.drawCalls;
 }
 
+int VegetationRenderer::drawShadowCasters(const QMatrix4x4 &lightVP, int cascade, float push) {
+  const int ci = std::clamp(cascade, 0, 2);
+  casterStats_.instances[ci] = 0;
+  casterStats_.triangles[ci] = 0;
+  casterStats_.drawCalls[ci] = 0;
+  ++casterStats_.passes;
+  if (!glReady_ || !progShadow_ || !assetsReady_)
+    return 0;
+  // Size of one metre in the window's clip units, sideways.
+  const QVector4D r0 = lightVP.row(0), r1 = lightVP.row(1);
+  const float sx = QVector3D(r0.x(), r0.y(), r0.z()).length();
+  const float sy = QVector3D(r1.x(), r1.y(), r1.z()).length();
+  casterBuckets_.resize(var_.size());
+  for (std::vector<float> &b : casterBuckets_)
+    b.clear();
+  for (auto &kv : chunks_) {
+    Chunk &c = kv.second;
+    // The chunk's box against the window (sideways only: depth is clamped).
+    int out[4] = {0, 0, 0, 0};
+    for (int k = 0; k < 8; ++k) {
+      const QVector3D q = lightVP.map(QVector3D((k & 1) ? c.cx + c.half : c.cx - c.half,
+                                                (k & 2) ? c.cy + c.half : c.cy - c.half,
+                                                (k & 4) ? c.zHi : c.zLo));
+      out[0] += q.x() < -1.0f;
+      out[1] += q.x() > 1.0f;
+      out[2] += q.y() < -1.0f;
+      out[3] += q.y() > 1.0f;
+    }
+    if (out[0] == 8 || out[1] == 8 || out[2] == 8 || out[3] == 8)
+      continue;
+    if (!c.resolved)
+      resolve(c);
+    for (const Rec &r : c.recs) {
+      const VegSpeciesInfo &info = kTable[r.info];
+      if (info.cat != procgen::kVegTree && info.cat != procgen::kVegRock)
+        continue;
+      const VariantGpu &v = var_[r.variant];
+      if (sp_[size_t(v.species)].state != SpState::Ready)
+        continue; // not uploaded yet: the colour pass starts it, casterVer_ moves on
+      const float sc = v.k * r.scale;
+      const QVector3D q = lightVP.map(QVector3D(r.x, r.y, r.z - v.centreY * sc));
+      const float rad = v.radius * sc + 0.5f;
+      if (std::fabs(q.x()) - rad * sx > 1.0f || std::fabs(q.y()) - rad * sy > 1.0f)
+        continue;
+      std::vector<float> &b = casterBuckets_[r.variant];
+      b.insert(b.end(), {r.x, r.y, r.z, r.yaw, r.scale, r.tint, 1.0f, r.paint});
+    }
+  }
+  const GLboolean cull = glIsEnabled(GL_CULL_FACE);
+  glDisable(GL_CULL_FACE); // leaf cards are two-sided
+  progShadow_->bind();
+  progShadow_->setUniformValue("u_vp", lightVP);
+  progShadow_->setUniformValue("u_push", push);
+  progShadow_->setUniformValue("u_time", 0.0f);
+  progShadow_->setUniformValue("u_diffuse", 2);
+  glActiveTexture(GL_TEXTURE2);
+  int drawn = 0;
+  for (size_t vi = 0; vi < var_.size(); ++vi) {
+    const std::vector<float> &data = casterBuckets_[vi];
+    if (data.empty())
+      continue;
+    VariantGpu &v = var_[vi];
+    constexpr int lod = kVegCasterLod;
+    ensureMesh(v, lod);
+    const GLsizei n = GLsizei(data.size() / 8);
+    const VegMesh &m =
+        assets_.species[size_t(v.species)].variants[size_t(v.variant)].lods[lod];
+    glBindVertexArray(v.vao[lod]);
+    glBindBuffer(GL_ARRAY_BUFFER, v.inst[lod]);
+    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(data.size() * sizeof(float)), data.data(),
+                 GL_STREAM_DRAW);
+    progShadow_->setUniformValue("u_k", v.k);
+    progShadow_->setUniformValue("u_height", v.height);
+    progShadow_->setUniformValue("u_sway", kTable[v.info].sway);
+    const SpeciesGpu &sg = sp_[size_t(v.species)];
+    const VegSpeciesAssets &sa = assets_.species[size_t(v.species)];
+    for (const VegSubmesh &sm : m.submeshes) {
+      const VegMaterial &vm = sa.materials[size_t(sm.material)];
+      glBindTexture(GL_TEXTURE_2D, sg.mats[size_t(sm.material)].tex[0]);
+      progShadow_->setUniformValue("u_cutout", vm.cutout() ? 1.0f : 0.0f);
+      progShadow_->setUniformValue("u_cutoff", vm.alphaCutoff);
+      glDrawElementsInstanced(GL_TRIANGLES, GLsizei(sm.indexCount), GL_UNSIGNED_INT,
+                              reinterpret_cast<void *>(uintptr_t(sm.firstIndex) * 4), n);
+      ++casterStats_.drawCalls[ci];
+      casterStats_.triangles[ci] += (long long)(sm.indexCount / 3) * n;
+    }
+    drawn += int(n);
+  }
+  casterStats_.instances[ci] = drawn;
+  progShadow_->release();
+  glBindVertexArray(0);
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+  glBindTexture(GL_TEXTURE_2D, 0);
+  glActiveTexture(GL_TEXTURE0);
+  if (cull)
+    glEnable(GL_CULL_FACE);
+  return drawn;
+}
+
 void VegetationRenderer::draw(const VegFrame &f) {
   stats_ = Stats();
   if (!glReady_ || !prog_ || chunks_.empty())
@@ -1677,6 +1811,7 @@ void VegetationRenderer::draw(const VegFrame &f) {
       assetsFailed_ = true;
     } else {
       assetsReady_ = true;
+      ++casterVer_;
       sp_.clear();
       sp_.resize(assets_.species.size());
       var_.clear();
