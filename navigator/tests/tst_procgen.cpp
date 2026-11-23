@@ -713,7 +713,7 @@ void TstProcgen::edgeTrackRuleAndSplitAgree() {
   const GroundCover gc(p.seed, p.palette);
   int onTrack = 0, off = 0;
   for (int i = 0; i < 4000; ++i) {
-    const float x = -300.0f + 0.37f * float(i % 1600), y = -250.0f + 0.61f * float(i / 4) * 0.5f;
+    const float x = -300.0f + 0.37f * float(i % 1600), y = -250.0f + 0.0763f * float(i);
     const PgVec3 base{0.3f, 0.5f, 0.2f};
     const GroundCover::Sample a = gc.sample(x, y, base, 0.3f, 0.99f);
     const GroundCover::Sample b = gc.sampleSplit(x, y, base, 0.3f, 0.99f);

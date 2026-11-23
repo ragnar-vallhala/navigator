@@ -444,8 +444,9 @@ BorderPoint findBorder(const TerrainField &f, float x0, float x1, float y0, floa
       return f.colorAtSplit(x, y, h, n.z < 0.0f ? -n.z : 0.0f);
     };
     BorderPoint b;
-    for (float y = y0; y < y1 && !b.ok; y += 2.0f)
-      for (float x = x0; x < x1; x += 0.5f) {
+    for (int iy = 0; float(iy) * 2.0f < y1 - y0 && !b.ok; ++iy)
+      for (int ix = 0; float(ix) * 0.5f < x1 - x0; ++ix) {
+        const float x = x0 + float(ix) * 0.5f, y = y0 + float(iy) * 2.0f;
         const auto s = at(x, y);
         if (s.edgeA > 0.05f || s.edgeK < 0.95f)
           continue;
@@ -458,7 +459,8 @@ BorderPoint findBorder(const TerrainField &f, float x0, float x1, float y0, floa
         // the border must stay a straight, tracked line for 12 m either way
         const float tx = -gy / gl, ty = gx / gl;
         bool good = true;
-        for (float t = -12.0f; t <= 12.0f && good; t += 3.0f) {
+        for (int k = -4; k <= 4 && good; ++k) {
+          const float t = float(k) * 3.0f;
           const auto q = at(x + tx * t, y + ty * t);
           good = q.edgeA < 0.35f && q.edgeK > 0.9f;
         }
