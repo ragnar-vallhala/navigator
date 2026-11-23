@@ -140,9 +140,13 @@ constexpr int kVegCasterLod = 2;
 // caster is pulled toward it). A crown seen from the sun's side is drawn from a
 // finer LOD than the coarse hull in the map, and the receiver's bias is only
 // about 0.5 m in the finest cascade: without this the hull shades the leaves
-// next to it (a 20-27% darker crown). The cost is the first 2 m of a shadow at
-// the trunk's foot, where the contact blob already darkens the ground.
-constexpr float kVegCasterPushM = -2.0f;
+// next to it (a 20-27% darker crown). The push also lifts the start of a shadow
+// off the ground by that much along the sun ray, so with the sun low it opens a
+// gap at the trunk's foot: measured on a lone jacaranda at 30 deg the shadow
+// starts 0.55 m from the base with no push, 0.9 m at -1 m and 1.8 m at -2 m
+// (none above 45 deg). -1 m leaves the crown within 13% (it varies with the
+// tree's sway); -2 m would keep it within 7%.
+constexpr float kVegCasterPushM = -1.0f;
 
 // Which asset species stand in for each procgen species, and their sizes and
 // ranges: the one table to tune the look. Distances are metres from the eye.
