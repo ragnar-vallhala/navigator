@@ -1917,6 +1917,7 @@ private slots:
   void lowSunShadowStaysAtTheTrunkFoot() {
     World w = loneWorld(kVegTree, 2);
     Rig rig(true);
+    rig.r->freezeAnimationForTest(true); // clock stays 0, as in the caster pass
     loadTerrain(rig.r, w);
     loadVegetation(rig.r, w);
     QVERIFY(rig.show());
@@ -1945,6 +1946,9 @@ private slots:
     QVERIFY2(onset < 0.7f, "the shadow starts at the trunk's foot");
   }
 
+  // The clock is frozen at 0 in this test and the one above: the wind sways the
+  // trees in the main pass (floraTime_) but the caster pass draws them at time
+  // 0, so the ratios would vary with the sway otherwise.
   // The crowns are not darkened by their own caster: seen from the sun's side the
   // lit face of a crown keeps its brightness with casters on (a coarse LOD
   // shadowing the finer mesh behind it would show as acne), in the finest
@@ -1962,6 +1966,7 @@ private slots:
     QFETCH(float, distM);
     World w = loneWorld(kVegTree, kind);
     Rig rig(true);
+    rig.r->freezeAnimationForTest(true); // clock stays 0, as in the caster pass
     loadTerrain(rig.r, w);
     loadVegetation(rig.r, w);
     QVERIFY(rig.show());
