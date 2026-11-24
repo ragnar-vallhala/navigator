@@ -1386,6 +1386,56 @@ private slots:
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
 
+  // The textured ground skips the grass photo where the dirt (or rock) weight
+  // reaches 0.999, but the grass term is still blended in at 45% (15% on rock).
+  // With no photo sample its brightness detail must be neutral; clamp(0) was
+  // 0.35 and drew hard-edged dark slivers wherever the cover crossed the 0.999
+  // contour (hills, High only). A flat chunk whose node colour steps across the
+  // contour must read the same on both sides of it.
+  void dirtWeightContourLeavesNoBrightnessStep() {
+    Rig rig;
+    QVERIFY(rig.show());
+    rig.r->setTerrainQuality(vsim::terrain::Quality::High);
+    rig.r->setVegetationEnabled(false);
+    const World w = buildWorld(kPalFlat, -1, 1);
+    const float cell = kChunkM / float(kRes);
+    const float yc = 12.0f;
+    const float yLo = std::floor(yc / cell) * cell, yHi = yLo + cell;
+    // dirt weight 0.98 on the low side, exactly 1 on the high side (kDirtEdge1 is 0.10)
+    const float g = 0.30f, b = 0.20f;
+    const float rLow = vsim::terrain::kDirtG * g + 0.088f, rHigh = vsim::terrain::kDirtG * g + 0.108f;
+    for (size_t i = 0; i < w.keys.size(); ++i) {
+      const ProcMesh m = meshFieldChunk(*w.field, w.cells[i].first, w.cells[i].second, kChunkM, kRes);
+      ChunkMeshData d = toChunkMeshData(w.keys[i], m);
+      for (size_t k = 0; k < d.colors.size(); ++k)
+        d.colors[k] = QVector3D(d.positions[k].y() <= yLo + 0.01f ? rLow : rHigh, g, b);
+      rig.r->setWorldChunk(d.key, d.positions, d.normals, d.colors);
+    }
+    const float h = 12.0f, D = h / std::tan(0.6f);
+    aimCamera(rig.r, w, 8.0f - D, yc, h, 0.0f, 0.6f);
+    const QImage im = settledFrame(rig.r, 3);
+    auto bandLuma = [&](float y) {
+      const float gz = surfaceHeight(*w.field, 8.0f, y, kChunkM, kRes);
+      const QPointF p = rig.r->worldToPixelForTest(QVector3D(8.0f, y, -gz));
+      double sum = 0;
+      int n = 0;
+      for (int dy = -8; dy <= 8; ++dy)
+        for (int dx = -8; dx <= 8; ++dx) {
+          const int x = int(p.x()) + dx, yy = int(p.y()) + dy;
+          if (x < 0 || yy < 0 || x >= im.width() || yy >= im.height()) continue;
+          const QRgb c = im.pixel(x, yy);
+          sum += 0.299 * qRed(c) + 0.587 * qGreen(c) + 0.114 * qBlue(c);
+          ++n;
+        }
+      return n ? sum / n : 0.0;
+    };
+    const double lo = bandLuma(yLo - 2.0f), hi = bandLuma(yHi + 2.0f);
+    qInfo("ZZ dirt contour: luma below %.2f above %.2f ratio %.4f", lo, hi, hi / lo);
+    QVERIFY(lo > 20.0 && hi > 20.0);
+    QVERIFY2(hi / lo > 0.93 && hi / lo < 1.07, "a brightness step across the dirt weight 0.999 contour");
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
   // The GLSL track weight is generated from the constants of procgen/EdgeTrack.h
   // (as the splat rule is from TerrainMaterial.h), so it cannot drift from the
   // C++ rule the tests and the mesher use.
