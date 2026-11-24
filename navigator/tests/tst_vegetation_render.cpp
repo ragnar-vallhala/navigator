@@ -191,6 +191,7 @@ struct Rig {
 // apart sideways (so about as far from a camera behind them), each with its own
 // yaw. Several trees keep the pixel counts of far rows large enough to compare.
 constexpr int kStandTrees = 4;
+constexpr double kFarStippleMax = 0.8; // pinholes + dots over tree pixels, far fade (dither 1.5 to 1.7, blend 0.1 to 0.5)
 // `seed` moves a lone tree a little and turns it: the per-instance mirror and lean
 // follow its position, so other seeds are other looks of the same kind.
 World standWorld(int kind, int trees = kStandTrees, int variant = 0, int seed = 0) {
@@ -935,6 +936,76 @@ private slots:
       const double r = double(t.foliage) / std::max(1, mesh.foliage);
       QVERIFY2(r >= 0.6 && r <= 1.7, qPrintable(QString("x%1 of the mesh").arg(r)));
     }
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // The far fade-out (the last 14% before the billboard range ends, from about
+  // 480 m) is an alpha blend, not a one-pixel screen door: the dither read as a
+  // checkerboard on the tree line. At 520 m the fade is about one half, which the
+  // dither turned into the most alternating pattern (bayer at 0.5); the blend
+  // leaves the crown's own texture and outline only. Low terrain draws the
+  // same billboards.
+  void farFadeOutIsBlendedNotDithered_data() {
+    QTest::addColumn<int>("kind");
+    QTest::addColumn<bool>("high");
+    QTest::newRow("fir High") << 0 << true;
+    QTest::newRow("jacaranda High") << 2 << true;
+    QTest::newRow("jacaranda Low") << 2 << false;
+  }
+  void farFadeOutIsBlendedNotDithered() {
+    QFETCH(int, kind);
+    QFETCH(bool, high);
+    World w = standWorld(kind);
+    Rig rig(true);
+    QVERIFY(rig.show());
+    rig.r->setTerrainQuality(high ? vsim::terrain::Quality::High : vsim::terrain::Quality::Low);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    standView(rig.r, w, 160.0f, 0.0f, -1); // the atlas bakes from a nearer view
+    const TreePixels t = standView(rig.r, w, 520.0f, 0.0f, -1);
+    if (rig.r->vegetationStats().impostorVariants == 0)
+      QSKIP("no impostor atlas on this context");
+    qInfo("kind %d %s, 520 m: tree px %d, stipple %.3f", kind, high ? "High" : "Low", t.all, t.stipple());
+    QVERIFY2(t.all > 30, qPrintable(QString("trees not found (%1 px)").arg(t.all)));
+    QVERIFY2(t.stipple() < kFarStippleMax, qPrintable(QString("stipple %1").arg(t.stipple())));
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // Two variants in the far fade-out: every variant's opaque billboard pass is
+  // drawn before any blended far pass. Per variant the far pass would let a later
+  // variant's opaque billboard (depth write on, the faded quad wrote none) paint
+  // over an earlier variant's faded one that is in front of it. The draw order is
+  // read from the renderer's stats, and the frame must still show the trees.
+  void farFadePassesRunAfterEveryOpaquePass() {
+    World w = standWorld(0, 2);
+    for (size_t i = 0; i < w.cells.size(); ++i)
+      if (w.cells[i].first == 0 && w.cells[i].second == 0)
+        for (int n = 0; n < 2; ++n) {
+          VegInstance t;
+          t.species = kVegTree;
+          t.kind = 2;
+          t.scale = 1.0f;
+          t.yaw = 0.7f + float(n);
+          t.tint = 0.5f;
+          const float y = -10.0f + 20.0f * float(n);
+          t.pos = {40.0f, y, -surfaceHeight(*w.field, 40.0f, y, kChunkM, kRes)};
+          w.veg[i].push_back(t);
+        }
+    Rig rig(true);
+    QVERIFY(rig.show());
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    standView(rig.r, w, 160.0f, 0.0f, -1); // the atlas bakes from a nearer view
+    const TreePixels t = standView(rig.r, w, 520.0f, 0.0f, -1);
+    if (rig.r->vegetationStats().impostorVariants < 2)
+      QSKIP("no impostor atlas on this context");
+    const std::string passes = rig.r->vegetationStats().impostorPasses;
+    qInfo("far fade passes '%s', tree px %d", passes.c_str(), t.all);
+    const size_t firstFar = passes.find('f');
+    QVERIFY2(firstFar != std::string::npos && passes.rfind('f') > firstFar,
+             "two variants should each have a far fade-out pass");
+    QVERIFY2(passes.find('o', firstFar) == std::string::npos, passes.c_str());
+    QVERIFY2(t.all > 60, qPrintable(QString("trees not found (%1 px)").arg(t.all)));
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
 

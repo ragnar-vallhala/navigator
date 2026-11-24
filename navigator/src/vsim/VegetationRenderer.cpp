@@ -38,6 +38,9 @@ constexpr int kTilePx = 128;
 constexpr float kPi = 3.14159265358979f;
 constexpr float kSinkM = 0.06f;    // instances stand this far into the surface
 constexpr float kLodBand = 0.07f;  // cross-fade half width, fraction of the edge
+// Billboards past this distance fade out by alpha blending (the LOD cross-fades,
+// which dither, all end well inside it: the last LOD edge is 130 m).
+constexpr float kFarBlendM = 300.0f;
 
 // One row per asset species. lodEnd: LOD0 / LOD1 / LOD2 end; maxDist: the
 // farthest the species is drawn (the billboard range for trees, the fade-out
@@ -302,6 +305,7 @@ layout(location = 3) in vec4 i_posyaw;  // base (NED), plain yaw: only trees are
 layout(location = 4) in vec4 i_misc;
 uniform mat4 u_vp;
 uniform vec3 u_eye;
+uniform float u_pass;    // 0: opaque billboards, 1: the far fade-out, alpha-blended
 uniform float u_k;
 uniform float u_cy;      // quad centre height, model units
 uniform float u_half;    // quad half size, model units
@@ -385,6 +389,12 @@ void main() {
   v_dir = dir;
   v_mir = vv.x;
   gl_Position = u_vp * vec4(w, 1.0);
+  // Each billboard is drawn in exactly one of the two passes: the far fade-out
+  // (fade below 1 past @FAR_BLEND@ m, where no LOD cross-fade happens) is
+  // blended, the rest is opaque. The other pass clips the quad.
+  float farFade = (length(w - u_eye) > @FAR_BLEND@ && i_misc.z < 0.999) ? 1.0 : 0.0;
+  if (farFade != u_pass)
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
 }
 )GLSL";
 
@@ -407,6 +417,7 @@ flat in vec3 v_upq;
 flat in vec3 v_dir;
 flat in float v_mir;
 out vec4 o_color;
+uniform float u_pass;        // 1: blended far fade-out, alpha = v_fade
 uniform sampler2D u_atlas;   // display-referred colour, coverage in alpha
 uniform sampler2D u_atlasMask; // alpha: foliage share of the covered texels
 uniform float u_cone;         // 1 for a cone-shaped crown (the top tile stays inside its outline), 0 for a round one
@@ -492,7 +503,9 @@ void main() {
   }
   if (cov < 0.5) discard;
   float b = bayer4(gl_FragCoord.xy);
-  bool keep = v_fade > 3.5 ? 2.0 * (v_fade - 4.0) > b : (v_fade > 1.5 ? 2.0 * (v_fade - 2.0) - 1.0 < b : v_fade > b);
+  // The far fade-out is a real blend (a screen door at one pixel per cell reads as
+  // a checkerboard on the tree line); the LOD cross-fades keep the dither.
+  bool keep = u_pass > 0.5 || (v_fade > 3.5 ? 2.0 * (v_fade - 4.0) > b : (v_fade > 1.5 ? 2.0 * (v_fade - 2.0) - 1.0 < b : v_fade > b));
   if (!keep) discard;
   vec3 toFrag = v_world - u_campos;
   float dist = length(toFrag);
@@ -536,7 +549,7 @@ void main() {
   vec3 barkTint = tintMul(v_tint);
   vec3 barkLit = rgb * barkTint * vec3(1.0, 0.90, 0.78) * Lb * u_barkGain;
   vec3 lit = mix(barkLit, rgb * foliageTint(v_tint) * L, fol);
-  o_color = vec4(applyAerialPerspective(lit, toFrag, dist), 1.0);
+  o_color = vec4(applyAerialPerspective(lit, toFrag, dist), u_pass > 0.5 ? v_fade : 1.0);
 }
 )GLSL";
 
@@ -744,6 +757,7 @@ QByteArray vegBillboardVertexSource() {
   QByteArray src(kBillVS);
   src.replace("@ATLAS_TILES@", QByteArray::number(double(kAtlasTiles), 'f', 1));
   src.replace("@ATLAS_AZ@", QByteArray::number(double(kAtlasAzimuths), 'f', 1));
+  src.replace("@FAR_BLEND@", QByteArray::number(double(kFarBlendM), 'f', 1));
   src.replace("@TOP_FROM@", QByteArray::number(double(kVegTopFromDeg * kPi / 180.0f), 'f', 5));
   src.replace("@DNA@", QByteArray::number(double(kVegTopDownFromDeg * kPi / 180.0f), 'f', 5));
   src.replace("@DNB@", QByteArray::number(double(kVegTopDownToDeg * kPi / 180.0f), 'f', 5));
@@ -1572,8 +1586,21 @@ void VegetationRenderer::drawBucket(VariantGpu &v, int lod,
   }
 }
 
-void VegetationRenderer::drawImpostors(VariantGpu &v, const std::vector<float> &data,
-                                       const VegFrame &) {
+// The per-variant uniforms of the billboard program.
+void VegetationRenderer::setImpostorUniforms(const VariantGpu &v) {
+  progBillboard_->setUniformValue(loc_.cy, v.centreY);
+  progBillboard_->setUniformValue(loc_.half, v.billH);
+  progBillboard_->setUniformValue(loc_.tile, float(v.tile));
+  progBillboard_->setUniformValue("u_k", v.k);
+  progBillboard_->setUniformValue("u_barkGain", kTable[v.info].barkGain);
+  progBillboard_->setUniformValue("u_cone", kTable[v.info].cone);
+}
+
+// Opaque pass of one variant's billboards. True when some of them are in the far
+// fade-out (see kFarBlendM): drawImpostorsFar draws those, after every variant's
+// opaque pass, so no variant's opaque billboard can overpaint another's faded one.
+bool VegetationRenderer::drawImpostors(VariantGpu &v, const std::vector<float> &data,
+                                       const VegFrame &f) {
   const GLsizei n = GLsizei(data.size() / 8);
   if (!v.billVao) {
     glGenVertexArrays(1, &v.billVao);
@@ -1592,14 +1619,11 @@ void VegetationRenderer::drawImpostors(VariantGpu &v, const std::vector<float> &
   glBindBuffer(GL_ARRAY_BUFFER, v.inst[3]);
   glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(data.size() * sizeof(float)), data.data(),
                GL_STREAM_DRAW);
-  progBillboard_->setUniformValue(loc_.cy, v.centreY);
-  progBillboard_->setUniformValue(loc_.half, v.billH);
-  progBillboard_->setUniformValue(loc_.tile, float(v.tile));
-  progBillboard_->setUniformValue("u_k", v.k);
-  progBillboard_->setUniformValue("u_barkGain", kTable[v.info].barkGain);
-  progBillboard_->setUniformValue("u_cone", kTable[v.info].cone);
+  setImpostorUniforms(v);
+  progBillboard_->setUniformValue("u_pass", 0.0f);
   glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, n);
   ++stats_.drawCalls;
+  stats_.impostorPasses += 'o';
   stats_.impostors += int(n);
   stats_.instancesDrawn += int(n);
   stats_.triangles += 2LL * n;
@@ -1608,6 +1632,38 @@ void VegetationRenderer::drawImpostors(VariantGpu &v, const std::vector<float> &
     if (kind >= 0)
       stats_.treeImpostors[kind] += int(n);
   }
+  // Mirrors the vertex shader's test for the blended pass.
+  const QVector3D eye = f.camEye;
+  for (size_t i = 0; i + 7 < data.size(); i += 8) {
+    const float dx = data[i] - eye.x(), dy = data[i + 1] - eye.y(), dz = data[i + 2] - eye.z();
+    if (data[i + 6] < 0.999f && dx * dx + dy * dy + dz * dz > kFarBlendM * kFarBlendM)
+      return true;
+  }
+  return false;
+}
+
+// The far fade-out of the variants listed (their buffers still hold this frame's
+// instances): blended, depth-tested, no depth write, the state set once. The
+// billboards of this pass are 480 m and more away, so their order among
+// themselves does not show.
+void VegetationRenderer::drawImpostorsFar(const std::vector<size_t> &variants) {
+  if (variants.empty())
+    return;
+  glEnable(GL_BLEND);
+  glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
+  glDepthMask(GL_FALSE);
+  progBillboard_->setUniformValue("u_pass", 1.0f);
+  for (size_t vi : variants) {
+    const VariantGpu &v = var_[vi];
+    glBindVertexArray(v.billVao);
+    setImpostorUniforms(v);
+    glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, GLsizei(buckets_[vi * 4 + 3].size() / 8));
+    ++stats_.drawCalls;
+    stats_.impostorPasses += 'f';
+  }
+  glDepthMask(GL_TRUE);
+  glDisable(GL_BLEND);
+  progBillboard_->setUniformValue("u_pass", 0.0f);
 }
 
 // The blob program and its buffers, built on first use. They need only a GL
@@ -2040,9 +2096,11 @@ void VegetationRenderer::draw(const VegFrame &f) {
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, atlasMask_);
     progBillboard_->setUniformValue("u_atlasMask", 3);
+    std::vector<size_t> farVariants;
     for (size_t vi = 0; vi < var_.size(); ++vi)
-      if (!buckets_[vi * 4 + 3].empty())
-        drawImpostors(var_[vi], buckets_[vi * 4 + 3], f);
+      if (!buckets_[vi * 4 + 3].empty() && drawImpostors(var_[vi], buckets_[vi * 4 + 3], f))
+        farVariants.push_back(vi);
+    drawImpostorsFar(farVariants);
     progBillboard_->release();
   }
   drawBlobs(f);
