@@ -59,6 +59,7 @@
 #include <future>
 #include <map>
 #include <memory>
+#include <string>
 #include <vector>
 
 class QOpenGLShaderProgram;
@@ -338,6 +339,9 @@ public:
     int treeMeshes[procgen::kVegTreeKindCount] = {};
     int treeImpostors[procgen::kVegTreeKindCount] = {};
     long long lodTriangles[3] = {}; // all species, by mesh LOD
+    // Billboard draws in order: 'o' a variant's opaque pass, 'f' its blended far
+    // fade-out. Every 'o' comes before the first 'f' (tests pin that).
+    std::string impostorPasses;
   };
   const Stats &stats() const { return stats_; }
   bool impostorsAvailable() const { return atlasOk_; }
@@ -400,8 +404,10 @@ private:
   bool buildAtlas();
   void drawBucket(VariantGpu &v, int lod, const std::vector<float> &data,
                   const VegFrame &f);
-  void drawImpostors(VariantGpu &v, const std::vector<float> &data,
+  bool drawImpostors(VariantGpu &v, const std::vector<float> &data,
                      const VegFrame &f);
+  void drawImpostorsFar(const std::vector<size_t> &variants);
+  void setImpostorUniforms(const VariantGpu &v);
   void setCommonUniforms(QOpenGLShaderProgram &p, const VegFrame &f);
   CascadeUniforms csmLocs_; // shadow uniforms of prog_, resolved once per program
   void freeSpeciesTextures(SpeciesGpu &s);

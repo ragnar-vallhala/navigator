@@ -1586,8 +1586,21 @@ void VegetationRenderer::drawBucket(VariantGpu &v, int lod,
   }
 }
 
-void VegetationRenderer::drawImpostors(VariantGpu &v, const std::vector<float> &data,
-                                       const VegFrame &) {
+// The per-variant uniforms of the billboard program.
+void VegetationRenderer::setImpostorUniforms(const VariantGpu &v) {
+  progBillboard_->setUniformValue(loc_.cy, v.centreY);
+  progBillboard_->setUniformValue(loc_.half, v.billH);
+  progBillboard_->setUniformValue(loc_.tile, float(v.tile));
+  progBillboard_->setUniformValue("u_k", v.k);
+  progBillboard_->setUniformValue("u_barkGain", kTable[v.info].barkGain);
+  progBillboard_->setUniformValue("u_cone", kTable[v.info].cone);
+}
+
+// Opaque pass of one variant's billboards. True when some of them are in the far
+// fade-out (see kFarBlendM): drawImpostorsFar draws those, after every variant's
+// opaque pass, so no variant's opaque billboard can overpaint another's faded one.
+bool VegetationRenderer::drawImpostors(VariantGpu &v, const std::vector<float> &data,
+                                       const VegFrame &f) {
   const GLsizei n = GLsizei(data.size() / 8);
   if (!v.billVao) {
     glGenVertexArrays(1, &v.billVao);
@@ -1606,25 +1619,11 @@ void VegetationRenderer::drawImpostors(VariantGpu &v, const std::vector<float> &
   glBindBuffer(GL_ARRAY_BUFFER, v.inst[3]);
   glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(data.size() * sizeof(float)), data.data(),
                GL_STREAM_DRAW);
-  progBillboard_->setUniformValue(loc_.cy, v.centreY);
-  progBillboard_->setUniformValue(loc_.half, v.billH);
-  progBillboard_->setUniformValue(loc_.tile, float(v.tile));
-  progBillboard_->setUniformValue("u_k", v.k);
-  progBillboard_->setUniformValue("u_barkGain", kTable[v.info].barkGain);
-  progBillboard_->setUniformValue("u_cone", kTable[v.info].cone);
+  setImpostorUniforms(v);
   progBillboard_->setUniformValue("u_pass", 0.0f);
   glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, n);
-  // The far fade-out: blended, depth-tested, no depth write. The billboards of
-  // this pass are 480 m and more away, so their order among themselves does not
-  // show.
-  glEnable(GL_BLEND);
-  glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
-  glDepthMask(GL_FALSE);
-  progBillboard_->setUniformValue("u_pass", 1.0f);
-  glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, n);
-  glDepthMask(GL_TRUE);
-  glDisable(GL_BLEND);
   ++stats_.drawCalls;
+  stats_.impostorPasses += 'o';
   stats_.impostors += int(n);
   stats_.instancesDrawn += int(n);
   stats_.triangles += 2LL * n;
@@ -1633,6 +1632,38 @@ void VegetationRenderer::drawImpostors(VariantGpu &v, const std::vector<float> &
     if (kind >= 0)
       stats_.treeImpostors[kind] += int(n);
   }
+  // Mirrors the vertex shader's test for the blended pass.
+  const QVector3D eye = f.camEye;
+  for (size_t i = 0; i + 7 < data.size(); i += 8) {
+    const float dx = data[i] - eye.x(), dy = data[i + 1] - eye.y(), dz = data[i + 2] - eye.z();
+    if (data[i + 6] < 0.999f && dx * dx + dy * dy + dz * dz > kFarBlendM * kFarBlendM)
+      return true;
+  }
+  return false;
+}
+
+// The far fade-out of the variants listed (their buffers still hold this frame's
+// instances): blended, depth-tested, no depth write, the state set once. The
+// billboards of this pass are 480 m and more away, so their order among
+// themselves does not show.
+void VegetationRenderer::drawImpostorsFar(const std::vector<size_t> &variants) {
+  if (variants.empty())
+    return;
+  glEnable(GL_BLEND);
+  glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
+  glDepthMask(GL_FALSE);
+  progBillboard_->setUniformValue("u_pass", 1.0f);
+  for (size_t vi : variants) {
+    const VariantGpu &v = var_[vi];
+    glBindVertexArray(v.billVao);
+    setImpostorUniforms(v);
+    glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, GLsizei(buckets_[vi * 4 + 3].size() / 8));
+    ++stats_.drawCalls;
+    stats_.impostorPasses += 'f';
+  }
+  glDepthMask(GL_TRUE);
+  glDisable(GL_BLEND);
+  progBillboard_->setUniformValue("u_pass", 0.0f);
 }
 
 // The blob program and its buffers, built on first use. They need only a GL
@@ -2065,9 +2096,11 @@ void VegetationRenderer::draw(const VegFrame &f) {
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, atlasMask_);
     progBillboard_->setUniformValue("u_atlasMask", 3);
+    std::vector<size_t> farVariants;
     for (size_t vi = 0; vi < var_.size(); ++vi)
-      if (!buckets_[vi * 4 + 3].empty())
-        drawImpostors(var_[vi], buckets_[vi * 4 + 3], f);
+      if (!buckets_[vi * 4 + 3].empty() && drawImpostors(var_[vi], buckets_[vi * 4 + 3], f))
+        farVariants.push_back(vi);
+    drawImpostorsFar(farVariants);
     progBillboard_->release();
   }
   drawBlobs(f);

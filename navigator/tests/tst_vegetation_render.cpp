@@ -971,6 +971,44 @@ private slots:
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
 
+  // Two variants in the far fade-out: every variant's opaque billboard pass is
+  // drawn before any blended far pass. Per variant the far pass would let a later
+  // variant's opaque billboard (depth write on, the faded quad wrote none) paint
+  // over an earlier variant's faded one that is in front of it. The draw order is
+  // read from the renderer's stats, and the frame must still show the trees.
+  void farFadePassesRunAfterEveryOpaquePass() {
+    World w = standWorld(0, 2);
+    for (size_t i = 0; i < w.cells.size(); ++i)
+      if (w.cells[i].first == 0 && w.cells[i].second == 0)
+        for (int n = 0; n < 2; ++n) {
+          VegInstance t;
+          t.species = kVegTree;
+          t.kind = 2;
+          t.scale = 1.0f;
+          t.yaw = 0.7f + float(n);
+          t.tint = 0.5f;
+          const float y = -10.0f + 20.0f * float(n);
+          t.pos = {40.0f, y, -surfaceHeight(*w.field, 40.0f, y, kChunkM, kRes)};
+          w.veg[i].push_back(t);
+        }
+    Rig rig(true);
+    QVERIFY(rig.show());
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    standView(rig.r, w, 160.0f, 0.0f, -1); // the atlas bakes from a nearer view
+    const TreePixels t = standView(rig.r, w, 520.0f, 0.0f, -1);
+    if (rig.r->vegetationStats().impostorVariants < 2)
+      QSKIP("no impostor atlas on this context");
+    const std::string passes = rig.r->vegetationStats().impostorPasses;
+    qInfo("far fade passes '%s', tree px %d", passes.c_str(), t.all);
+    const size_t firstFar = passes.find('f');
+    QVERIFY2(firstFar != std::string::npos && passes.rfind('f') > firstFar,
+             "two variants should each have a far fade-out pass");
+    QVERIFY2(passes.find('o', firstFar) == std::string::npos, passes.c_str());
+    QVERIFY2(t.all > 60, qPrintable(QString("trees not found (%1 px)").arg(t.all)));
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
   // No pop where a tree changes from mesh to impostor (130 m), for every kind,
   // level with the crowns and from 45 and 60 degrees up: the foliage the trees
   // add to the frame (scaled by distance squared) and its mean luminance, step
