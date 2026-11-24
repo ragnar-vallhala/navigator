@@ -37,6 +37,7 @@ namespace {
 // pointer read, and it keeps the enqueue sites free of loader plumbing.
 // Only ever dereferenced on paths runEngine() has already gated on
 // SitlModule::available().
+std::function<void(const vsim::procgen::ColliderWindow &)> g_treeSink; // test seam
 inline const vayu_sitl_api_t *sitl() { return SitlModule::instance().api(); }
 } // namespace
 
@@ -272,7 +273,14 @@ bool SimWorker::applyEnvClear(const vayu_sitl_api_t *api) {
 #endif
 }
 
+void SimWorker::setTreeColliderSinkForTest(
+    std::function<void(const procgen::ColliderWindow &)> sink) {
+  g_treeSink = std::move(sink);
+}
+
 void SimWorker::sendTreeColliders(const procgen::ColliderWindow &w) {
+  if (g_treeSink)
+    g_treeSink(w);
   if (!envCollidersAvailable()) {
     if (!env_unsupported_logged_) {
       env_unsupported_logged_ = true;

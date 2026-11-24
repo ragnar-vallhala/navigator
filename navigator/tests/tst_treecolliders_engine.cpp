@@ -79,6 +79,7 @@ struct Flight {
   float xAtMinVx = 0;
   float contactX = 0; // x where vx first dropped 20% under the approach speed
   float maxAbsY = 0;
+  float maxAbsDz = 0; // vertical drift from the lane
   int steps = 0;
 };
 
@@ -90,11 +91,11 @@ std::vector<std::vector<uint8_t>> trunkAdds(float x, float y) {
   return encodeEnvAdds(w.cylinders);
 }
 
-Flight fly(const vayu_sitl_api_t *api, float laneY, float trunkY) {
+Flight fly(const vayu_sitl_api_t *api, float laneY, float trunkY, float laneZ = kLaneZ) {
   vsim_ctl_reset_t r{};
   r.pos_w[0] = 0.0f;
   r.pos_w[1] = laneY;
-  r.pos_w[2] = kLaneZ;
+  r.pos_w[2] = laneZ;
   r.quat_wxyz[0] = 1.0f;
   r.vel_w[0] = kV0;
   api->reset_to(&r);
@@ -115,6 +116,7 @@ Flight fly(const vayu_sitl_api_t *api, float laneY, float trunkY) {
       f.xAtMinVx = x;
     }
     f.maxAbsY = std::max(f.maxAbsY, std::fabs(y - laneY));
+    f.maxAbsDz = std::max(f.maxAbsDz, std::fabs(p.pos_w[2] - laneZ));
     f.closest = std::min(f.closest, std::hypot(x - kTrunkX, y - trunkY));
     if (!contact && i > 0 && vx < prevVx - 0.2f) { // drag takes ~0.001 per step
       contact = true;
@@ -271,6 +273,42 @@ private slots:
     const Flight clear = fly(api, 0.0f, 0.58f);
     report("(v) 0.58 m beside (outside r + reach)", clear);
     QVERIFY2(std::fabs(clear.finalX - control.finalX) < 0.05f, "a line outside r + reach was blocked");
+
+    // Over the top. The trunk stands on the ground (base z = 0 NED, the same
+    // reference as above), 10 m tall: its top is at z = -10. Gravity is off, as
+    // in every flight here, so the drone holds its altitude. The engine's top
+    // rule (resolveEnvObstacles): a footprint point touches when its horizontal
+    // distance to the axis is under r + 0.04 AND |z - centre z| is under
+    // h/2 + 0.04, i.e. its z is within 0.04 m of the top. The footprint points
+    // sit at the body origin's height when the airframe is level, so the
+    // airframe's 0.186 m reach is HORIZONTAL only: vertically it reaches 0.04 m.
+    // Expectation: 0.2 m above the top is NOT blocked, nor anything above 0.04 m.
+    QVERIFY(vsim::SimWorker::applyEnvSet(api, trunkAdds(kTrunkX, 0.0f), encodeEnvCommit()));
+    const float top = -kTrunkH; // NED z of the top
+    QCOMPARE(top, -10.0f);
+    const Flight over = fly(api, 0.0f, 0.0f, top - 1.0f);
+    report("(vi) 1.0 m above the top (z -11.0)", over);
+    QVERIFY2(std::fabs(over.finalX - control.finalX) < 0.05f, "flying 1.0 m over the top was blocked");
+    QVERIFY(over.minVx > 0.0f);
+    // Sweep the clearance above the top to find the real threshold.
+    float firstClear = -1.0f;
+    float lastBlocked = -1.0f;
+    for (float d : {0.0f, 0.02f, 0.03f, 0.04f, 0.05f, 0.1f, 0.15f, 0.2f, 0.25f, 0.3f, 0.35f, 0.4f, 0.45f, 0.5f}) {
+      const Flight fl = fly(api, 0.0f, 0.0f, top - d);
+      const bool blocked = std::fabs(fl.finalX - control.finalX) > 0.05f;
+      qInfo("(vii) %.2f m above the top (z %.2f): %s, final x %.3f, max x %.3f, vx min %.2f, vertical drift %.3f",
+            d, top - d, blocked ? "BLOCKED" : "clear", fl.finalX, fl.maxX, fl.minVx, fl.maxAbsDz);
+      if (blocked)
+        lastBlocked = d;
+      else if (firstClear < 0.0f)
+        firstClear = d;
+    }
+    qInfo("(vii) threshold: last blocked at %.2f m, first clear at %.2f m above the top", lastBlocked, firstClear);
+    // Pin what the engine does: blocked inside its 0.04 m vertical contact
+    // radius, free beyond it, and 0.2 m (the airframe's horizontal reach) is free.
+    QVERIFY2(lastBlocked >= 0.0f, "nothing was blocked even touching the top");
+    QVERIFY2(lastBlocked <= 0.04f, "blocked above the engine's 0.04 m vertical contact radius");
+    QVERIFY2(firstClear > lastBlocked && firstClear <= 0.05f, "the clear region does not start at the contact radius");
 
     vsim::SimWorker::applyEnvClear(api);
     api->set_telemetry_sink(nullptr, nullptr);

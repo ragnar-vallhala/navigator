@@ -172,6 +172,12 @@ public:
   // (envCollidersAvailable()) it logs a warning once and sends nothing.
   void sendTreeColliders(const procgen::ColliderWindow &w);
 
+  // Test seam: while set, every window handed to sendTreeColliders is also
+  // given to `sink` (empty cylinders = a clear), before the SDK gate, so a test
+  // sees what the GUI asked to send on an SDK without ENV too. GUI thread only.
+  static void setTreeColliderSinkForTest(
+      std::function<void(const procgen::ColliderWindow &)> sink);
+
   // True when this build can send the environment cylinders: the SDK headers
   // it compiled against carry the generic ctl entry (ABI >= 5) and the ENV
   // messages (VSIM_ENV_CAP). The module is loaded for exactly that ABI
