@@ -147,6 +147,13 @@ TelemetryEngine::TelemetryEngine(QObject *parent)
             m_state.lastBatteryMs = QDateTime::currentMSecsSinceEpoch();
           });
 
+  connect(m_protocol, &DroneProtocol::failsafeStatusReceived, this,
+          [this](const FailsafeStatusData &d) {
+            QMutexLocker lock(&m_mutex);
+            m_state.failsafe = d;
+            m_state.lastFailsafeMs = QDateTime::currentMSecsSinceEpoch();
+          });
+
   connect(m_protocol, &DroneProtocol::verticalStateReceived, this,
           [this](const VerticalStateData &d) {
             QMutexLocker lock(&m_mutex);

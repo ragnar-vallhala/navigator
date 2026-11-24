@@ -167,6 +167,20 @@ void thunkBattery(void *ctx, const navlink_frame_hdr_t *,
   r->onBattery(d);
 }
 
+void thunkFailsafeStatus(void *ctx, const navlink_frame_hdr_t *,
+                         const navlink_failsafe_status_t *m) {
+  auto *r = static_cast<NavlinkRouter *>(ctx);
+  if (!r->onFailsafeStatus)
+    return;
+  FailsafeStatusData d;
+  d.battLevel = m->batt_level;
+  d.landCause = m->land_cause;
+  d.flags = m->flags;
+  d.armRefusal = m->arm_refusal;
+  d.cells = m->cells;
+  r->onFailsafeStatus(d);
+}
+
 void thunkNotchStatus(void *ctx, const navlink_frame_hdr_t *,
                       const navlink_notch_status_t *m) {
   auto *r = static_cast<NavlinkRouter *>(ctx);
@@ -609,6 +623,7 @@ NavlinkRouter::NavlinkRouter() : d_(new Impl) {
   d_->handlers.on_est_perf = thunkEstPerf;
   d_->handlers.on_baro = thunkBaro;
   d_->handlers.on_battery = thunkBattery;
+  d_->handlers.on_failsafe_status = thunkFailsafeStatus;
   d_->handlers.on_vertical_state = thunkVerticalState;
   d_->handlers.on_notch_status = thunkNotchStatus;
   d_->handlers.on_hsl_status = thunkHslStatus;
