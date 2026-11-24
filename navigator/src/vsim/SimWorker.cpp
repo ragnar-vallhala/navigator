@@ -17,6 +17,7 @@
 #include "SimWorker.h"
 
 #include "CrashStatus.h"
+#include "procgen/TreeColliderWindow.h"
 #include "SitlModule.h" // runtime-loaded SITL engine (boot/run_step/get_pose/config)
 #include "vsim_proto.h"
 
@@ -229,6 +230,77 @@ void SimWorker::sendObstacles(const QVector<Obstacle> &obs) {
     enqueue([b] { sitl()->add_obstacle(&b); });
   }
   emit logLine(QString("rtos engine: %1 obstacles pushed").arg(obs.size()));
+}
+
+bool SimWorker::envCollidersAvailable() {
+#if VAYU_SITL_ABI_VERSION >= 5 && defined(VSIM_ENV_CAP)
+  return true;
+#else
+  return false;
+#endif
+}
+
+bool SimWorker::applyEnvSet(const vayu_sitl_api_t *api,
+                            const std::vector<std::vector<uint8_t>> &adds,
+                            const std::vector<uint8_t> &commit) {
+#if VAYU_SITL_ABI_VERSION >= 5 && defined(VSIM_ENV_CAP)
+  if (!api || !api->ctl)
+    return false;
+  using namespace vsim::procgen;
+  api->ctl(kEnvBegin, nullptr, 0);
+  for (const auto &m : adds)
+    api->ctl(kEnvAdd, m.data(), m.size());
+  api->ctl(kEnvCommit, commit.data(), commit.size());
+  return true;
+#else
+  (void)api;
+  (void)adds;
+  (void)commit;
+  return false;
+#endif
+}
+
+bool SimWorker::applyEnvClear(const vayu_sitl_api_t *api) {
+#if VAYU_SITL_ABI_VERSION >= 5 && defined(VSIM_ENV_CAP)
+  if (!api || !api->ctl)
+    return false;
+  api->ctl(vsim::procgen::kEnvClear, nullptr, 0);
+  return true;
+#else
+  (void)api;
+  return false;
+#endif
+}
+
+void SimWorker::sendTreeColliders(const procgen::ColliderWindow &w) {
+  if (!envCollidersAvailable()) {
+    if (!env_unsupported_logged_) {
+      env_unsupported_logged_ = true;
+      qWarning("tree colliders disabled: the engine SDK this Navigator was built "
+               "against has no environment cylinders (needs ABI >= 5 with ENV); "
+               "trees will not collide");
+      emit logLine("rtos engine: tree colliders disabled (SDK has no ENV support)");
+    }
+    return;
+  }
+  if (w.dropped > 0) {
+    qWarning("tree colliders: %zu trunks over the engine cap of %zu were left out "
+             "(the nearest %zu are sent)",
+             w.dropped, procgen::kEnvCap, w.cylinders.size());
+    emit logLine(QString("rtos engine: WARNING: %1 tree colliders over the cap of %2 "
+                         "left out (farthest first)")
+                     .arg(w.dropped)
+                     .arg(procgen::kEnvCap));
+  }
+  if (w.cylinders.empty()) {
+    enqueue([] { applyEnvClear(sitl()); });
+    return;
+  }
+  auto adds = procgen::encodeEnvAdds(w.cylinders);
+  auto commit = procgen::encodeEnvCommit();
+  enqueue([adds = std::move(adds), commit = std::move(commit)] {
+    applyEnvSet(sitl(), adds, commit);
+  });
 }
 
 void SimWorker::sendRates(int imuHz, int physicsHz, int poseHz) {

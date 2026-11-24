@@ -469,6 +469,7 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
       ${SRC}/vsim/SitlModule.cpp ${SRC}/vsim/SitlModule.h
       ${SRC}/vsim/VfsDir.cpp ${SRC}/vsim/VfsDir.h
       ${SRC}/vsim/SimWorker.cpp ${SRC}/vsim/SimWorker.h
+      ${SRC}/vsim/procgen/TreeColliderWindow.cpp
       ${SRC}/vsim/RcBridge.cpp ${SRC}/vsim/RcBridge.h)
   target_include_directories(tst_sitl_engine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${SRC}/vsim ${VAYU_SITL_SDK})
   target_link_libraries(tst_sitl_engine PRIVATE navlink_codec)
@@ -497,6 +498,28 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vsim_proto.h")
   set_tests_properties(tst_sitl_crash PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
       TIMEOUT 90)
+endif()
+
+# ---- Tree colliders against the real engine (SITL builds only) --------------
+# The ENV frames SimWorker sends make a trunk solid, leave a line beside it free
+# and go away on a clear. Skips, saying why, without the engine module or on an
+# SDK that has no ENV messages (the pinned one).
+if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
+  navigator_test(tst_treecolliders_engine
+      tst_treecolliders_engine.cpp
+      ${SRC}/vsim/SitlModule.cpp ${SRC}/vsim/SitlModule.h
+      ${SRC}/vsim/VfsDir.cpp ${SRC}/vsim/VfsDir.h
+      ${SRC}/vsim/SimWorker.cpp ${SRC}/vsim/SimWorker.h
+      ${SRC}/vsim/procgen/TreeColliderWindow.cpp
+      ${SRC}/vsim/RcBridge.cpp ${SRC}/vsim/RcBridge.h)
+  target_include_directories(tst_treecolliders_engine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${SRC}/vsim ${SRC}/vsim/procgen ${VAYU_SITL_SDK})
+  target_link_libraries(tst_treecolliders_engine PRIVATE navlink_codec)
+  if(WIN32)
+    target_link_libraries(tst_treecolliders_engine PRIVATE winmm)
+  endif()
+  set_tests_properties(tst_treecolliders_engine PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
+      TIMEOUT 120)
 endif()
 
 # ---- Airframe presets: data checks (no engine needed) ---------------------
@@ -532,6 +555,7 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
       ${SRC}/vsim/SitlModule.cpp ${SRC}/vsim/SitlModule.h
       ${SRC}/vsim/VfsDir.cpp ${SRC}/vsim/VfsDir.h
       ${SRC}/vsim/SimWorker.cpp ${SRC}/vsim/SimWorker.h
+      ${SRC}/vsim/procgen/TreeColliderWindow.cpp
       ${SRC}/vsim/AirframePresets.cpp
       ${SRC}/protocol/CommandCodec.cpp
       ${SRC}/core/crc.cpp)
@@ -568,6 +592,7 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
       ${SRC}/vsim/SitlModule.cpp ${SRC}/vsim/SitlModule.h
       ${SRC}/vsim/VfsDir.cpp ${SRC}/vsim/VfsDir.h
       ${SRC}/vsim/SimWorker.cpp ${SRC}/vsim/SimWorker.h
+      ${SRC}/vsim/procgen/TreeColliderWindow.cpp
       ${SRC}/protocol/CommandCodec.cpp ${SRC}/protocol/CommandCodec.h
       ${SRC}/core/crc.cpp)
   target_include_directories(tst_sim_restart PRIVATE
