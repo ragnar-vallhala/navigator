@@ -14,9 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-// tst_treecolliderwindow — the collider window around the drone: NED cylinder
-// conversion, Trees/vegetation flags, window edges, stable ordering (Qt-free
-// core, headless).
+// tst_treecolliderwindow -- the collider window around the drone and its ENV
+// wire frames: NED cylinder conversion, 150 m disc, Trees/rocks flags, the
+// 4096 cap keeping the nearest, golden ENV_ADD / ENV_COMMIT bytes, the rebuild
+// policy (Qt-free core, headless).
 #include <QtTest/QtTest>
 
 #include "VsimTypes.h"
@@ -26,6 +27,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 using namespace vsim::procgen;
 
@@ -36,14 +38,27 @@ VegCollider tree(float x, float y, float z = 0.0f, float r = 0.3f, float h = 10.
 VegCollider rock(float x, float y, float z = 0.0f) {
   return VegCollider{PgVec3{x, y, z}, 1.0f, 1.5f, true};
 }
+ColliderOptions both() {
+  ColliderOptions o;
+  o.rocks = true;
+  return o;
+}
+std::vector<EngineCylinder> win(const std::vector<VegCollider> &in, PgVec3 d = {},
+                                float speed = 0.0f, ColliderOptions o = {}) {
+  return treeColliderWindow(in, d, speed, o).cylinders;
+}
+float f32(const std::vector<std::uint8_t> &m, size_t byteOff) {
+  float v;
+  std::memcpy(&v, m.data() + byteOff, sizeof v);
+  return v;
+}
 
 // What SimWorker::sendObstacles (vsim/SimWorker.cpp:211-231) hands the engine
 // for a World-tab obstacle: pos, size and restitution copied one to one into
-// vsim_ctl_obstacle_t (b.pos = o.pos, b.size = o.size, b.restitution). That
-// code is inline in a member that needs the engine thread, so the arithmetic
-// is repeated here; for a cylinder pos is the CENTRE in NED metres (z down),
-// size.x the radius and size.z the full height, axis the body-local z
-// (vsim/VsimTypes.h:111-115).
+// vsim_ctl_obstacle_t. For a cylinder pos is the CENTRE in NED metres (z down),
+// size.x the radius and size.z the full height (vsim/VsimTypes.h:111-115). The
+// ENV cylinder (vsim_env_cyl_t) uses the same centre, so a trunk's ENV frame
+// must carry the numbers the World-tab obstacle for the same base would.
 struct WireCylinder {
   float pos[3];
   float size[3];
@@ -70,110 +85,211 @@ class TstTreeColliderWindow : public QObject {
 private slots:
   void nedConversion() {
     // Surface at z = -3 (3 m above the NED origin), 10 m tall: centre 5 m higher.
-    const auto w = treeColliderWindow({tree(5, 6, -3.0f, 0.4f, 10.0f)}, {}, 0, 100, true, true);
+    const auto w = win({tree(5, 6, -3.0f, 0.4f, 10.0f)});
     QCOMPARE(int(w.size()), 1);
     QCOMPARE(w[0].center.x, 5.0f);
     QCOMPARE(w[0].center.y, 6.0f);
     QCOMPARE(w[0].center.z, -8.0f);
     QCOMPARE(w[0].radius, 0.4f);
     QCOMPARE(w[0].height, 10.0f);
-    QCOMPARE(w[0].restitution, 0.3f);
     QVERIFY(!w[0].isRock);
-    // Top of the cylinder is the surface point's opposite end: centre - h/2 is
-    // above the surface (more negative), centre + h/2 is the ground.
-    QCOMPARE(w[0].center.z + w[0].height * 0.5f, -3.0f);
+    QCOMPARE(w[0].center.z + w[0].height * 0.5f, -3.0f); // the base is the ground
   }
 
-  void flagsSelectClasses() {
+  void treesOnlyByDefault() {
     const std::vector<VegCollider> in{tree(1, 1), rock(2, 2)};
-    QCOMPARE(int(treeColliderWindow(in, {}, 0, 100, true, true).size()), 2);
-    const auto t = treeColliderWindow(in, {}, 0, 100, true, false);
+    const auto t = win(in);
     QCOMPARE(int(t.size()), 1);
     QVERIFY(!t[0].isRock);
-    const auto r = treeColliderWindow(in, {}, 0, 100, false, true);
+    QCOMPARE(int(win(in, {}, 0, both()).size()), 2);
+    ColliderOptions rocksOnly;
+    rocksOnly.trees = false;
+    rocksOnly.rocks = true;
+    const auto r = win(in, {}, 0, rocksOnly);
     QCOMPARE(int(r.size()), 1);
     QVERIFY(r[0].isRock);
-    QVERIFY(treeColliderWindow(in, {}, 0, 100, false, false).empty());
   }
 
-  void windowIsThreeByThreeChunks() {
-    // Drone in chunk (0,0) of 100 m chunks: window is [-100, 200) on both axes.
-    const PgVec3 d{50, 50, 0};
-    const auto in = [&](float x, float y) {
-      return !treeColliderWindow({tree(x, y)}, d, 0, 100, true, true).empty();
+  void treesOffIsEmptyWindow() {
+    ColliderOptions off;
+    off.trees = false;
+    const auto w = treeColliderWindow({tree(1, 1), tree(20, 5), rock(3, 3)}, {}, 0, off);
+    QVERIFY(w.cylinders.empty()); // rocks default off too: the caller sends ENV_CLEAR
+    QCOMPARE(int(w.dropped), 0);
+  }
+
+  void windowIsADiscAroundTheDrone() {
+    const PgVec3 d{50, -20, 0};
+    const float R = kColliderWindowRadiusM;
+    const auto in = [&](float dx, float dy) {
+      return !win({tree(d.x + dx, d.y + dy)}, d).empty();
     };
-    QVERIFY(in(-100.0f, 0));       // lower edge inclusive
-    QVERIFY(!in(-100.01f, 0));
-    QVERIFY(in(199.99f, 0));
-    QVERIFY(!in(200.0f, 0));       // upper edge exclusive
-    QVERIFY(in(0, -100.0f));
-    QVERIFY(!in(0, -100.01f));
-    QVERIFY(in(0, 199.99f));
-    QVERIFY(!in(0, 200.0f));
-    QVERIFY(!in(1000, 1000));
-  }
-
-  void windowFollowsDroneChunk() {
-    // Drone in chunk (-1, 2): window x in [-200, 100), y in [100, 400).
-    const PgVec3 d{-10, 250, 0};
-    QVERIFY(!treeColliderWindow({tree(-150, 150)}, d, 0, 100, true, true).empty());
-    QVERIFY(treeColliderWindow({tree(150, 150)}, d, 0, 100, true, true).empty());
-    QVERIFY(treeColliderWindow({tree(-250, 150)}, d, 0, 100, true, true).empty());
+    QVERIFY(in(R, 0));             // on the radius: inclusive
+    QVERIFY(!in(R + 0.1f, 0));
+    QVERIFY(in(-R, 0));
+    QVERIFY(in(0, R));
+    QVERIFY(!in(0, -R - 0.1f));
+    const float c = R * 0.7f;      // 0.7 R on both axes is 0.99 R away: inside
+    QVERIFY(in(c, c));
+    QVERIFY(!in(R * 0.75f, R * 0.75f)); // 1.06 R: outside a disc, inside a square
   }
 
   void speedWidensWindow() {
-    const PgVec3 d{50, 50, 0};
-    const float m = 10.0f * kColliderLookaheadS;
-    QVERIFY(treeColliderWindow({tree(200.0f + m - 0.01f, 0)}, d, 10, 100, true, true).size() == 1);
-    QVERIFY(treeColliderWindow({tree(200.0f + m, 0)}, d, 10, 100, true, true).empty());
-    QVERIFY(treeColliderWindow({tree(-100.0f - m, 0)}, d, 10, 100, true, true).size() == 1);
-    QVERIFY(treeColliderWindow({tree(-100.0f - m - 0.01f, 0)}, d, 10, 100, true, true).empty());
-    // Standing still, the same tree is outside; negative speed does not shrink.
-    QVERIFY(treeColliderWindow({tree(205, 0)}, d, 0, 100, true, true).empty());
-    QVERIFY(treeColliderWindow({tree(150, 0)}, d, -50, 100, true, true).size() == 1);
+    const float m = 10.0f * kColliderLookaheadS, R = kColliderWindowRadiusM;
+    QCOMPARE(int(win({tree(R + m - 0.1f, 0)}, {}, 10).size()), 1);
+    QCOMPARE(int(win({tree(R + m + 0.1f, 0)}, {}, 10).size()), 0);
+    QCOMPARE(int(win({tree(R + 5, 0)}, {}, 0).size()), 0);
+    QCOMPARE(int(win({tree(R - 5, 0)}, {}, -50).size()), 1); // negative does not shrink
   }
 
   void orderingIsStableAndDiffable() {
     std::vector<VegCollider> in{tree(30, 5), tree(10, 9), rock(10, 2), tree(10, 2),
                                 tree(20, 1)};
-    const auto a = treeColliderWindow(in, {}, 0, 100, true, true);
+    const auto a = win(in, {}, 0, both());
     std::reverse(in.begin(), in.end());
-    const auto b = treeColliderWindow(in, {}, 0, 100, true, true);
-    QVERIFY(a == b);
-    QVERIFY(std::is_sorted(a.begin(), a.end(), [](const EngineCylinder &p, const EngineCylinder &q) {
-      return p.center.x != q.center.x ? p.center.x < q.center.x
-                                      : p.center.y < q.center.y;
-    }));
+    QVERIFY(a == win(in, {}, 0, both()));
     QCOMPARE(a.front().center.x, 10.0f);
     QCOMPARE(a.front().center.y, 2.0f);
     QCOMPARE(a.back().center.x, 30.0f);
-    // A changed set compares unequal.
     in.push_back(tree(40, 40));
-    QVERIFY(treeColliderWindow(in, {}, 0, 100, true, true) != a);
+    QVERIFY(win(in, {}, 0, both()) != a);
+  }
+
+  void degenerateInputs() {
+    QVERIFY(win({}).empty());
+    QVERIFY(win({tree(1, 1, 0, 0.0f, 5)}).empty());
+    QVERIFY(win({tree(1, 1, 0, 0.3f, 0.0f)}).empty());
+    const float nan = std::nanf("");
+    QVERIFY(win({tree(nan, 1)}).empty()); // the engine would drop the whole message
+    QVERIFY(win({tree(1, 1, 0, nan, 5)}).empty());
+    QVERIFY(win({tree(1, 1, nan)}).empty());
+    QCOMPARE(int(win({tree(kColliderWindowRadiusM, 0)}, {}, nan).size()), 1); // NaN speed: no widening
+  }
+
+  // Over the cap, the nearest kept, the farthest counted as dropped.
+  void capKeepsNearestAndCountsDrops() {
+    std::vector<VegCollider> in;
+    for (int i = 0; i < 10; ++i)
+      in.push_back(tree(float(i + 1), 0)); // distance 1..10 from the origin
+    in.push_back(tree(0, -0.5f));          // nearest of all
+    ColliderOptions o;
+    o.cap = 4;
+    const ColliderWindow w = treeColliderWindow(in, {}, 0, o);
+    QCOMPARE(int(w.cylinders.size()), 4);
+    QCOMPARE(int(w.dropped), 7);
+    std::vector<float> xs;
+    for (const EngineCylinder &c : w.cylinders)
+      xs.push_back(c.center.x);
+    QCOMPARE(xs, (std::vector<float>{0.0f, 1.0f, 2.0f, 3.0f})); // sorted by x
+    // The drone's position, not the origin, decides what is near.
+    const ColliderWindow v = treeColliderWindow(in, PgVec3{10, 0, 0}, 0, o);
+    QCOMPARE(v.cylinders.front().center.x, 7.0f);
+    QCOMPARE(v.cylinders.back().center.x, 10.0f);
+    // At or under the cap nothing is dropped.
+    o.cap = 11;
+    QCOMPARE(int(treeColliderWindow(in, {}, 0, o).dropped), 0);
+  }
+
+  void capDefaultIsTheEngineCap() {
+    QCOMPARE(kEnvCap, size_t(4096));
+    std::vector<VegCollider> in;
+    for (int i = 0; i < 5000; ++i)
+      in.push_back(tree(float(i % 100) - 50.0f, float(i) / 100.0f - 25.0f)); // all within 150 m
+    const ColliderWindow w = treeColliderWindow(in, {}, 0);
+    QCOMPARE(int(w.cylinders.size()), 4096);
+    QCOMPARE(int(w.dropped), 5000 - 4096);
+  }
+
+  // Golden bytes of ENV_ADD: count then {x, y, z, radius, height} float32 LE.
+  void encodeEnvAddGolden() {
+    EngineCylinder a;
+    a.center = PgVec3{1.0f, -2.0f, -8.0f};
+    a.radius = 0.5f;
+    a.height = 10.0f;
+    EngineCylinder b;
+    b.center = PgVec3{0.0f, 0.25f, -0.75f};
+    b.radius = 2.0f;
+    b.height = 1.5f;
+    const auto m = encodeEnvAdds({a, b});
+    QCOMPARE(int(m.size()), 1);
+    const std::vector<std::uint8_t> golden{
+        2,    0,    0,    0,                      // count = 2
+        0x00, 0x00, 0x80, 0x3f,                   // x 1.0
+        0x00, 0x00, 0x00, 0xc0,                   // y -2.0
+        0x00, 0x00, 0x00, 0xc1,                   // z -8.0
+        0x00, 0x00, 0x00, 0x3f,                   // radius 0.5
+        0x00, 0x00, 0x20, 0x41,                   // height 10.0
+        0x00, 0x00, 0x00, 0x00,                   // x 0.0
+        0x00, 0x00, 0x80, 0x3e,                   // y 0.25
+        0x00, 0x00, 0x40, 0xbf,                   // z -0.75
+        0x00, 0x00, 0x00, 0x40,                   // radius 2.0
+        0x00, 0x00, 0xc0, 0x3f};                  // height 1.5
+    QCOMPARE(m[0], golden);
+    QCOMPARE(int(m[0].size()), 4 + 20 * 2);
+  }
+
+  void encodeEnvAddBatchesOfTwelve() {
+    QVERIFY(encodeEnvAdds({}).empty());
+    std::vector<EngineCylinder> v(25);
+    for (size_t i = 0; i < v.size(); ++i) {
+      v[i].center = PgVec3{float(i), 0, -1};
+      v[i].radius = 0.3f;
+      v[i].height = 2.0f;
+    }
+    const auto m = encodeEnvAdds(v);
+    QCOMPARE(int(m.size()), 3);
+    QCOMPARE(int(m[0].size()), 4 + 20 * 12);
+    QCOMPARE(int(m[1].size()), 4 + 20 * 12);
+    QCOMPARE(int(m[2].size()), 4 + 20 * 1);
+    QVERIFY(m[0].size() <= 256);
+    std::uint32_t c;
+    std::memcpy(&c, m[2].data(), 4);
+    QCOMPARE(c, 1u);
+    QCOMPARE(f32(m[2], 4), 24.0f);  // the last cylinder is #24, order kept
+    QCOMPARE(f32(m[1], 4), 12.0f);  // second message starts at #12
+    // 4096 cylinders: ceil(4096 / 12) messages, all within the ctl body.
+    QCOMPARE(int(encodeEnvAdds(std::vector<EngineCylinder>(4096)).size()), 342);
+  }
+
+  void encodeEnvCommitGolden() {
+    const std::vector<std::uint8_t> g{0x9a, 0x99, 0x99, 0x3e}; // 0.3f
+    QCOMPARE(encodeEnvCommit(), g);
+    QCOMPARE(encodeEnvCommit(0.3f), g);
+    QCOMPARE(f32(encodeEnvCommit(2.0f), 0), 1.0f);   // clamped
+    QCOMPARE(f32(encodeEnvCommit(-1.0f), 0), 0.0f);
+    QCOMPARE(f32(encodeEnvCommit(std::nanf("")), 0), kColliderRestitution);
+    QCOMPARE(int(encodeEnvCommit().size()), 4);
+  }
+
+  void subtypesMatchTheProtocol() {
+    // vsim_proto.h: VSIM_CTL_ENV_BEGIN..CLEAR and VSIM_ENV_ADD_MAX / VSIM_ENV_CAP.
+    QCOMPARE(kEnvBegin, 16u);
+    QCOMPARE(kEnvAdd, 17u);
+    QCOMPARE(kEnvCommit, 18u);
+    QCOMPARE(kEnvClear, 19u);
+    QCOMPARE(kEnvAddMax, size_t(12));
   }
 
   // A tree placed the way scatterVegetation places it (pos.z = -surface height,
-  // NED, up is -z) lands on the same engine cylinder as the equivalent World-tab
-  // obstacle after SimWorker's conversion.
-  void matchesWorldTabObstacle() {
+  // NED, up is -z) encodes to the same centre, radius and height as the
+  // equivalent World-tab obstacle after SimWorker's conversion.
+  void encodedTrunkMatchesWorldTabObstacle() {
     const PgVec3 base{12.0f, -7.0f, -42.5f}; // surface 42.5 m above NED zero
-    const auto w = treeColliderWindow({tree(base.x, base.y, base.z, 0.35f, 9.0f)},
-                                      {}, 0, 100, true, true);
+    const auto w = win({tree(base.x, base.y, base.z, 0.35f, 9.0f)});
     QCOMPARE(int(w.size()), 1);
+    const auto m = encodeEnvAdds(w);
     const WireCylinder o = sendObstaclesWire(worldTabCylinder(base, 0.35f, 9.0f));
-    QCOMPARE(w[0].center.x, o.pos[0]);
-    QCOMPARE(w[0].center.y, o.pos[1]);
-    QCOMPARE(w[0].center.z, o.pos[2]);
-    QCOMPARE(w[0].radius, o.size[0]);
-    QCOMPARE(w[0].height, o.size[2]);
-    QCOMPARE(w[0].restitution, o.restitution);
-    // And it is above the ground: the top is at a smaller (more up) NED z.
-    QVERIFY(w[0].center.z - 0.5f * w[0].height < base.z);
+    QCOMPARE(f32(m[0], 4), o.pos[0]);
+    QCOMPARE(f32(m[0], 8), o.pos[1]);
+    QCOMPARE(f32(m[0], 12), o.pos[2]);
+    QCOMPARE(f32(m[0], 16), o.size[0]);
+    QCOMPARE(f32(m[0], 20), o.size[2]);
+    QCOMPARE(f32(encodeEnvCommit(), 0), o.restitution);
+    QVERIFY(w[0].center.z - 0.5f * w[0].height < base.z); // above the ground
   }
 
   // The real chain: scatterVegetation -> vegetationColliders -> window. Every
-  // trunk stands on the terrain (pos.z = -height, so NED), and its cylinder
-  // equals the World-tab obstacle for the same base.
+  // trunk in the disc stands on the terrain and encodes to the World-tab values.
   void realScatterPathMatchesWorldTab() {
     FieldParams fp;
     fp.seed = 11u;
@@ -189,33 +305,76 @@ private slots:
       }
     const std::vector<VegCollider> cols = vegetationColliders(inst);
     QVERIFY(cols.size() > 20);
-    // Drone in chunk (0,0): chunks -1..1 are in the window, so (0..1, 0..1) all are.
-    const auto w = treeColliderWindow(cols, PgVec3{10, 10, 0}, 0, chunkM, true, true);
-    QCOMPARE(w.size(), cols.size());
+    const PgVec3 drone{128, 128, 0};
+    ColliderOptions o = both();
+    const ColliderWindow w = treeColliderWindow(cols, drone, 0, o);
+    size_t expect = 0;
     for (const VegCollider &c : cols) {
-      // NED: the surface is at z = -height (within the mesh-vs-field difference).
       QVERIFY2(std::fabs(c.pos.z + f.height(c.pos.x, c.pos.y)) < 3.0f,
                "collider base is not at -terrain height");
-      const WireCylinder o = sendObstaclesWire(worldTabCylinder(c.pos, c.radius, c.height));
-      const EngineCylinder e = [&] {
-        for (const EngineCylinder &x : w)
-          if (x.center.x == o.pos[0] && x.center.y == o.pos[1] && x.radius == o.size[0] &&
-              x.height == o.size[2])
-            return x;
-        return EngineCylinder{};
-      }();
-      QVERIFY(e.radius > 0.0f);
-      QCOMPARE(e.center.z, o.pos[2]);
-      QCOMPARE(e.restitution, o.restitution);
+      const float dx = c.pos.x - drone.x, dy = c.pos.y - drone.y;
+      if (dx * dx + dy * dy > kColliderWindowRadiusM * kColliderWindowRadiusM)
+        continue;
+      ++expect;
+      const WireCylinder wt = sendObstaclesWire(worldTabCylinder(c.pos, c.radius, c.height));
+      bool found = false;
+      for (const EngineCylinder &e : w.cylinders)
+        if (e.center.x == wt.pos[0] && e.center.y == wt.pos[1] && e.center.z == wt.pos[2] &&
+            e.radius == wt.size[0] && e.height == wt.size[2])
+          found = true;
+      QVERIFY(found);
     }
+    QVERIFY(expect > 5);
+    QCOMPARE(w.cylinders.size(), expect);
+    QCOMPARE(int(w.dropped), 0);
+    // Trees only: the rocks in that set are gone, the trunks stay.
+    const auto t = win(cols, drone);
+    size_t trunks = 0;
+    for (const EngineCylinder &e : w.cylinders)
+      trunks += e.isRock ? 0 : 1;
+    QCOMPARE(t.size(), trunks);
   }
 
-  void degenerateInputs() {
-    QVERIFY(treeColliderWindow({}, {}, 0, 100, true, true).empty());
-    QVERIFY(treeColliderWindow({tree(1, 1)}, {}, 0, 0, true, true).empty());
-    QVERIFY(treeColliderWindow({tree(1, 1)}, {}, 0, -5, true, true).empty());
-    QVERIFY(treeColliderWindow({tree(1, 1, 0, 0.0f, 5)}, {}, 0, 100, true, true).empty());
-    QVERIFY(treeColliderWindow({tree(1, 1, 0, 0.3f, 0.0f)}, {}, 0, 100, true, true).empty());
+  void rebuildPolicy() {
+    ColliderBuildKey last;
+    ColliderBuildKey now;
+    now.x = 5;
+    QVERIFY(colliderWindowNeedsRebuild(last, now)); // nothing built yet
+    last = now;
+    last.valid = true;
+    QVERIFY(!colliderWindowNeedsRebuild(last, now));
+    const float q = kColliderRebuildM;
+    QCOMPARE(q, 25.0f);
+    ColliderBuildKey m = now;
+    m.x += q; // exactly a quarter of the margin: not yet
+    QVERIFY(!colliderWindowNeedsRebuild(last, m));
+    m.x = now.x + q + 0.1f;
+    QVERIFY(colliderWindowNeedsRebuild(last, m));
+    m = now; // diagonal: distance, not per-axis
+    m.x += 0.8f * q;
+    m.y -= 0.8f * q;
+    QVERIFY(colliderWindowNeedsRebuild(last, m)); // 1.13 q
+    m = now;
+    m.x += 0.5f * q;
+    m.y += 0.5f * q;
+    QVERIFY(!colliderWindowNeedsRebuild(last, m)); // 0.71 q
+    // A flag or world change rebuilds with the drone standing still.
+    m = now;
+    m.trees = !m.trees;
+    QVERIFY(colliderWindowNeedsRebuild(last, m));
+    m = now;
+    m.rocks = !m.rocks;
+    QVERIFY(colliderWindowNeedsRebuild(last, m));
+    m = now;
+    m.world = 99;
+    QVERIFY(colliderWindowNeedsRebuild(last, m));
+    // A non-finite position is not a reason to keep a stale window.
+    m = now;
+    m.x = std::nanf("");
+    QVERIFY(colliderWindowNeedsRebuild(last, m));
+    // The hysteresis is a quarter of the margin by construction.
+    QCOMPARE(kColliderMarginM, kColliderWindowRadiusM - kColliderNeedM);
+    QCOMPARE(kColliderRebuildM, 0.25f * kColliderMarginM);
   }
 };
 
