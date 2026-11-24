@@ -34,6 +34,9 @@ public:
   void setMotorSpeeds(const QVector<float> &speeds);
   // The Power group's Battery field, e.g. "16.4 V · 4S · 72%" or "no pack".
   void setBattery(const QString &text);
+  // The Power group's Failsafe field: what the flight controller's own safety
+  // logic says (core/FailsafeStatus.h). `alarm` colours it for attention.
+  void setFailsafe(const QString &text, bool alarm);
 
 signals:
   void backToHomeRequested();
@@ -50,6 +53,8 @@ private:
   QLabel *m_avgThrottle = nullptr;
   QLabel *m_maxSpread = nullptr;
   QLabel *m_battery = nullptr;
+  QLabel *m_failsafe = nullptr;
+  QString m_failsafeBaseStyle;
   QLabel *m_current = nullptr;
   QLabel *m_escTemp = nullptr;
   QLabel *m_mahUsed = nullptr;
