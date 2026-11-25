@@ -102,6 +102,18 @@ public:
   // Chunk meshing: finished by workers so far, and still waiting for one.
   int chunksPosted() const { return w_.m_chunkSink->posted(); }
   size_t chunksQueued() const { return w_.m_chunkQueue->pending(); }
+  // The 3D view's chunk bookkeeping and the streamed window's size.
+  size_t viewChunks() const { return w_.m_renderer->worldChunkCount(); }
+  size_t viewPendingUploads() const {
+    return w_.m_renderer->pendingChunkUploadCount();
+  }
+  size_t viewPendingRemovals() const {
+    return w_.m_renderer->pendingChunkRemovalCount();
+  }
+  size_t windowChunks() const {
+    const size_t side = 2 * size_t(w_.m_chunkStreamer.config().renderRadius) + 1;
+    return side * side;
+  }
   bool shipRunning() const { return w_.m_shipWatcher != nullptr; }
   bool shipQueued() const { return w_.m_shipPending.has_value(); }
   bool collisionPending() const { return w_.m_collisionPending; }
@@ -473,6 +485,42 @@ private slots:
     qInfo("%s restored: above deck=%.2f", qPrintable(preset), aboveDeck(ab));
     QVERIFY2(aboveDeck(ab) >= 0.0f, "restored vehicle is inside the helipad");
     QVERIFY2(aboveDeck(ab) < 1.0f, "restored vehicle is not on the pad");
+  }
+
+  // A widget that is never painted (a minimised window, or the sim view in a
+  // hidden dock tab) does not run paintGL, which is where chunk uploads and
+  // removals are applied. World changes in that state must not pile up the old
+  // worlds' meshes: what waits for a paint is at most the current window.
+  void aHiddenWidgetKeepsAtMostOneWindowAcrossWorldChanges() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    auto *h = new SimulatorWidget(); // never shown
+    restored_.push_back(h);          // kept to the end, as the others
+    SimulatorWidgetTestAccess hv(*h);
+    const char *presets[] = {"hills", "desert", "alpine"};
+    size_t window = 0;
+    for (const char *name : presets) {
+      const QString preset = QString::fromLatin1(name);
+      bool applied = false;
+      hv.changeWorld([&](vsim::WorldConfig &c) {
+        applied = vsim::applyWorldPreset(c, preset, 17);
+        c.worldPreset = preset;
+      });
+      QVERIFY2(applied, "unknown preset");
+      QVERIFY(waitFor([&] { return hv.chunksCached() >= 9; }, 60000));
+      pump(1500);
+      window = hv.windowChunks();
+      qInfo("hidden, %s: window=%zu cached=%zu viewChunks=%zu "
+            "pendingUploads=%zu pendingRemovals=%zu",
+            name, window, hv.chunksCached(), hv.viewChunks(),
+            hv.viewPendingUploads(), hv.viewPendingRemovals());
+      QVERIFY2(hv.viewPendingUploads() <= window,
+               qPrintable(QStringLiteral("%1 uploads wait for a paint that "
+                                         "never comes, window is %2")
+                              .arg(hv.viewPendingUploads())
+                              .arg(window)));
+      QVERIFY2(hv.viewPendingRemovals() <= window, "removals pile up unpainted");
+    }
   }
 
   // Sim Running and the vehicle airborne (not landed): each preset change

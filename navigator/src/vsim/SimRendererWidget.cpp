@@ -2421,6 +2421,11 @@ void SimRendererWidget::removeWorldChunk(qint64 key) {
 
 void SimRendererWidget::clearWorldChunks() {
   clearChunkVegetation();
+  // Uploads queued so far belong to the set being cleared. Drop them now: a
+  // widget that is not painted never reaches flushChunkUpdates(), so they would
+  // wait there for good, one old world's meshes per world change. Uploads
+  // queued after this call are the new set and stay.
+  pendingChunkUploads_.clear();
   clearAllChunks_ = true;
   chunksDirty_ = true;
   update();
@@ -2634,7 +2639,8 @@ void SimRendererWidget::flushChunkUpdates() {
     eraseAllChunks(); // GL context current here -> safe to destroy
     pendingChunkRemovals_.clear();
     clearAllChunks_ = false;
-    // NOTE: pendingChunkUploads_ is intentionally NOT cleared — uploads queued
+    // NOTE: pendingChunkUploads_ is intentionally NOT cleared here —
+    // clearWorldChunks() already dropped the older ones; uploads queued
     // after a clear request (e.g. reconfiguring the streamer: clear old set,
     // then stream the new one) are the fresh set and must still apply.
   }
