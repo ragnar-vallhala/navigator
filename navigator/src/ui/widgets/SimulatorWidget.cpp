@@ -1469,6 +1469,14 @@ std::vector<QVector3D> SimulatorWidget::padsOf(const PadWorld &w, float cx,
   };
   vsim::procgen::HelipadParams hp;
   hp.radiusM = vsim::SimRendererWidget::kHelipadRadiusM;
+  // The footprint ring's samples come from one small window of the same
+  // surface, not one window each.
+  hp.footprintSurface = [f, w](float x, float y, float r) {
+    const auto win = std::make_shared<const vsim::procgen::SurfaceWindow>(
+        *f, x, y, r, w.chunkM, w.collisionRes);
+    return vsim::procgen::HeightFn(
+        [win](float a, float b) { return win->at(a, b); });
+  };
   hp.blocked = [f](float x, float y, float r) {
     return f->water().nearWater(f->heightSource(), x, y, r);
   };
