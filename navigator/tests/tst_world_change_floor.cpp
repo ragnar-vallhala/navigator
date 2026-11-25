@@ -40,6 +40,7 @@
 #include "procgen/TerrainField.h"
 #include "WorldEditorWidget.h"
 
+#include <QScopeGuard>
 #include <QApplication>
 #include <QCheckBox>
 #include <QSettings>
@@ -64,6 +65,8 @@ public:
   // Where the 3D view draws the vehicle (what the user sees and the camera
   // follows): the last snapshot while running, the parked pose when stopped.
   QVector3D shownPos() const { return w_.m_renderer->vehiclePos(); }
+  // Drop the streamed world (chunks, flora, caches) but keep the widget.
+  void releaseStreamedWorld() { w_.releaseStreamedWorld(); }
   // The camera: the free-roam eye when stopped in World mode, else the vehicle.
   QVector3D cameraPos() const { return w_.m_renderer->streamCenter(); }
   bool hasGround() const { return bool(w_.m_terrainHeightAt); }
@@ -386,6 +389,10 @@ private slots:
     auto *b = new SimulatorWidget();
     restored_.push_back(b);
     SimulatorWidgetTestAccess ab(*b);
+    // The widget stays alive to the end (above), its streamed world does not:
+    // each one holds about 1 GB under software GL, and a one-process run kept
+    // them all (12-13 GB over the suite, then the QtTest function timeout).
+    const auto release = qScopeGuard([&ab] { ab.releaseStreamedWorld(); });
     b->resize(1200, 800);
     b->show();
     QVERIFY(QTest::qWaitForWindowExposed(b));
@@ -455,6 +462,10 @@ private slots:
     auto *b = new SimulatorWidget();
     restored_.push_back(b);
     SimulatorWidgetTestAccess ab(*b);
+    // The widget stays alive to the end (above), its streamed world does not:
+    // each one holds about 1 GB under software GL, and a one-process run kept
+    // them all (12-13 GB over the suite, then the QtTest function timeout).
+    const auto release = qScopeGuard([&ab] { ab.releaseStreamedWorld(); });
     b->resize(1200, 800);
     b->show();
     QVERIFY(QTest::qWaitForWindowExposed(b));
