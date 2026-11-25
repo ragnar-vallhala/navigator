@@ -308,6 +308,7 @@ set(GCS_SITL_HEADERS
     src/vsim/WorldMeshBuilder.h
     src/vsim/ProceduralWorld.h
     src/vsim/ChunkStreamer.h
+    src/vsim/ChunkWorkQueue.h
     src/vsim/procgen/ProcgenTypes.h
     src/vsim/procgen/EdgeTrack.h
     src/vsim/procgen/Noise.h

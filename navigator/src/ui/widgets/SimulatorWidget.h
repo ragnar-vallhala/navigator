@@ -24,6 +24,7 @@
 #include <QElapsedTimer>
 #include "vsim/SimRendererWidget.h"
 #include "vsim/ChunkStreamer.h"
+#include "vsim/ChunkWorkQueue.h"
 #include "vsim/procgen/Flora.h"
 #include "vsim/procgen/Vegetation.h"
 #include "vsim/RcBridge.h"
@@ -106,6 +107,78 @@ struct BuiltChunk {
   vsim::procgen::ProcMesh mesh;     // fine, for rendering
   vsim::procgen::ProcMesh collMesh; // coarse, for the collision BVH
   std::vector<vsim::procgen::VegInstance> veg; // trees, shrubs, rocks, grass
+};
+
+// What a chunk-building worker needs besides the chunk itself. Published with
+// every hand-out, so workers pulling from the queue never touch widget state.
+struct ChunkJobCtx {
+  std::shared_ptr<const vsim::procgen::TerrainField> field;
+  float chunkM = 0;
+  int res = 0;
+  int collRes = 0;
+  std::shared_ptr<const vsim::procgen::VegParams> veg; // null: no vegetation
+  int gen = 0;
+};
+
+// Where finished chunks wait for the GUI thread, and the only thing a worker
+// shares with the widget. Workers push under the mutex and ask for ONE queued
+// wake-up; the widget closes it (under the same mutex) before it is destroyed,
+// so a worker can never wake a widget that is gone.
+struct ChunkSink {
+  struct Done {
+    int gen = 0;
+    qint64 key = 0;
+    BuiltChunk built;
+  };
+  void setCtx(std::shared_ptr<const ChunkJobCtx> c) {
+    std::lock_guard<std::mutex> g(m);
+    ctx_ = std::move(c);
+  }
+  std::shared_ptr<const ChunkJobCtx> ctx() const {
+    std::lock_guard<std::mutex> g(m);
+    return ctx_;
+  }
+  void setNotify(std::function<void()> f) {
+    std::lock_guard<std::mutex> g(m);
+    notify_ = std::move(f);
+  }
+  void post(Done &&d) {
+    std::lock_guard<std::mutex> g(m);
+    if (closed_)
+      return;
+    out_.push_back(std::move(d));
+    ++posted_;
+    if (!wakeQueued_ && notify_) {
+      wakeQueued_ = true;
+      notify_();
+    }
+  }
+  std::vector<Done> take() {
+    std::lock_guard<std::mutex> g(m);
+    wakeQueued_ = false;
+    std::vector<Done> v;
+    v.swap(out_);
+    return v;
+  }
+  void close() {
+    std::lock_guard<std::mutex> g(m);
+    closed_ = true;
+    notify_ = nullptr;
+    out_.clear();
+  }
+  int posted() const { // chunks finished by workers, ever (a test hook)
+    std::lock_guard<std::mutex> g(m);
+    return posted_;
+  }
+
+private:
+  mutable std::mutex m;
+  std::shared_ptr<const ChunkJobCtx> ctx_;
+  std::function<void()> notify_;
+  std::vector<Done> out_;
+  bool wakeQueued_ = false;
+  bool closed_ = false;
+  int posted_ = 0;
 };
 
 class SimulatorWidget : public QWidget {
@@ -446,6 +519,13 @@ private:
   std::unordered_map<qint64, std::shared_ptr<const vsim::procgen::ProcMesh>>
       m_chunkCache; // shared so the collision worker can read without a copy
   int m_streamGen = 0; // bumped on (re)configure to drop stale builds
+  // The chunks still to mesh and the workers that pull them (nearest first),
+  // so a GUI frame that takes seconds does not leave the mesh pool idle.
+  std::shared_ptr<vsim::ChunkWorkQueue> m_chunkQueue =
+      std::make_shared<vsim::ChunkWorkQueue>();
+  std::shared_ptr<ChunkSink> m_chunkSink = std::make_shared<ChunkSink>();
+  void drainChunkResults(); // finished chunks -> renderer (GUI thread)
+  void startChunkRunners(); // wake pulling workers while work is queued
   bool m_collisionPending = false; // a crossing asked for a collision rebuild
   int m_colCx = 0, m_colCy = 0;    // cell that collision should cover
   // Async collision ship: generation counter shared with the worker (bumped by

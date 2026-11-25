@@ -123,6 +123,12 @@ void uart2_to_widget_trampoline(void *user, const uint8_t *data, size_t n) {
 // ============================================================================
 
 SimulatorWidget::SimulatorWidget(QWidget *parent) : QWidget(parent) {
+  // Finished chunks wake the GUI thread through ONE queued call at a time; the
+  // sink is closed in the destructor before this widget goes away.
+  m_chunkSink->setNotify([this]() {
+    QMetaObject::invokeMethod(
+        this, [this]() { drainChunkResults(); }, Qt::QueuedConnection);
+  });
   QSettings settings;
   m_repoRoot =
       settings.value(kRepoRootSettingKey, defaultRepoRoot()).toString();
@@ -236,6 +242,9 @@ QString worldBlobPath() {
 } // namespace
 
 SimulatorWidget::~SimulatorWidget() {
+  // Workers pulling chunks outlive this call: cut their way back to us first.
+  m_chunkSink->close();
+  m_chunkQueue->reset(-1);
   // Detach the UART2 callback FIRST. The firmware threads outlive this
   // widget (vayu_sitl is one-shot — they run until the process exits), and
   // would otherwise invoke the trampoline on a half-destroyed widget:
@@ -936,6 +945,7 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
   }
   if (!endless && m_chunkStreamer.active()) {
     ++m_streamGen; // invalidate in-flight builds
+    m_chunkQueue->reset(m_streamGen);
     m_chunkStreamer.deactivate();
     m_renderer->setTerrainField(nullptr);
     if (m_downRenderer)
@@ -970,6 +980,7 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
     // New generation: invalidate any in-flight builds from a prior config and
     // drop the mesh + flora caches.
     ++m_streamGen;
+    m_chunkQueue->reset(m_streamGen);
     m_chunkCache.clear();
     m_floraCache.clear();
     m_floraShown.clear();
@@ -1194,31 +1205,25 @@ void SimulatorWidget::onStreamTick() {
         m_helipads, m_worldEditor->config().obstacles);
     vegParams = std::move(vp);
   }
-  for (const vsim::ChunkReq &req : p.toBuild) {
-    auto *watcher = new QFutureWatcher<BuiltChunk>(this);
-    connect(watcher, &QFutureWatcherBase::finished, this,
-            [this, watcher, req, gen]() {
-              if (gen == m_streamGen)
-                onChunkMeshed(req.key, watcher->result());
-              else
-                m_chunkStreamer.forget(
-                    req.key); // stale: config changed mid-build
-              watcher->deleteLater();
-            });
-    watcher->setFuture(QtConcurrent::run([field, req, chunkM, res, collRes,
-                                          vegParams]() {
-      BuiltChunk b;
-      if (vegParams)
-        b.veg = vsim::procgen::scatterVegetation(*field, req.cx, req.cy, chunkM,
-                                                 *vegParams);
-      b.mesh =
-          vsim::procgen::meshFieldChunk(*field, req.cx, req.cy, chunkM, res);
-      b.collMesh = collRes == res
-                       ? b.mesh // same tessellation: collide with what is drawn
-                       : vsim::procgen::meshFieldChunk(*field, req.cx, req.cy,
-                                                       chunkM, collRes);
-      return b;
-    }));
+  // Hand the whole missing set to the work queue: workers pull the nearest
+  // chunk themselves (ChunkWorkQueue), so the pool stays fed while this thread
+  // is busy painting. What drifted out of range while queued is dropped.
+  {
+    auto ctx = std::make_shared<ChunkJobCtx>();
+    ctx->field = field;
+    ctx->chunkM = chunkM;
+    ctx->res = res;
+    ctx->collRes = collRes;
+    ctx->veg = vegParams;
+    ctx->gen = gen;
+    m_chunkSink->setCtx(std::move(ctx));
+    m_chunkQueue->setWindow(m_chunkStreamer.centreCx(),
+                            m_chunkStreamer.centreCy(),
+                            m_chunkStreamer.config().renderRadius + 1);
+    m_chunkQueue->push(p.toBuild, gen);
+    for (qint64 key : m_chunkQueue->takeDropped())
+      m_chunkStreamer.forget(key);
+    startChunkRunners();
   }
 
   tryBuildCollision(); // in case the neighbourhood is already cached
@@ -1228,6 +1233,73 @@ void SimulatorWidget::onStreamTick() {
                  c.y() - m_lastHelipadCenter.y()) > 35.0f) {
     m_lastHelipadCenter = c;
     refreshHelipadsAsync(c.x(), c.y());
+  }
+}
+
+namespace {
+// The chunk runners get their own pool. On the global pool a runner that puts
+// itself back after every chunk keeps ~6 chunk jobs queued ahead of everything
+// else, and the collision ship and the pad search waited behind them (the world
+// change took 2-3x longer on two starved cores). Here they only compete for the
+// CPU, which the OS shares.
+QThreadPool *chunkPool() {
+  static QThreadPool *pool = [] {
+    auto *p = new QThreadPool; // lives to process exit
+    p->setMaxThreadCount(std::max(1, QThread::idealThreadCount()));
+    return p;
+  }();
+  return pool;
+}
+
+// One pulling worker: mesh the nearest queued chunk, hand it to the GUI, then
+// start another runner if work remains (on chunkPool, see above).
+void chunkRunner(std::shared_ptr<vsim::ChunkWorkQueue> q,
+                 std::shared_ptr<ChunkSink> sink, int maxRunners) {
+  const auto ctx = sink->ctx();
+  vsim::ChunkReq r;
+  if (ctx && q->pop(ctx->gen, r)) {
+    ChunkSink::Done d;
+    d.gen = ctx->gen;
+    d.key = r.key;
+    BuiltChunk &b = d.built;
+    if (ctx->veg)
+      b.veg = vsim::procgen::scatterVegetation(*ctx->field, r.cx, r.cy,
+                                               ctx->chunkM, *ctx->veg);
+    b.mesh = vsim::procgen::meshFieldChunk(*ctx->field, r.cx, r.cy, ctx->chunkM,
+                                           ctx->res);
+    b.collMesh = ctx->collRes == ctx->res
+                     ? b.mesh // same tessellation: collide with what is drawn
+                     : vsim::procgen::meshFieldChunk(*ctx->field, r.cx, r.cy,
+                                                     ctx->chunkM, ctx->collRes);
+    sink->post(std::move(d));
+  }
+  q->releaseRunner();
+  if (q->pending() > 0 && q->acquireRunner(maxRunners))
+    chunkPool()->start(
+        [q, sink, maxRunners]() { chunkRunner(q, sink, maxRunners); });
+}
+} // namespace
+
+void SimulatorWidget::startChunkRunners() {
+  const int maxRunners = std::max(1, m_chunkStreamer.config().maxInFlight);
+  if (!m_chunkSink->ctx())
+    return;
+  while (m_chunkQueue->pending() >
+             static_cast<std::size_t>(m_chunkQueue->runners()) &&
+         m_chunkQueue->acquireRunner(maxRunners)) {
+    auto q = m_chunkQueue;
+    auto sink = m_chunkSink;
+    chunkPool()->start(
+        [q, sink, maxRunners]() { chunkRunner(q, sink, maxRunners); });
+  }
+}
+
+void SimulatorWidget::drainChunkResults() {
+  for (ChunkSink::Done &d : m_chunkSink->take()) {
+    if (d.gen == m_streamGen)
+      onChunkMeshed(d.key, d.built);
+    else
+      m_chunkStreamer.forget(d.key); // stale: config changed mid-build
   }
 }
 
