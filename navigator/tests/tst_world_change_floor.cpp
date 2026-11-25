@@ -67,8 +67,12 @@ public:
   QVector3D cameraPos() const { return w_.m_renderer->streamCenter(); }
   bool hasGround() const { return bool(w_.m_terrainHeightAt); }
   float groundAt(float x, float y) const { return w_.m_terrainHeightAt(x, y); }
-  QVector3D lastPos() const { return w_.m_lastDronePos; }
-  QVector3D lastVel() const { return w_.m_lastDroneVel; }
+  // Where the vehicle is, as the product decides it (lift, stream arrival,
+  // collision cover): the engine's own newest pose, not the GUI's queued copy.
+  QVector3D lastPos() const { return w_.dronePos(); }
+  QVector3D lastVel() const { return w_.droneVel(); }
+  // The GUI's copy, which lags a busy GUI thread (what the HUD was last given).
+  QVector3D cachedPos() const { return w_.m_lastDronePos; }
   // Streaming state: meshed chunks cached around the vehicle, and the pads.
   size_t chunksCached() const { return w_.m_chunkCache.size(); }
   const std::vector<QVector3D> &pads() const { return w_.m_helipads; }
@@ -759,6 +763,58 @@ private slots:
   // Needs xcb and the engine module: it skips offscreen (plain ctest), and
   // CI's "tst_world_change_floor (xcb on Xvfb ...)" step runs it, one process
   // per case (about a minute).
+  // The pose the product decides on must not wait for the GUI thread. The GUI's
+  // copy is a queued event, so a render or a terrain build ahead of it shows the
+  // vehicle where it was seconds ago (1-5 s measured on a loaded CI runner);
+  // lift, stream arrival and collision cover must use the engine's newest pose.
+  void decisionsSeeTheEnginesPoseWhileTheGuiThreadIsBlocked() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    if (!SitlModule::instance().available())
+      QSKIP("no engine module (set VAYU_SITL_MODULE)");
+    a_->changeWorld([](vsim::WorldConfig &c) {
+      QVERIFY(vsim::applyWorldPreset(c, QStringLiteral("hills"), 5));
+    });
+    if (!a_->running()) {
+      a_->start();
+      QVERIFY(a_->running());
+    }
+    QVERIFY(waitFor(
+        [&] {
+          return a_->logText().contains(
+                     QStringLiteral("world mesh \u2192 daemon")) &&
+                 !a_->shipBusy() && altAbove(*a_) > 0.0f &&
+                 altAbove(*a_) < 3.0f;
+        },
+        30000));
+    pump(1500);
+    // Park on a pad, then move 25 m along x inside the collision window already
+    // in force (so the engine takes the reset at once), and block the GUI thread.
+    const std::vector<QVector3D> pads = a_->pads();
+    QVERIFY2(pads.size() > 1, "the world has no pads");
+    const QVector3D pad = pads[1];
+    const float kDeckM = vsim::SimRendererWidget::kHelipadDeckM;
+    const float deck = -pad.z() - kDeckM;
+    a_->placeAt(pad.x(), pad.y(), deck - 1.0f);
+    QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 30000));
+    pump(2500);
+    const QVector3D before = a_->cachedPos();
+    const float nx = pad.x() + 25.0f;
+    a_->placeAt(nx, pad.y(), deck - 1.0f);
+    QVERIFY2(!a_->shipBusy(), "the move needed a collision ship; pick a nearer spot");
+    // No event processing: the GUI thread is "busy" for two seconds.
+    QThread::msleep(2000);
+    const QVector3D fresh = a_->lastPos();
+    const QVector3D cached = a_->cachedPos();
+    QVERIFY2(std::abs(cached.x() - before.x()) < 1.0f,
+             "the GUI copy moved while its thread was blocked: the test is not "
+             "exercising a lagging copy");
+    QVERIFY2(std::hypot(fresh.x() - nx, fresh.y() - pad.y()) < 3.0f,
+             qPrintable(QStringLiteral("the decision pose is (%1, %2), not at the "
+                                       "new spot (%3, %4)")
+                            .arg(fresh.x()).arg(fresh.y()).arg(nx).arg(pad.y())));
+  }
+
   void dropOnEveryPadRestsOnDeck() {
     if (!gl_)
       QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");

@@ -752,8 +752,31 @@ void SimulatorWidget::notifyPidGainsSent() {
   updateCustomWarning(false);
 }
 
+// The newest pose the engine has published. While the engine runs this reads
+// SimWorker::snapshot() (a mutex-guarded latch the stepper refreshes ~62 times a
+// second), so it is as fresh as the engine however long the GUI thread has been
+// busy. With no engine, or before its first pose, the GUI's parked/cached copy
+// is the truth.
+QVector3D SimulatorWidget::dronePos() const {
+  if (m_sim && m_sim->isRunning()) {
+    const vsim::SimSnapshot s = m_sim->snapshot();
+    if (s.tick_count > 0)
+      return s.pos_w;
+  }
+  return m_lastDronePos;
+}
+
+QVector3D SimulatorWidget::droneVel() const {
+  if (m_sim && m_sim->isRunning()) {
+    const vsim::SimSnapshot s = m_sim->snapshot();
+    if (s.tick_count > 0)
+      return s.vel_w;
+  }
+  return m_lastDroneVel;
+}
+
 void SimulatorWidget::updateHud(const vsim::SimSnapshot &s) {
-  m_lastDronePos = s.pos_w; // tracked for the lift-onto-terrain logic
+  m_lastDronePos = s.pos_w; // the GUI's lagging copy; decisions use dronePos()
   m_lastDroneVel = s.vel_w;
   // Log the crash once, on the edge: the HUD pill shows it while it lasts, the
   // log keeps it afterwards. A reset clears the engine's latch, which re-arms
@@ -1098,14 +1121,19 @@ void SimulatorWidget::onStreamTick() {
   if (!m_chunkStreamer.active() || !m_renderer)
     return;
   QVector3D c = m_renderer->streamCenter();
+  // The renderer's centre is the pose it last DREW, which lags a busy GUI
+  // thread; the collision window must follow where the vehicle is now, or it
+  // stays behind and the vehicle falls out of it. (The free-fly camera has no
+  // physics body: its own position is the centre.)
+  if (m_sim && !m_renderer->freeFly())
+    c = dronePos();
   // The collision window leads the drone along its velocity (not when the
   // free-fly camera is the centre: that has no physics body).
-  QVector3D v = (m_sim && !m_renderer->freeFly()) ? m_lastDroneVel
-                                                  : QVector3D();
+  QVector3D v = (m_sim && !m_renderer->freeFly()) ? droneVel() : QVector3D();
   if (m_streamHint) { // a placement in flight: stream where the vehicle goes
-    const bool arrived = std::hypot(m_lastDronePos.x() - m_streamHint->x(),
-                                    m_lastDronePos.y() - m_streamHint->y()) <
-                         30.0;
+    const QVector3D here = dronePos();
+    const bool arrived = std::hypot(here.x() - m_streamHint->x(),
+                                    here.y() - m_streamHint->y()) < 30.0;
     if (arrived || !m_sim || m_streamHintAge.elapsed() > 15000) {
       m_streamHint.reset();
     } else {
@@ -1559,8 +1587,9 @@ bool SimulatorWidget::spawnResetWaitsForCollision() const {
 void SimulatorWidget::liftDroneToSurface() {
   if (!m_sim || !m_terrainHeightAt)
     return;
-  const float x = m_lastDronePos.x();
-  const float y = m_lastDronePos.y();
+  const QVector3D here = dronePos();
+  const float x = here.x();
+  const float y = here.y();
   // Terrain is a single-valued height field, so the analytic height under the
   // drone is exactly where a ray cast straight down from far above would hit.
   const float h = m_terrainHeightAt(x, y); // surface elevation [m] above z=0
@@ -1572,10 +1601,9 @@ void SimulatorWidget::liftDroneToSurface() {
   // has sunk into the terrain. A drone resting on or flying above the surface is
   // left alone (no yanking a landed or airborne drone).
   const float buriedEps = 0.3f;
-  if (m_lastDronePos.z() <= surfaceZ + buriedEps) {
+  if (here.z() <= surfaceZ + buriedEps) {
     qInfo("lift skipped: drone z=%.2f is not below the surface z=%.2f",
-          static_cast<double>(m_lastDronePos.z()),
-          static_cast<double>(surfaceZ));
+          static_cast<double>(here.z()), static_cast<double>(surfaceZ));
     return;
   }
 
@@ -1583,7 +1611,7 @@ void SimulatorWidget::liftDroneToSurface() {
   // settles instead of spawning embedded in a slope (which wedges it tilted).
   const float dropClearance = 1.5f;
   qInfo("lift: re-dropping drone from z=%.2f to surface z=%.2f",
-        static_cast<double>(m_lastDronePos.z()), static_cast<double>(surfaceZ));
+        static_cast<double>(here.z()), static_cast<double>(surfaceZ));
   m_sim->sendResetPose(x, y, surfaceZ - dropClearance);
   appendLog("world",
             tr("re-dropped drone above terrain (surface %1 m)")
@@ -1763,8 +1791,8 @@ void SimulatorWidget::onShipFinished(const WorldShipResult &r, int gen,
         m_spawnResetPending = false;
         sendSpawnReset();
       } else if (lift && (!m_shipRunningCover ||
-                   m_shipRunningCover->contains(m_lastDronePos.x(),
-                                                m_lastDronePos.y())))
+                   m_shipRunningCover->contains(dronePos().x(),
+                                                dronePos().y())))
         liftDroneToSurface();
       if (m_heldPose && collisionCovers(m_heldPose->x, m_heldPose->y))
         releaseHeldPose("collision shipped", false);

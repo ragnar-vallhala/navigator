@@ -472,8 +472,16 @@ private:
   // Raw field height for bulk, display-only sampling (minimap, slope screen);
   // m_terrainHeightAt is the exact meshed surface and costs ~0.3 ms a call.
   std::function<float(float, float)> m_terrainRawHeightAt;
+  // The GUI's copy of the last pose it was handed (updateHud). It is for
+  // drawing and it LAGS: the pose is a queued event, so a GUI thread that is
+  // busy (a render, a terrain build, software GL on a loaded PC) shows it
+  // seconds late. Decisions about where the vehicle is (lift, stream arrival,
+  // collision cover) must use dronePos()/droneVel(), which read the engine's
+  // own newest pose; this copy is only their fallback when no engine runs.
   QVector3D m_lastDronePos{0, 0, 0};
   QVector3D m_lastDroneVel; // NED [m/s]; feeds the collision look-ahead
+  QVector3D dronePos() const;
+  QVector3D droneVel() const;
   bool m_crashLogged = false; // the crash line is logged once per crash
   void liftDroneToSurface(); // re-drop the drone above the surface if buried
 
