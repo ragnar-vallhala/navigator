@@ -60,7 +60,7 @@ env:
   # intended, an unverifiable binary is not bundled.
   NAV_VERSION: '1.4.0'
   # Firmware the SITL module comes from: keep equal to VAYU_FW_VERSION in ci.yml.
-  VAYU_FW_VERSION: v0.2.1
+  VAYU_FW_VERSION: v0.3.0
 
 jobs:
   meta:
@@ -148,7 +148,11 @@ jobs:
           tar xzf "$ASSET"
           rm -f "$ASSET"
           echo "engine build id: $(cat vayu-sitl-sdk/BUILD_ID)"
-          grep -q "^${VAYU_FW_VERSION} " vayu-sitl-sdk/BUILD_ID \
+          # v0.3.0 is stamped "firmware-v0.3.0" (nearest tag; the firmware tag
+          # is on the same commit): accept the tag with or without that
+          # prefix, nothing looser. Same check as the qt-build action.
+          VER_RE="${VAYU_FW_VERSION//./\\.}"
+          grep -Eq "^(firmware-)?${VER_RE} " vayu-sitl-sdk/BUILD_ID \
             || { echo "SDK is not ${VAYU_FW_VERSION}"; exit 1; }
           test -f vayu-sitl-sdk/include/vayu_sitl_abi.h
           test -f vayu-sitl-sdk/lib/libvayu_sitl.so

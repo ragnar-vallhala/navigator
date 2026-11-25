@@ -146,6 +146,12 @@ navigator_test(tst_flight_event_log
     tst_flight_event_log.cpp ${SRC}/vsim/FlightEventLog.cpp)
 target_include_directories(tst_flight_event_log PRIVATE ${SRC}/vsim)
 
+# ---- crash status: pose read zeroes first, banner text (pose proto v5) -----
+if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vsim_proto.h")
+  navigator_test(tst_crash_status tst_crash_status.cpp)
+  target_include_directories(tst_crash_status PRIVATE ${SRC}/vsim ${VAYU_SITL_SDK})
+endif()
+
 # ---- SitlModule load-failure text (needs only the ABI header) ---------------
 if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
   navigator_test(tst_sitl_module_error
@@ -462,6 +468,25 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
   set_tests_properties(tst_sitl_engine PROPERTIES
       ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
       TIMEOUT 60)
+endif()
+
+# ---- Crash path end to end against the real module (SITL builds only) ------
+# SimWorker sends the crash limit, a 20 m fall reports CRASHED in the pose tail,
+# a reset clears it. Skips without a module, like tst_sitl_engine.
+if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vsim_proto.h")
+  navigator_test(tst_sitl_crash
+      tst_sitl_crash.cpp
+      ${SRC}/vsim/SitlModule.cpp ${SRC}/vsim/SitlModule.h
+      ${SRC}/vsim/VfsDir.cpp ${SRC}/vsim/VfsDir.h
+      ${SRC}/vsim/SimWorker.cpp ${SRC}/vsim/SimWorker.h)
+  target_include_directories(tst_sitl_crash PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${SRC}/vsim ${VAYU_SITL_SDK})
+  target_link_libraries(tst_sitl_crash PRIVATE navlink_codec)
+  if(WIN32)
+    target_link_libraries(tst_sitl_crash PRIVATE winmm)
+  endif()
+  set_tests_properties(tst_sitl_crash PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=offscreen;VAYU_SITL_MODULE=${CMAKE_BINARY_DIR}/libvayu_sitl${CMAKE_SHARED_MODULE_SUFFIX}"
+      TIMEOUT 90)
 endif()
 
 # ---- Airframe presets: data checks (no engine needed) ---------------------

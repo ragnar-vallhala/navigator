@@ -20,6 +20,7 @@
 #include "GlAvailability.h"
 #include "SimPanelsCommon.h"
 #include "../../autotune/BackendLocator.h"
+#include "../../vsim/CrashStatus.h"
 #include "../../vsim/FlightEventLog.h"
 #include "../../vsim/ThreadRetire.h"
 #include "../../vsim/procgen/Helipads.h"
@@ -754,6 +755,13 @@ void SimulatorWidget::notifyPidGainsSent() {
 void SimulatorWidget::updateHud(const vsim::SimSnapshot &s) {
   m_lastDronePos = s.pos_w; // tracked for the lift-onto-terrain logic
   m_lastDroneVel = s.vel_w;
+  // Log the crash once, on the edge: the HUD pill shows it while it lasts, the
+  // log keeps it afterwards. A reset clears the engine's latch, which re-arms
+  // this for the next crash.
+  const bool crashed = vsim::crash::isCrashed(s.crash_flags);
+  if (crashed && !m_crashLogged)
+    appendLog("sim", vsim::crash::bannerText(s.crash_flags, s.peak_impact));
+  m_crashLogged = crashed;
   if (m_hud)
     m_hud->setSnapshot(s);
   if (m_horizon) {

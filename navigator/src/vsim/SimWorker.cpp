@@ -16,6 +16,7 @@
  */
 #include "SimWorker.h"
 
+#include "CrashStatus.h"
 #include "SitlModule.h" // runtime-loaded SITL engine (boot/run_step/get_pose/config)
 #include "vsim_proto.h"
 
@@ -310,6 +311,13 @@ void SimWorker::runEngine() {
                  "; RC will not reach the firmware until the app restarts");
   }
   sitl()->run_begin();
+  // Hard-contact limit: the engine's own default is off, so without this a
+  // fall costs nothing. Sent here on the stepper thread, every start (the
+  // module outlives Stop/Re-Start and keeps the value across a reset).
+  {
+    const vsim_ctl_crash_limit_t lim{vsim::crash::kLimitMps};
+    sitl()->ctl(VSIM_CTL_SET_CRASH_LIMIT, &lim, sizeof lim);
+  }
   emit logLine("rtos engine: online");
   emit online();
 
@@ -328,7 +336,13 @@ void SimWorker::runEngine() {
     }
     sitl()->run_step();    // one 1 ms step, wall-clock paced
     if ((++n & 15) == 0) { // ~62.5 Hz to the renderer
-      sitl()->get_pose(&pose);
+      // Zeroed first: an older module writes a shorter frame and would
+      // otherwise leave the previous call's crash bytes in the tail.
+      vsim::crash::readPose(
+          [](vsim_pose_frame_t *out, size_t size) {
+            return sitl()->get_pose(out, size);
+          },
+          pose);
       emitFromFrame(&pose);
     }
   }
@@ -357,6 +371,8 @@ void SimWorker::emitFromFrame(const void *bytes) {
   snap.batt_current = frame->batt_current;
   snap.batt_mah_used = frame->batt_mah_used;
   snap.batt_soc = frame->batt_soc;
+  snap.crash_flags = frame->crash_flags;
+  snap.peak_impact = frame->peak_impact;
   {
     std::lock_guard<std::mutex> lk(snap_mtx_);
     last_snap_ = snap;
@@ -451,8 +467,11 @@ void SimWorker::runAttach() {
       const size_t need = sizeof(vsim_hdr_t) + hdr->payload_bytes;
       if (pos + need > buf.size())
         break; // incomplete tail
-      if (hdr->version == VSIM_PROTO_VERSION && hdr->type == VSIM_FRAME_POSE &&
-          need == sizeof(vsim_pose_frame_t)) {
+      // Append-only frame: a newer sim sends a longer tail we ignore, so accept
+      // any version >= ours whose payload holds every field we read. (A frame
+      // from an older sim lacks the tail and is skipped, not misread.)
+      if (hdr->version >= VSIM_PROTO_VERSION && hdr->type == VSIM_FRAME_POSE &&
+          need >= sizeof(vsim_pose_frame_t)) {
         last_good = buf.data() + pos;
       }
       pos += need;

@@ -21,9 +21,12 @@ from vayu_headless.transport import vsim
 
 
 def test_struct_sizes_match_proto():
-    # vsim_hdr_t == 16, pose body == 128 (vsim_proto.h static_asserts).
+    # vsim_hdr_t == 16, pose body == 140 at proto v5 (vsim_proto.h
+    # static_asserts); 128 is the oldest layout parse_pose still decodes.
     assert vsim.HDR.size == 16
-    assert vsim.POSE.size == 128
+    assert vsim.POSE.size == 140
+    assert vsim.POSE_V3.size == 128
+    assert vsim.VERSION == 5
 
 
 def test_ctl_frame_shape():
@@ -83,7 +86,8 @@ def test_parse_pose_roundtrip():
         0, 0, 0, 0,                 # (4f)
         0.0, 0.0, 0.0,              # wind
         0, 0, 0, 0, 0, 0)           # trailing 6f
-    frame = vsim.vhdr(vsim.FRAME_POSE, vsim.POSE.size) + body
+    # A v3 body (128 B): the oldest layout parse_pose still decodes.
+    frame = vsim.vhdr(vsim.FRAME_POSE, len(body)) + body
     buf = bytearray(frame)
     truth = vsim.parse_pose(buf)
     assert truth is not None
@@ -99,3 +103,63 @@ def test_parse_pose_partial_frame_kept():
     buf = bytearray(frame[:20])       # header + a few body bytes only
     assert vsim.parse_pose(buf) is None
     assert len(buf) == 20             # incomplete frame retained for next read
+
+
+def _pose_body(crash_flags=None, peak=None, with_v4=True):
+    base = struct.pack(
+        "<II3f4f3f3f4f4f3fffffff",
+        0, 0, 1.0, 2.0, -3.0, 1.0, 0.0, 0.0, 0.0, 0.1, 0.2, 0.3,
+        0.0, 0.0, 0.0, 10, 20, 30, 40, 0, 0, 0, 0, 0.0, 0.0, 0.0,
+        0, 0, 0, 0, 0, 0)
+    if with_v4:
+        base += struct.pack("<f", 1.0)          # air_density_ratio
+    if crash_flags is not None:
+        base += struct.pack("<If", crash_flags, peak)
+    return base
+
+
+def test_parse_pose_reads_the_crash_tail():
+    body = _pose_body(vsim.POSE_CRASHED, 9.5)
+    assert len(body) == vsim.POSE.size
+    truth = vsim.parse_pose(bytearray(vsim.vhdr(vsim.FRAME_POSE, len(body)) + body))
+    assert truth["crashed"] is True
+    assert truth["crash_flags"] == vsim.POSE_CRASHED
+    assert truth["peak_impact"] == pytest.approx(9.5)
+    assert truth["pos"] == pytest.approx((1.0, 2.0, -3.0))   # the prefix still decodes
+
+
+def test_parse_pose_hard_contact_without_crash():
+    body = _pose_body(0, 7.5)       # a peak, but under the limit: not a crash
+    truth = vsim.parse_pose(bytearray(vsim.vhdr(vsim.FRAME_POSE, len(body)) + body))
+    assert truth["crashed"] is False
+    assert truth["peak_impact"] == pytest.approx(7.5)
+
+
+@pytest.mark.parametrize("with_v4", [False, True])
+def test_parse_pose_older_sim_has_no_crash_tail(with_v4):
+    # A v3 (128 B) or v4 (132 B) sim sends no crash tail: read as not crashed.
+    body = _pose_body(with_v4=with_v4)
+    assert len(body) == (132 if with_v4 else 128)
+    truth = vsim.parse_pose(bytearray(vsim.vhdr(vsim.FRAME_POSE, len(body)) + body))
+    assert truth["crashed"] is False
+    assert truth["crash_flags"] == 0 and truth["peak_impact"] == 0.0
+    assert truth["quat"] == pytest.approx((1.0, 0.0, 0.0, 0.0))
+
+
+def test_parse_pose_newer_sim_longer_tail_is_ignored():
+    # Append-only: a later version adds fields after ours; the known prefix
+    # (including the crash fields) must still decode.
+    body = _pose_body(vsim.POSE_CRASHED, 12.0) + struct.pack("<II", 7, 8)
+    truth = vsim.parse_pose(bytearray(vsim.vhdr(vsim.FRAME_POSE, len(body)) + body))
+    assert truth["crashed"] is True and truth["peak_impact"] == pytest.approx(12.0)
+
+
+def test_set_crash_limit_frame():
+    frame = vsim.set_crash_limit(8.0)
+    magic, ver, typ, plen, _ = vsim.HDR.unpack_from(frame, 0)
+    sub, _res = struct.unpack_from("<II", frame, vsim.HDR.size)
+    (limit,) = struct.unpack_from("<f", frame, vsim.HDR.size + 8)
+    assert (magic, ver) == (vsim.MAGIC, vsim.VERSION)
+    assert sub == vsim.CTL_SET_CRASH_LIMIT == 20
+    assert limit == pytest.approx(8.0)
+    assert len(frame) == vsim.HDR.size + 8 + 256

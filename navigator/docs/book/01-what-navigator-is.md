@@ -37,7 +37,7 @@ Pilots and bench engineers who need to connect to a board, watch it, calibrate i
 
 ## What it is not
 
-- It is not the firmware. Nothing in this repository builds firmware. The simulator needs a firmware release (the README names the vayu releases and says CI builds against v0.2.1). Without it, Navigator still builds and runs and reports the simulator as unavailable.
+- It is not the firmware. Nothing in this repository builds firmware. The simulator needs a firmware release (the README names the vayu releases and says CI builds against v0.3.0). Without it, Navigator still builds and runs and reports the simulator as unavailable.
 - It is not a mission planner or a map. `requirements.md` lists mission upload, a parameter editor, and a map page as missing; a whole-word, case-insensitive search of `navigator/src` for "mission" and "waypoint" finds only one code comment mentioning another product's UI style. Gap: that requirements file is a living document with parts that look older than the code (for example, it says arming is blocked on firmware, while the code builds arm and disarm frames), so treat its status columns with care.
 - It is not a protocol library. NavLink is a separate repository.
 
