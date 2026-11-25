@@ -88,6 +88,17 @@ public:
   void shipDelay(int ms) { w_.m_testShipDelayMs = ms; }
   // Run `f` wherever the collision's pad search runs (it must not be the GUI thread).
   void onPadSearch(std::function<void()> f) { w_.m_testOnPadSearch = std::move(f); }
+  // Recentre the collision window on cell (cx, cy), as the streamer does when
+  // the vehicle crosses into it (the chunks around it must already be cached).
+  void recentre(int cx, int cy) {
+    w_.m_collisionPending = true;
+    w_.m_colCx = cx;
+    w_.m_colCy = cy;
+    w_.tryBuildCollision();
+  }
+  bool shipRunning() const { return w_.m_shipWatcher != nullptr; }
+  bool shipQueued() const { return w_.m_shipPending.has_value(); }
+  bool collisionPending() const { return w_.m_collisionPending; }
   bool running() const { return w_.m_sim != nullptr; }
   QString logText() const { return w_.m_log->toPlainText(); }
   void clearLog() { w_.m_log->clear(); }
@@ -869,6 +880,51 @@ private slots:
     QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 30000));
     a_->onPadSearch({});
     QCOMPARE(onGui.load(), 0);
+  }
+
+  // On a slow machine the collision window moves again before any build lands.
+  // Newest-wins then starved every build and the engine kept collision that did
+  // not reach the vehicle. A build that already covers the vehicle must land
+  // even when a newer one is queued behind it.
+  void aRecentreShipThatCoversTheVehicleStillLands() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    if (!SitlModule::instance().available())
+      QSKIP("no engine module (set VAYU_SITL_MODULE)");
+    a_->changeWorld([](vsim::WorldConfig &c) {
+      QVERIFY(vsim::applyWorldPreset(c, QStringLiteral("hills"), 5));
+    });
+    if (!a_->running()) {
+      a_->start();
+      QVERIFY(a_->running());
+    }
+    const QString landed = QStringLiteral("world mesh \u2192 daemon");
+    // The first collision is in the engine, the chunks around the vehicle are
+    // cached (a recentre needs them) and the vehicle is on the ground.
+    QVERIFY(waitFor(
+        [&] {
+          return a_->logText().contains(landed) && !a_->shipBusy() &&
+                 a_->chunksCached() >= 25 && altAbove(*a_) > 0.0f;
+        },
+        60000));
+    a_->clearLog();
+    a_->shipDelay(1500); // a build in flight long enough to be superseded
+    // The window around the vehicle's own cell: it covers the vehicle.
+    a_->recentre(0, 0);
+    QVERIFY2(a_->shipRunning(),
+             qPrintable(QStringLiteral("pending=%1 cached=%2 pos=(%3,%4)")
+                            .arg(a_->collisionPending())
+                            .arg(a_->chunksCached())
+                            .arg(a_->lastPos().x())
+                            .arg(a_->lastPos().y())));
+    // The window moves on while that build is running (the next cell over still
+    // holds the vehicle's cell, but the engine has not been given it yet).
+    a_->recentre(1, 0);
+    QVERIFY(a_->shipQueued());
+    QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 30000));
+    a_->shipDelay(0);
+    // Both landed: the covering one was not dropped for the newer one.
+    QCOMPARE(a_->logText().count(landed), 2);
   }
 
   void dropOnEveryPadRestsOnDeck() {

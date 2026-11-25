@@ -1388,6 +1388,7 @@ void SimulatorWidget::tryBuildCollision() {
   req.doubleSided = m_worldEditor->config().worldMeshDoubleSided;
   req.lift = true;
   req.coverage = window;
+  req.recentre = true;
   enqueueShip(std::move(req));
 }
 
@@ -1698,7 +1699,18 @@ void SimulatorWidget::sendWorldMeshToSim(vsim::LoadedMesh m, bool liftAfter,
 void SimulatorWidget::enqueueShip(WorldShipReq req) {
   // A newer request supersedes everything older: bump the generation so a
   // running build aborts at its next checkpoint and its result is discarded.
-  m_shipGen->fetch_add(1);
+  // The exception is a recentre arriving while a recentre build that already
+  // covers the vehicle is running: on a slow machine (or a busy GUI thread)
+  // the window moves again before any build lands, so newest-wins starves
+  // them all and the vehicle sits over terrain the engine does not have. The
+  // running one finishes and lands; the newer one starts right after it.
+  // (cancelWorldShip still invalidates it, so a world change drops it.)
+  const bool finishRunning =
+      req.recentre && m_shipWatcher && m_shipRunningRecentre &&
+      m_shipRunningCover &&
+      m_shipRunningCover->contains(dronePos().x(), dronePos().y());
+  if (!finishRunning)
+    m_shipGen->fetch_add(1);
   if (m_shipWatcher) { // one worker at a time; the latest request waits its turn
     if (m_shipPending)
       req.lift = req.lift || m_shipPending->lift;
@@ -1718,6 +1730,7 @@ void SimulatorWidget::startShipJob(WorldShipReq req) {
   m_shipRunningTmp = tmp;
   m_shipRunningLift = req.lift;
   m_shipRunningCover = req.coverage;
+  m_shipRunningRecentre = req.recentre;
 
   auto *watcher = new QFutureWatcher<WorldShipResult>(this);
   m_shipWatcher = watcher;

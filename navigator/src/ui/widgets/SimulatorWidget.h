@@ -293,6 +293,10 @@ private:
     bool doubleSided = false;
     bool lift = false;
     std::optional<QRectF> coverage;
+    // A recentre of the streamed terrain (same world, the window moved), as
+    // opposed to a new mesh or a world change: such a request may let a running
+    // recentre ship finish when that one already covers the vehicle.
+    bool recentre = false;
   };
   struct WorldShipResult {
     bool ok = false;
@@ -451,6 +455,7 @@ private:
   QFutureWatcher<WorldShipResult> *m_shipWatcher = nullptr;
   QString m_shipRunningTmp;
   bool m_shipRunningLift = false;
+  bool m_shipRunningRecentre = false;
   std::optional<QRectF> m_shipRunningCover;
   std::optional<WorldShipReq> m_shipPending;
   bool m_worldRespawnNoted = false; // in-flight respawn already logged
