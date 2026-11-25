@@ -801,6 +801,13 @@ private slots:
     a_->placeAt(pad.x(), pad.y(), deck - 1.0f);
     QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 30000));
     pump(2500);
+    // The first wait can pass before the build for this move has started (it
+    // starts on the next stream tick), and a slow runner is still building
+    // after the pump: wait for it again, then let a following tick confirm
+    // that nothing else starts.
+    QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 30000));
+    pump(500);
+    QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 30000));
     const QVector3D before = a_->cachedPos();
     const float nx = pad.x() + 25.0f;
     a_->placeAt(nx, pad.y(), deck - 1.0f);
