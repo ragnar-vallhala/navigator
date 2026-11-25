@@ -10,7 +10,7 @@ Navigator links no firmware. It compiles against the SDK headers (`vayu_sitl_abi
 
 ## What the firmware release provides
 
-The README section "The simulator needs a firmware release" says nothing here builds firmware. The `vayu` repository ships a release asset (CI builds against v0.2.1; a rolling `sitl-sdk-latest` also exists). The README example downloads `vayu-sitl-sdk-v0.2.1-linux-x86_64.tar.gz`, which unpacks to `./vayu-sitl-sdk/`. The repository is private, so the download needs a GitHub login with access. The README names two runtime files:
+The README section "The simulator needs a firmware release" says nothing here builds firmware. The `vayu` repository ships a release asset (CI builds against v0.3.0; a rolling `sitl-sdk-latest` also exists). The README example downloads `vayu-sitl-sdk-v0.3.0-linux-x86_64.tar.gz`, which unpacks to `./vayu-sitl-sdk/`. The repository is private, so the download needs a GitHub login with access. The README names two runtime files:
 
 - `lib/libvayu_sitl.so`, loaded by the app.
 - `bin/vayu_sitl_rtos`, used by the headless SDK and the autotuner (Chapter 8), found through `$VAYU_SITL_RTOS_BIN`.

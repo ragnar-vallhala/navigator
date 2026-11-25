@@ -35,12 +35,12 @@ Even with `NAVIGATOR_SITL=ON`, a missing SDK is only a CMake warning ("SITL feat
 
 ## The simulator needs a firmware release
 
-Navigator contains no firmware and no physics. The simulator is a shared library, `libvayu_sitl`, built in the separate `vayu` repository and loaded at run time. Navigator compiles against two of its headers. The root `README.md` gives the fetch command; CI pins v0.2.1.
+Navigator contains no firmware and no physics. The simulator is a shared library, `libvayu_sitl`, built in the separate `vayu` repository and loaded at run time. Navigator compiles against two of its headers. The root `README.md` gives the fetch command; CI pins v0.3.0.
 
 ```
-gh release download v0.2.1 --repo ragnar-vallhala/vayu \
-    --pattern 'vayu-sitl-sdk-v0.2.1-linux-x86_64.tar.gz'
-tar xzf vayu-sitl-sdk-v0.2.1-linux-x86_64.tar.gz
+gh release download v0.3.0 --repo ragnar-vallhala/vayu \
+    --pattern 'vayu-sitl-sdk-v0.3.0-linux-x86_64.tar.gz'
+tar xzf vayu-sitl-sdk-v0.3.0-linux-x86_64.tar.gz
 ```
 
 The `vayu` repository is private, so the download needs a GitHub login with access. At run time the module is searched for in this order: `$VAYU_SITL_MODULE`, beside the executable, `../lib` from the executable, then sibling `build_sitl_rtos` and `build_sitl` directories. A module with a different ABI version is refused at load.
@@ -101,6 +101,6 @@ Gap: nothing describes an install step (`cmake --install`) or packaging; none is
 - `NAVIGATOR_FETCH_ADS` default ON -> navigator/tools/workspace_mock/CMakeLists.txt
 - 44 test targets, with conditions -> navigator/tests/CMakeLists.txt
 - Module search order -> navigator/src/vsim/SitlModule.cpp, comment in navigator/CMakeLists.txt
-- CI jobs, pinned v0.2.1 -> .github/workflows/ci.yml
+- CI jobs, pinned v0.3.0 -> .github/workflows/ci.yml
 - Commit rules -> tools/dev/lint_commits.sh
 - Windows job uses `-DNAVIGATOR_SITL=OFF` -> .github/workflows/ci.yml
