@@ -943,27 +943,8 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
     if (m_downRenderer)
       m_downRenderer->setGpuGrassActive(false);
   }
-  if (!endless && m_chunkStreamer.active()) {
-    ++m_streamGen; // invalidate in-flight builds
-    m_chunkQueue->reset(m_streamGen);
-    m_chunkStreamer.deactivate();
-    m_renderer->setTerrainField(nullptr);
-    if (m_downRenderer)
-      m_downRenderer->setTerrainField(nullptr);
-    m_chunkCache.clear();
-    m_floraCache.clear();
-    m_floraShown.clear();
-    m_floraInflight.clear();
-    m_collisionPending = false;
-    if (m_streamTimer)
-      m_streamTimer->stop();
-    m_renderer->clearWorldChunks();
-    m_renderer->clearChunkFlora();
-    if (m_downRenderer) {
-      m_downRenderer->clearWorldChunks();
-      m_downRenderer->clearChunkFlora();
-    }
-  }
+  if (!endless && m_chunkStreamer.active())
+    releaseStreamedWorld();
 
   // Endless streaming biome: drive the chunk streamer instead of one mesh.
   if (endless) {
@@ -1291,6 +1272,31 @@ void SimulatorWidget::startChunkRunners() {
     auto sink = m_chunkSink;
     chunkPool()->start(
         [q, sink, maxRunners]() { chunkRunner(q, sink, maxRunners); });
+  }
+}
+
+// Stop the streamer and drop everything it loaded: the renderers' chunks and
+// flora and the widget's caches. In-flight builds are invalidated by the new
+// generation. The widget itself stays usable.
+void SimulatorWidget::releaseStreamedWorld() {
+  ++m_streamGen; // invalidate in-flight builds
+  m_chunkQueue->reset(m_streamGen);
+  m_chunkStreamer.deactivate();
+  m_renderer->setTerrainField(nullptr);
+  if (m_downRenderer)
+    m_downRenderer->setTerrainField(nullptr);
+  m_chunkCache.clear();
+  m_floraCache.clear();
+  m_floraShown.clear();
+  m_floraInflight.clear();
+  m_collisionPending = false;
+  if (m_streamTimer)
+    m_streamTimer->stop();
+  m_renderer->clearWorldChunks();
+  m_renderer->clearChunkFlora();
+  if (m_downRenderer) {
+    m_downRenderer->clearWorldChunks();
+    m_downRenderer->clearChunkFlora();
   }
 }
 

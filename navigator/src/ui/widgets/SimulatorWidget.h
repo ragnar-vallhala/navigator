@@ -526,6 +526,7 @@ private:
   std::shared_ptr<ChunkSink> m_chunkSink = std::make_shared<ChunkSink>();
   void drainChunkResults(); // finished chunks -> renderer (GUI thread)
   void startChunkRunners(); // wake pulling workers while work is queued
+  void releaseStreamedWorld(); // stop streaming, drop chunks, flora, caches
   bool m_collisionPending = false; // a crossing asked for a collision rebuild
   int m_colCx = 0, m_colCy = 0;    // cell that collision should cover
   // Async collision ship: generation counter shared with the worker (bumped by
