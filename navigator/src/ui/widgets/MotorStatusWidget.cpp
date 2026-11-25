@@ -328,6 +328,10 @@ MotorStatusWidget::MotorStatusWidget(QWidget *parent) : QWidget(parent) {
   m_current = addPowerField(powerGrid, 3, tr("Current"));
   m_escTemp = addPowerField(powerGrid, 4, tr("ESC Temp"));
   m_mahUsed = addPowerField(powerGrid, 5, tr("Used"));
+  m_failsafe = addPowerField(powerGrid, 6, tr("Failsafe"));
+  m_failsafe->setWordWrap(true);
+  m_failsafeBaseStyle = m_failsafe->styleSheet();
+  m_failsafe->setText(tr("unknown"));
   // Current / ESC-temp / mAh have no telemetry source yet → they stay "-" (set
   // by addPowerField) so absent data isn't mistaken for a real value. Battery
   // reads "-" too until BATTERY telemetry arrives (setBattery).
@@ -366,4 +370,18 @@ void MotorStatusWidget::setMotorSpeeds(const QVector<float> &speeds) {
 void MotorStatusWidget::setBattery(const QString &text) {
   if (m_battery && m_battery->text() != text)
     m_battery->setText(text);
+}
+
+void MotorStatusWidget::setFailsafe(const QString &text, bool alarm) {
+  if (!m_failsafe)
+    return;
+  if (m_failsafe->text() != text) {
+    m_failsafe->setText(text);
+    m_failsafe->setToolTip(text);
+  }
+  const QString style =
+      alarm ? m_failsafeBaseStyle + QStringLiteral("color: #E06C75;")
+            : m_failsafeBaseStyle;
+  if (m_failsafe->styleSheet() != style)
+    m_failsafe->setStyleSheet(style);
 }

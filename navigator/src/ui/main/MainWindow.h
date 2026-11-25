@@ -40,6 +40,7 @@
 #include "ViewHistory.h"
 #include "core/BatteryAlert.h"
 #include "core/BatteryEstimator.h"
+#include "core/FailsafeStatus.h"
 #include <QPointer>
 #include "Drone3DWidget.h"   // Added
 #include "TelemetryEngine.h" // owns DroneProtocol + the VehicleState store
@@ -195,6 +196,11 @@ private:
   battery::AlertTracker m_batteryAlert;
   QPointer<class BatteryCalibDialog> m_batteryCalibDialog;
   void announceBattery(const battery::AlertTracker::Result &r);
+  // FAILSAFE_STATUS from the FC: authoritative once it arrives; the local
+  // battery alert above is only the fallback for an FC that never sends it.
+  FailsafeStatusData m_lastFailsafe{};
+  bool m_failsafeSeen = false;
+  void announceFailsafe(const FailsafeStatusData &now, bool armed);
   void openBatteryCalibration();
   // XFER file upload (battery calibration). Only a real vehicle link is used:
   // the in-app simulator and replay are refused (see xferUploadAvailability).
