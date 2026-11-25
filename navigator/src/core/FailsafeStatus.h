@@ -106,6 +106,28 @@ inline bool isAlarm(const FailsafeStatusData &s) {
   return s.battLevel != NAVLINK_BATT_LEVEL_OK || isLanding(s);
 }
 
+// True when the FC's own battery decision should replace the local voltage
+// alert: its message is fresh AND it has a battery to judge. cells == 0 means
+// the board's battery logic is off (no battery input), so its level reads OK
+// whatever the pack does; muting the local alert then would silence the only
+// battery warning there is.
+inline bool fcOwnsBatteryAlert(bool fresh, const FailsafeStatusData &s) {
+  return fresh && s.cells > 0;
+}
+
+// True when `now` is worth announcing against `before` (the last message, or
+// an all-zero status for the first one): the battery level went up, an
+// automatic landing started, or a landing cause appeared that was not there
+// before (a second cause while already landing is news too). A cause going
+// away, or the same state again, is not.
+inline bool shouldAnnounce(const FailsafeStatusData &before,
+                           const FailsafeStatusData &now) {
+  const bool levelUp = now.battLevel > before.battLevel;
+  const bool landingStarted = isLanding(now) && !isLanding(before);
+  const bool newCause = (now.landCause & ~before.landCause) != 0;
+  return levelUp || landingStarted || newCause;
+}
+
 // One line for the status area.
 //   fresh : a FAILSAFE_STATUS arrived recently (false until the first one).
 //   armed : the vehicle is armed or in flight (arm refusal is hidden then).

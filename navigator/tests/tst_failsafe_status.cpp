@@ -37,6 +37,10 @@ private slots:
   void everyKnownRefusalHasText();
   void pilotTookOverAndUntrustedAreShown();
   void alarmFollowsLevelOrLanding();
+  void fcOwnsTheBatteryAlertOnlyWithCells();
+  void announceOnLevelUpOrLandingStart();
+  void announceWhenANewLandingCauseJoins();
+  void doNotAnnounceTheSameOrAnEasingState();
 };
 
 void TstFailsafeStatus::unknownUntilFirstMessage() {
@@ -174,6 +178,68 @@ void TstFailsafeStatus::alarmFollowsLevelOrLanding() {
   s = {};
   s.landCause = NAVLINK_LANDING_CAUSE_RC_LOSS;
   QVERIFY(failsafe::isAlarm(s));
+}
+
+void TstFailsafeStatus::fcOwnsTheBatteryAlertOnlyWithCells() {
+  FailsafeStatusData s{};
+  s.cells = 3;
+  QVERIFY(failsafe::fcOwnsBatteryAlert(true, s));
+  // Not fresh (never seen, or gone stale): the local alert stays.
+  QVERIFY(!failsafe::fcOwnsBatteryAlert(false, s));
+  // cells == 0: the board's battery logic is off, its level always reads OK,
+  // so muting the local alert would silence the only battery warning.
+  s.cells = 0;
+  QVERIFY(!failsafe::fcOwnsBatteryAlert(true, s));
+  QVERIFY(!failsafe::fcOwnsBatteryAlert(false, s));
+}
+
+void TstFailsafeStatus::announceOnLevelUpOrLandingStart() {
+  const FailsafeStatusData none{};
+  FailsafeStatusData warn{};
+  warn.battLevel = NAVLINK_BATT_LEVEL_WARN;
+  QVERIFY(failsafe::shouldAnnounce(none, warn));
+  FailsafeStatusData crit{};
+  crit.battLevel = NAVLINK_BATT_LEVEL_CRITICAL;
+  QVERIFY(failsafe::shouldAnnounce(warn, crit));
+  FailsafeStatusData landing{};
+  landing.flags = NAVLINK_FAILSAFE_FLAGS_LANDING;
+  landing.landCause = NAVLINK_LANDING_CAUSE_RC_LOSS;
+  QVERIFY(failsafe::shouldAnnounce(none, landing));
+}
+
+void TstFailsafeStatus::announceWhenANewLandingCauseJoins() {
+  // Already landing for RC loss; then the battery goes critical too. The
+  // level rose as well here, so isolate the cause: same level, new cause bit.
+  FailsafeStatusData before{};
+  before.flags = NAVLINK_FAILSAFE_FLAGS_LANDING;
+  before.landCause = NAVLINK_LANDING_CAUSE_RC_LOSS;
+  FailsafeStatusData now = before;
+  now.landCause |= NAVLINK_LANDING_CAUSE_ESTIMATOR;
+  QCOMPARE(int(now.battLevel), int(before.battLevel));
+  QVERIFY(failsafe::isLanding(before) && failsafe::isLanding(now));
+  QVERIFY(failsafe::shouldAnnounce(before, now));
+}
+
+void TstFailsafeStatus::doNotAnnounceTheSameOrAnEasingState() {
+  FailsafeStatusData s{};
+  s.battLevel = NAVLINK_BATT_LEVEL_LAND;
+  s.flags = NAVLINK_FAILSAFE_FLAGS_LANDING;
+  s.landCause = NAVLINK_LANDING_CAUSE_BATT | NAVLINK_LANDING_CAUSE_RC_LOSS;
+  // The same message again (it arrives about once a second).
+  QVERIFY(!failsafe::shouldAnnounce(s, s));
+  // A cause going away is not news.
+  FailsafeStatusData less = s;
+  less.landCause = NAVLINK_LANDING_CAUSE_BATT;
+  QVERIFY(!failsafe::shouldAnnounce(s, less));
+  // A level coming down is not news.
+  FailsafeStatusData better = s;
+  better.battLevel = NAVLINK_BATT_LEVEL_WARN;
+  QVERIFY(!failsafe::shouldAnnounce(s, better));
+  // An arm-refusal change alone is not announced.
+  FailsafeStatusData ref{};
+  FailsafeStatusData ref2{};
+  ref2.armRefusal = NAVLINK_ARM_REFUSAL_NO_IMU_SAMPLES;
+  QVERIFY(!failsafe::shouldAnnounce(ref, ref2));
 }
 
 QTEST_MAIN(TstFailsafeStatus)
