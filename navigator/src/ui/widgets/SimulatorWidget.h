@@ -287,6 +287,9 @@ private:
     std::shared_ptr<const vsim::LoadedMesh> mesh;
     std::vector<std::shared_ptr<const vsim::procgen::ProcMesh>> chunks;
     std::vector<QVector3D> extra;
+    // More of the soup, made by the worker (the pad search is too slow for the
+    // GUI thread). Called at most once, on the worker.
+    std::function<std::vector<QVector3D>()> makeExtra;
     bool doubleSided = false;
     bool lift = false;
     std::optional<QRectF> coverage;
@@ -328,6 +331,7 @@ private:
   std::optional<QRectF> m_shippedCover; // its window (none: whole world)
   static constexpr int kHoldTimeoutMs = 10000;
   int m_testShipDelayMs = 0; // TEST ONLY: make the collision build slow
+  std::function<void()> m_testOnPadSearch; // TEST ONLY: runs where pads are searched
   // Start owes a spawn reset, but only once the collision under the spawn has
   // shipped (otherwise the drone is placed over terrain the engine lacks).
   bool spawnResetWaitsForCollision() const;
@@ -493,13 +497,32 @@ private:
   QVector3D m_lastHelipadCenter{1e9f, 1e9f,
                                 0}; // recompute only when view moves
   void recomputeHelipads(float cx, float cy);
+  // The same as the view roams: the search runs on a worker and the list is
+  // swapped in when it lands (a list that lags a fraction of a second is fine:
+  // it is centred 260 m around the view and refreshed every 35 m). One search at
+  // a time; a request that arrives meanwhile waits and then uses the newest
+  // centre. A result for a world that has since changed is dropped.
+  void refreshHelipadsAsync(float cx, float cy);
+  QFutureWatcher<std::vector<QVector3D>> *m_padWatcher = nullptr;
+  std::optional<QPointF> m_padPending;
+  // What the pad search needs of the world, captured by value: with it the search
+  // and the collision soup touch no widget state, so the collision worker can run
+  // them (they cost 150-650 ms of GUI thread per world change when run there).
+  struct PadWorld {
+    std::shared_ptr<const vsim::procgen::TerrainField> field;
+    float chunkM = 0.0f;
+    int collisionRes = 0;
+  };
+  PadWorld padWorld() const;
   // The pads within `range` metres of (cx, cy), home pad first: a pure function
   // of the world's terrain, so any window can ask for exactly its own pads.
+  static std::vector<QVector3D> padsOf(const PadWorld &w, float cx, float cy,
+                                       float range);
   std::vector<QVector3D> helipadsAround(float cx, float cy, float range) const;
-  // Append each helipad's solid cylinder (deck cap + side wall, double-sided) to
-  // a collision triangle-soup so the drone physically lands on the pads.
-  void appendHelipadCollision(std::vector<QVector3D> &positions,
-                              const QRectF &window) const;
+  // Every helipad of `window` as a solid cylinder (deck cap + side wall,
+  // double-sided) for the collision triangle soup, so the drone lands on them.
+  static std::vector<QVector3D> padCollisionSoup(const PadWorld &w,
+                                                 const QRectF &window);
   // NED z of the landing surface at (x,y): pad top when over a helipad, else
   // the terrain surface. Used by spawn/reset and the lift-onto-surface logic.
   float landingSurfaceZ(float x, float y) const;

@@ -32,6 +32,7 @@
 // self-contained (CI runs each in its own process). Give it private
 // VAYU_VFS_DIR / VSIM_FIFO_SUFFIX / XDG_* when running it. Wall-clock paced.
 
+#include <atomic>
 #include "SimRendererWidget.h"
 #include "SimulatorWidget.h"
 #include "SitlModule.h"
@@ -85,6 +86,8 @@ public:
   void placeAt(float x, float y, float z) { w_.placeVehicle(x, y, z); }
   // Make every collision build take at least `ms` (a slow runner, on demand).
   void shipDelay(int ms) { w_.m_testShipDelayMs = ms; }
+  // Run `f` wherever the collision's pad search runs (it must not be the GUI thread).
+  void onPadSearch(std::function<void()> f) { w_.m_testOnPadSearch = std::move(f); }
   bool running() const { return w_.m_sim != nullptr; }
   QString logText() const { return w_.m_log->toPlainText(); }
   void clearLog() { w_.m_log->clear(); }
@@ -469,10 +472,23 @@ private slots:
         30000));
     for (const auto &pr : vsim::worldPresetList()) {
       pump(1500);
+      QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 30000));
       a_->teleport(0.0f, 0.0f, 40.0f); // airborne, 40 m up
-      QVERIFY(waitFor([&] { return !a_->shipBusy() && altAbove(*a_) > 5.0f; },
-                      30000));
-      QVERIFY(altAbove(*a_) > 5.0f);
+      // Nothing holds it there: it falls and lands in about 3 s. The GUI's copy
+      // of the pose lags the engine by seconds on a slow runner and then plays
+      // the whole fall back in one burst, so it can miss the airborne window
+      // altogether. Read the engine's own pose, polling without processing
+      // events, and change the world while it is in the air.
+      const auto engineAlt = [&] {
+        const QVector3D p = a_->lastPos();
+        return -p.z() - (a_->hasGround() ? a_->groundAt(p.x(), p.y()) : 0.0f);
+      };
+      QElapsedTimer fall;
+      fall.start();
+      bool airborne = false;
+      while (fall.elapsed() < 5000 && !(airborne = engineAlt() > 5.0f))
+        QThread::msleep(5);
+      QVERIFY2(airborne, qPrintable(pr.first));
       bool applied = false;
       a_->changeWorld([&](vsim::WorldConfig &c) {
         applied = vsim::applyWorldPreset(c, pr.first, 5);
@@ -798,6 +814,13 @@ private slots:
     a_->placeAt(pad.x(), pad.y(), deck - 1.0f);
     QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 30000));
     pump(2500);
+    // The first wait can pass before the build for this move has started (it
+    // starts on the next stream tick), and a slow runner is still building
+    // after the pump: wait for it again, then let a following tick confirm
+    // that nothing else starts.
+    QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 30000));
+    pump(500);
+    QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 30000));
     const QVector3D before = a_->cachedPos();
     const float nx = pad.x() + 25.0f;
     a_->placeAt(nx, pad.y(), deck - 1.0f);
@@ -813,6 +836,39 @@ private slots:
              qPrintable(QStringLiteral("the decision pose is (%1, %2), not at the "
                                        "new spot (%3, %4)")
                             .arg(fresh.x()).arg(fresh.y()).arg(nx).arg(pad.y())));
+  }
+
+  // The pad search (dozens of candidates, each sampling the exact surface 17
+  // times) cost the GUI thread 150-650 ms per collision build, and the pose and
+  // the repaints waited behind it. It runs on the collision worker.
+  void padSearchRunsOffTheGuiThread() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    if (!SitlModule::instance().available())
+      QSKIP("no engine module (set VAYU_SITL_MODULE)");
+    a_->changeWorld([](vsim::WorldConfig &c) {
+      QVERIFY(vsim::applyWorldPreset(c, QStringLiteral("hills"), 5));
+    });
+    if (!a_->running()) {
+      a_->start();
+      QVERIFY(a_->running());
+    }
+    QVERIFY(waitFor([&] { return !a_->shipBusy() && altAbove(*a_) > 0.0f; },
+                    30000));
+    std::atomic<int> onGui{0}, offGui{0};
+    QThread *const gui = QCoreApplication::instance()->thread();
+    a_->onPadSearch([&] {
+      (QThread::currentThread() == gui ? onGui : offGui).fetch_add(1);
+    });
+    // A far teleport recentres the collision window: a new build, so a new
+    // pad search.
+    a_->teleport(480.0f, 360.0f, 8.0f);
+    // Two searches: the new collision window's pads, and the view's pad list,
+    // refreshed because the view moved far.
+    QVERIFY(waitFor([&] { return offGui.load() >= 2; }, 60000));
+    QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 30000));
+    a_->onPadSearch({});
+    QCOMPARE(onGui.load(), 0);
   }
 
   void dropOnEveryPadRestsOnDeck() {
