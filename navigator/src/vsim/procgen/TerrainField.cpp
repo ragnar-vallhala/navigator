@@ -441,6 +441,47 @@ SurfacePatch::SurfacePatch(const TerrainField &f, int cx, int cy, float chunkM,
   h_ = cappedGrid(f, x0_, y0_, step_, -off_, -off_, gn_);
 }
 
+SurfaceWindow::SurfaceWindow(const TerrainField &f, float cx, float cy,
+                             float radius, float chunkM, int res)
+    : f_(&f), chunkM_(chunkM), res_(res) {
+  if (res < 1 || chunkM <= 0.0f)
+    return; // at() answers from the raw field, as surfaceHeight() does
+  step_ = chunkM / static_cast<float>(res);
+  x0_ = std::floor(cx / chunkM) * chunkM;
+  y0_ = std::floor(cy / chunkM) * chunkM;
+  apron_ = erodeApron(f);
+  // Cells touched by the disc, plus one cell of margin on every side.
+  const int iMin = static_cast<int>(std::floor((cx - radius - x0_) / step_)) - 1;
+  const int iMax = static_cast<int>(std::floor((cx + radius - x0_) / step_)) + 2;
+  const int jMin = static_cast<int>(std::floor((cy - radius - y0_) / step_)) - 1;
+  const int jMax = static_cast<int>(std::floor((cy + radius - y0_) / step_)) + 2;
+  iLo_ = iMin - apron_;
+  jLo_ = jMin - apron_;
+  gn_ = std::max(iMax - iMin, jMax - jMin) + 1 + 2 * apron_;
+  h_ = cappedGrid(f, x0_, y0_, step_, iLo_, jLo_, gn_);
+}
+
+float SurfaceWindow::at(float wx, float wy) const {
+  if (h_.empty())
+    return surfaceHeight(*f_, wx, wy, chunkM_, res_);
+  const float u = (wx - x0_) / step_, v = (wy - y0_) / step_;
+  const int i = static_cast<int>(std::floor(u)), j = static_cast<int>(std::floor(v));
+  const float fx = u - static_cast<float>(i), fy = v - static_cast<float>(j);
+  // The cell's four nodes must lie inside the grid's reliable interior.
+  const int lo = apron_, hi = gn_ - 1 - apron_;
+  const int ii = i - iLo_, jj = j - jLo_;
+  if (ii < lo || ii + 1 > hi || jj < lo || jj + 1 > hi)
+    return surfaceHeight(*f_, wx, wy, chunkM_, res_);
+  auto h = [&](int di, int dj) {
+    return h_[static_cast<std::size_t>(jj + dj) * gn_ + static_cast<std::size_t>(ii + di)];
+  };
+  const float h00 = h(0, 0), h10 = h(1, 0), h01 = h(0, 1), h11 = h(1, 1);
+  // Same two-triangle split as surfaceHeight() and meshFieldChunk.
+  if (fx >= fy)
+    return h00 + (h10 - h00) * fx + (h11 - h10) * fy;
+  return h00 + (h11 - h01) * fx + (h01 - h00) * fy;
+}
+
 float SurfacePatch::node(int i, int j) const {
   i = std::min(std::max(i, -margin_), res_ + margin_);
   j = std::min(std::max(j, -margin_), res_ + margin_);

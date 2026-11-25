@@ -186,6 +186,28 @@ private:
   int res_, margin_, gn_, off_;
 };
 
+// A small window of the slope-capped surface around one point, for many samples
+// close to it (a pad's footprint ring: 17 of them). surfaceHeight() builds its
+// own window for every call; this builds one for all of them, on the same
+// lattice (the chunk of the centre), so a sample inside the radius is the same
+// number surfaceHeight() gives (to float precision across a chunk edge). A
+// sample outside the window falls back to surfaceHeight(). Cheap to make
+// (about the cost of two surfaceHeight() calls) and read-only afterwards.
+class SurfaceWindow {
+public:
+  SurfaceWindow(const TerrainField &f, float cx, float cy, float radius,
+                float chunkM, int res);
+  float at(float wx, float wy) const;
+
+private:
+  const TerrainField *f_;
+  float chunkM_;
+  int res_;
+  float x0_ = 0.0f, y0_ = 0.0f, step_ = 1.0f;
+  int iLo_ = 0, jLo_ = 0, gn_ = 0, apron_ = 0;
+  std::vector<float> h_;
+};
+
 // The one chunk lattice every procedural world is streamed on (ChunkStreamer's
 // defaults). Anything that must rest on the streamed surface without a streamer
 // at hand (preset obstacle layout) samples it via streamSurfaceHeight().

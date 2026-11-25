@@ -46,6 +46,11 @@ struct HelipadParams {
   // e.g. in or beside a pond, whose flat bed would otherwise pass the screens.
   std::function<bool(float, float, float)> blocked;
   float blockedClearM = 12.0f; // clearance asked of `blocked` beyond the footprint
+  // Optional (x, y, radius) -> sampler of the meshed surface valid within
+  // `radius` of (x, y), used for the footprint-relief screen instead of
+  // `surface`. It lets a caller serve the ring's 17 samples from one local
+  // window; the answer must be the same surface.
+  std::function<HeightFn(float, float, float)> footprintSurface;
 };
 
 // Largest |h(ring point) - h(centre)| over the footprint ring [m].

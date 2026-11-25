@@ -34,6 +34,7 @@
 #include "procgen/TerrainGen.h"
 
 #include <cmath>
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -93,6 +94,8 @@ private slots:
   void fineReliefIsBoundedGentleAndOptIn();
   void padCollisionSoupHasBothWindingsAndOnlyTheWindowsPads();
   void padSearchIsTheSameOnAnyThread();
+  void surfaceWindowIsTheSurfaceHeight();
+  void footprintWindowChangesNoPad();
 };
 
 void TstProcgen::noiseIsDeterministicAndBounded() {
@@ -958,6 +961,76 @@ void TstProcgen::padSearchIsTheSameOnAnyThread() {
       QCOMPARE((*other)[i].z, here[i].z);
     }
   }
+}
+
+// One window for a pad's whole ring must answer what a window per sample does.
+void TstProcgen::surfaceWindowIsTheSurfaceHeight() {
+  const float chunkM = 192.0f;
+  const int res = 100;
+  float worst = 0.0f;
+  int n = 0;
+  for (uint32_t seed : {3u, 7u, 21u}) {
+    FieldParams fp;
+    fp.seed = seed;
+    const TerrainField f(fp);
+    // Centres everywhere, including on and beside chunk edges (where the ring
+    // crosses into the next chunk's lattice) and far from the origin.
+    const float cs[][2] = {{0.0f, 0.0f},      {95.3f, -40.1f},  {191.0f, 5.0f},
+                           {192.0f, 192.0f},  {-1.0f, -190.5f}, {383.5f, 100.0f},
+                           {-2004.7f, 1388.2f}, {5.4f, 575.9f}};
+    for (const auto &c : cs) {
+      const float R = 3.0f;
+      const SurfaceWindow w(f, c[0], c[1], R, chunkM, res);
+      for (int a = 0; a <= 16; ++a) {
+        const float t = 6.2831853f * float(a) / 16.0f;
+        const float x = a == 16 ? c[0] : c[0] + R * std::cos(t);
+        const float y = a == 16 ? c[1] : c[1] + R * std::sin(t);
+        const float want = surfaceHeight(f, x, y, chunkM, res);
+        worst = std::max(worst, std::fabs(w.at(x, y) - want));
+        ++n;
+      }
+      // Outside its window it still answers (by falling back), correctly.
+      QCOMPARE(w.at(c[0] + 60.0f, c[1]),
+               surfaceHeight(f, c[0] + 60.0f, c[1], chunkM, res));
+    }
+  }
+  qInfo("surface window vs surfaceHeight: %d samples, worst diff %.3g m", n, worst);
+  QVERIFY2(worst < 1e-3f, "the window is not the surface surfaceHeight gives");
+}
+
+// The pad list with the window hook is the list without it.
+void TstProcgen::footprintWindowChangesNoPad() {
+  const float chunkM = 192.0f;
+  const int res = 100;
+  int total = 0;
+  for (uint32_t seed : {3u, 7u, 21u}) {
+    FieldParams fp;
+    fp.seed = seed;
+    const TerrainField f(fp);
+    const HeightFn surface = [&](float x, float y) {
+      return surfaceHeight(f, x, y, chunkM, res);
+    };
+    const HeightFn raw = [&](float x, float y) { return f.height(x, y); };
+    HelipadParams plain;
+    HelipadParams windowed;
+    windowed.footprintSurface = [&](float x, float y, float r) {
+      const auto w = std::make_shared<const SurfaceWindow>(f, x, y, r, chunkM, res);
+      return HeightFn([w](float a, float b) { return w->at(a, b); });
+    };
+    for (const auto &c : {std::pair<float, float>{0.0f, 0.0f},
+                          std::pair<float, float>{480.0f, -300.0f}}) {
+      const auto a = helipadsAround(surface, raw, c.first, c.second, 260.0f, plain);
+      const auto b = helipadsAround(surface, raw, c.first, c.second, 260.0f, windowed);
+      QCOMPARE(b.size(), a.size());
+      for (std::size_t i = 0; i < a.size(); ++i) {
+        QCOMPARE(b[i].x, a[i].x);
+        QCOMPARE(b[i].y, a[i].y);
+        QVERIFY(std::fabs(b[i].z - a[i].z) < 1e-4f);
+      }
+      total += int(a.size());
+    }
+  }
+  QVERIFY2(total > 6, "the test worlds have no pads to compare");
 }
 
 QTEST_MAIN(TstProcgen)

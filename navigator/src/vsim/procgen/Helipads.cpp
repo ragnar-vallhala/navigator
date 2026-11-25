@@ -94,8 +94,10 @@ std::vector<PgVec3> helipadsAround(const HeightFn &surface, const HeightFn &raw,
       if ((bx - cx) * (bx - cx) + (by - cy) * (by - cy) > kRange * kRange)
         continue;
       if (p.maxReliefM > 0.0f &&
-          helipadRelief(surface, bx, by, p.radiusM, p.ringPoints) >
-              p.maxReliefM)
+          helipadRelief(p.footprintSurface
+                            ? p.footprintSurface(bx, by, p.radiusM)
+                            : surface,
+                        bx, by, p.radiusM, p.ringPoints) > p.maxReliefM)
         continue; // footprint would float or bury the pad
       pads.push_back(PgVec3{bx, by, surface(bx, by)});
     }
