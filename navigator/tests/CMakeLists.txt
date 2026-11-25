@@ -489,7 +489,8 @@ if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vsim_proto.h")
       tst_sitl_crash.cpp
       ${SRC}/vsim/SitlModule.cpp ${SRC}/vsim/SitlModule.h
       ${SRC}/vsim/VfsDir.cpp ${SRC}/vsim/VfsDir.h
-      ${SRC}/vsim/SimWorker.cpp ${SRC}/vsim/SimWorker.h)
+      ${SRC}/vsim/SimWorker.cpp ${SRC}/vsim/SimWorker.h
+      ${SRC}/vsim/procgen/TreeColliderWindow.cpp)
   target_include_directories(tst_sitl_crash PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${SRC}/vsim ${VAYU_SITL_SDK})
   target_link_libraries(tst_sitl_crash PRIVATE navlink_codec)
   if(WIN32)
