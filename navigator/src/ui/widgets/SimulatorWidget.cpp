@@ -16,6 +16,7 @@
  */
 #include "SimulatorWidget.h"
 #include <QThread>
+#include <array>
 #include <cmath>
 #include "GlAvailability.h"
 #include "SimPanelsCommon.h"
@@ -1226,7 +1227,7 @@ void SimulatorWidget::onStreamTick() {
   if (std::hypot(c.x() - m_lastHelipadCenter.x(),
                  c.y() - m_lastHelipadCenter.y()) > 35.0f) {
     m_lastHelipadCenter = c;
-    recomputeHelipads(c.x(), c.y());
+    refreshHelipadsAsync(c.x(), c.y());
   }
 }
 
@@ -1367,8 +1368,11 @@ void SimulatorWidget::tryBuildCollision() {
   // centred on the view and refreshed lazily, so it can lag this window (or
   // miss its far corners) and a pad the engine lacks lets the vehicle sink
   // through the deck. The heavy concat + BVH build happen on the worker.
-  std::vector<QVector3D> extra;
-  appendHelipadCollision(extra, window);
+  // The pad search is far too slow for the GUI thread (a window holds dozens of
+  // candidates, each sampling the exact surface 17 times: 150-650 ms), so the
+  // worker makes the pad solids from a snapshot of the world.
+  const PadWorld padW = padWorld();
+  const auto onSearch = m_testOnPadSearch;
   // The local terrain just changed under the drone (spawn or a crossing); if
   // that left it buried it is re-dropped above the new surface -- but only once
   // this collision has actually reached the engine (async build), so the lift
@@ -1376,7 +1380,11 @@ void SimulatorWidget::tryBuildCollision() {
   // airborne or resting drone is untouched.
   WorldShipReq req;
   req.chunks = std::move(chunks);
-  req.extra = std::move(extra);
+  req.makeExtra = [padW, window, onSearch]() {
+    if (onSearch)
+      onSearch();
+    return padCollisionSoup(padW, window);
+  };
   req.doubleSided = m_worldEditor->config().worldMeshDoubleSided;
   req.lift = true;
   req.coverage = window;
@@ -1402,25 +1410,83 @@ void SimulatorWidget::recomputeHelipads(float cx, float cy) {
     m_downRenderer->setHelipads(m_helipads);
 }
 
-std::vector<QVector3D> SimulatorWidget::helipadsAround(float cx, float cy,
-                                                       float range) const {
+void SimulatorWidget::refreshHelipadsAsync(float cx, float cy) {
+  if (!m_terrainHeightAt) { // no world: nothing to search, the sync path clears
+    recomputeHelipads(cx, cy);
+    return;
+  }
+  if (m_padWatcher) { // one at a time; the newest centre wins
+    m_padPending = QPointF(cx, cy);
+    return;
+  }
+  const PadWorld w = padWorld();
+  const auto onSearch = m_testOnPadSearch;
+  auto *watcher = new QFutureWatcher<std::vector<QVector3D>>(this);
+  m_padWatcher = watcher;
+  connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, w]() {
+    m_padWatcher = nullptr;
+    if (w.field == m_chunkStreamer.field()) { // else the world changed under it
+      m_helipads = watcher->result();
+      if (m_renderer)
+        m_renderer->setHelipads(m_helipads);
+      if (m_downRenderer)
+        m_downRenderer->setHelipads(m_helipads);
+    }
+    watcher->deleteLater();
+    if (m_padPending) {
+      const QPointF next = *m_padPending;
+      m_padPending.reset();
+      refreshHelipadsAsync(float(next.x()), float(next.y()));
+    }
+  });
+  watcher->setFuture(QtConcurrent::run([w, cx, cy, onSearch]() {
+    if (onSearch)
+      onSearch();
+    return padsOf(w, cx, cy, 260.0f);
+  }));
+}
+
+SimulatorWidget::PadWorld SimulatorWidget::padWorld() const {
+  PadWorld w;
+  w.field = m_chunkStreamer.field();
+  w.chunkM = m_chunkStreamer.config().chunkM;
+  w.collisionRes = m_chunkStreamer.config().collisionResolution;
+  return w;
+}
+
+std::vector<QVector3D> SimulatorWidget::padsOf(const PadWorld &w, float cx,
+                                               float cy, float range) {
   std::vector<QVector3D> pads;
-  if (!m_terrainHeightAt)
+  const auto f = w.field;
+  if (!f)
     return pads;
+  // The meshed (slope-capped) surface for heights, the raw field for slopes.
+  const vsim::procgen::HeightFn surface = [f, w](float n, float e) {
+    return vsim::procgen::surfaceHeight(*f, n, e, w.chunkM, w.collisionRes);
+  };
+  const vsim::procgen::HeightFn raw = [f](float n, float e) {
+    return f->height(n, e);
+  };
   vsim::procgen::HelipadParams hp;
   hp.radiusM = vsim::SimRendererWidget::kHelipadRadiusM;
-  hp.blocked = [this](float x, float y, float r) {
-    const auto f = m_chunkStreamer.field();
-    return f && f->water().nearWater(f->heightSource(), x, y, r);
+  hp.blocked = [f](float x, float y, float r) {
+    return f->water().nearWater(f->heightSource(), x, y, r);
   };
-  for (const auto &p : vsim::procgen::helipadsAround(
-           m_terrainHeightAt, m_terrainRawHeightAt, cx, cy, range, hp))
+  for (const auto &p : vsim::procgen::helipadsAround(surface, raw, cx, cy,
+                                                     range, hp))
     pads.emplace_back(p.x, p.y, p.z);
   return pads;
 }
 
-void SimulatorWidget::appendHelipadCollision(std::vector<QVector3D> &pos,
-                                             const QRectF &window) const {
+std::vector<QVector3D> SimulatorWidget::helipadsAround(float cx, float cy,
+                                                       float range) const {
+  if (!m_terrainHeightAt)
+    return {};
+  return padsOf(padWorld(), cx, cy, range);
+}
+
+std::vector<QVector3D>
+SimulatorWidget::padCollisionSoup(const PadWorld &w, const QRectF &window) {
   const float R = vsim::SimRendererWidget::kHelipadRadiusM;
   // Every pad of the window (pads are a pure function of the world, so the set
   // does not depend on where the view has been); a margin of R keeps a pad
@@ -1429,38 +1495,21 @@ void SimulatorWidget::appendHelipadCollision(std::vector<QVector3D> &pos,
   const float reach =
       float(std::hypot(window.width(), window.height()) * 0.5) + R;
   const std::vector<QVector3D> pads =
-      helipadsAround(float(mid.x()), float(mid.y()), reach);
-  const int N = 20; // collision tessellation (coarser than render is fine)
-  // Every triangle is emitted with BOTH windings so it collides regardless of
-  // the BVH's single/double-sided flag (the drone must rest on the deck top).
-  auto tri2 = [&](const QVector3D &a, const QVector3D &b, const QVector3D &c) {
-    pos.push_back(a);
-    pos.push_back(b);
-    pos.push_back(c);
-    pos.push_back(a);
-    pos.push_back(c);
-    pos.push_back(b);
-  };
-  const QRectF reachRect = window.adjusted(-R, -R, R, R);
-  for (const QVector3D &pad : pads) {
-    if (!reachRect.contains(pad.x(), pad.y()))
-      continue;
-    const float px = pad.x(), py = pad.y();
-    const float zDeck =
-        -pad.z() - vsim::SimRendererWidget::kHelipadDeckM; // top
-    const float zBase = -pad.z();                          // terrain
-    const QVector3D ctr(px, py, zDeck);
-    for (int j = 0; j < N; ++j) {
-      const double a0 = 2 * M_PI * j / N, a1 = 2 * M_PI * (j + 1) / N;
-      const QVector3D r0(px + R * std::cos(a0), py + R * std::sin(a0), zDeck);
-      const QVector3D r1(px + R * std::cos(a1), py + R * std::sin(a1), zDeck);
-      const QVector3D b0(px + R * std::cos(a0), py + R * std::sin(a0), zBase);
-      const QVector3D b1(px + R * std::cos(a1), py + R * std::sin(a1), zBase);
-      tri2(ctr, r0, r1); // deck cap (landing surface)
-      tri2(r0, b0, b1);  // side wall down to terrain
-      tri2(r0, b1, r1);
-    }
-  }
+      padsOf(w, float(mid.x()), float(mid.y()), reach);
+  std::vector<vsim::procgen::PgVec3> centres;
+  centres.reserve(pads.size());
+  for (const QVector3D &p : pads)
+    centres.push_back({p.x(), p.y(), p.z()});
+  const std::vector<vsim::procgen::PgVec3> soup =
+      vsim::procgen::helipadCollisionSoup(
+          centres, float(window.left()), float(window.top()),
+          float(window.right()), float(window.bottom()), R,
+          vsim::SimRendererWidget::kHelipadDeckM);
+  std::vector<QVector3D> out;
+  out.reserve(soup.size());
+  for (const auto &v : soup)
+    out.emplace_back(v.x, v.y, v.z);
+  return out;
 }
 
 float SimulatorWidget::landingSurfaceZ(float x, float y) const {
@@ -1673,7 +1722,8 @@ void SimulatorWidget::startShipJob(WorldShipReq req) {
   // its own captured data, so it is safe even if the widget goes away first.
   watcher->setFuture(QtConcurrent::run(
       [genPtr, gen, tmp, mesh = req.mesh, chunks = std::move(req.chunks),
-        extra = std::move(req.extra), ds = req.doubleSided,
+        extra = std::move(req.extra), makeExtra = std::move(req.makeExtra),
+        ds = req.doubleSided,
         delayMs = m_testShipDelayMs]() {
         if (delayMs > 0)
           QThread::msleep(static_cast<unsigned long>(delayMs));
@@ -1683,6 +1733,12 @@ void SimulatorWidget::startShipJob(WorldShipReq req) {
           return r;
         QElapsedTimer t;
         t.start();
+        std::vector<QVector3D> made;
+        if (makeExtra) {
+          made = makeExtra();
+          if (stale())
+            return r;
+        }
         std::vector<float> verts;
         if (mesh) {
           verts.reserve(mesh->positions.size() * 3);
@@ -1692,7 +1748,7 @@ void SimulatorWidget::startShipJob(WorldShipReq req) {
             verts.push_back(p.z());
           }
         } else {
-          std::size_t n = extra.size();
+          std::size_t n = extra.size() + made.size();
           for (const auto &c : chunks)
             n += c->positions.size();
           verts.reserve(n * 3);
@@ -1703,11 +1759,13 @@ void SimulatorWidget::startShipJob(WorldShipReq req) {
               verts.push_back(p.z);
             }
         }
-        for (const QVector3D &p : extra) {
-          verts.push_back(p.x());
-          verts.push_back(p.y());
-          verts.push_back(p.z());
-        }
+        for (const std::vector<QVector3D> *soup :
+             std::array<const std::vector<QVector3D> *, 2>{&extra, &made})
+          for (const QVector3D &p : *soup) {
+            verts.push_back(p.x());
+            verts.push_back(p.y());
+            verts.push_back(p.z());
+          }
         const uint32_t nverts = static_cast<uint32_t>(verts.size() / 3);
         std::vector<uint8_t> blob =
             vsim::buildWorldBvh(verts.data(), nverts, ds, r.nodes);

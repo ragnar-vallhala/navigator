@@ -32,6 +32,7 @@
 // self-contained (CI runs each in its own process). Give it private
 // VAYU_VFS_DIR / VSIM_FIFO_SUFFIX / XDG_* when running it. Wall-clock paced.
 
+#include <atomic>
 #include "SimRendererWidget.h"
 #include "SimulatorWidget.h"
 #include "SitlModule.h"
@@ -85,6 +86,8 @@ public:
   void placeAt(float x, float y, float z) { w_.placeVehicle(x, y, z); }
   // Make every collision build take at least `ms` (a slow runner, on demand).
   void shipDelay(int ms) { w_.m_testShipDelayMs = ms; }
+  // Run `f` wherever the collision's pad search runs (it must not be the GUI thread).
+  void onPadSearch(std::function<void()> f) { w_.m_testOnPadSearch = std::move(f); }
   bool running() const { return w_.m_sim != nullptr; }
   QString logText() const { return w_.m_log->toPlainText(); }
   void clearLog() { w_.m_log->clear(); }
@@ -813,6 +816,39 @@ private slots:
              qPrintable(QStringLiteral("the decision pose is (%1, %2), not at the "
                                        "new spot (%3, %4)")
                             .arg(fresh.x()).arg(fresh.y()).arg(nx).arg(pad.y())));
+  }
+
+  // The pad search (dozens of candidates, each sampling the exact surface 17
+  // times) cost the GUI thread 150-650 ms per collision build, and the pose and
+  // the repaints waited behind it. It runs on the collision worker.
+  void padSearchRunsOffTheGuiThread() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    if (!SitlModule::instance().available())
+      QSKIP("no engine module (set VAYU_SITL_MODULE)");
+    a_->changeWorld([](vsim::WorldConfig &c) {
+      QVERIFY(vsim::applyWorldPreset(c, QStringLiteral("hills"), 5));
+    });
+    if (!a_->running()) {
+      a_->start();
+      QVERIFY(a_->running());
+    }
+    QVERIFY(waitFor([&] { return !a_->shipBusy() && altAbove(*a_) > 0.0f; },
+                    30000));
+    std::atomic<int> onGui{0}, offGui{0};
+    QThread *const gui = QCoreApplication::instance()->thread();
+    a_->onPadSearch([&] {
+      (QThread::currentThread() == gui ? onGui : offGui).fetch_add(1);
+    });
+    // A far teleport recentres the collision window: a new build, so a new
+    // pad search.
+    a_->teleport(480.0f, 360.0f, 8.0f);
+    // Two searches: the new collision window's pads, and the view's pad list,
+    // refreshed because the view moved far.
+    QVERIFY(waitFor([&] { return offGui.load() >= 2; }, 60000));
+    QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 30000));
+    a_->onPadSearch({});
+    QCOMPARE(onGui.load(), 0);
   }
 
   void dropOnEveryPadRestsOnDeck() {

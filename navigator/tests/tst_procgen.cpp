@@ -34,6 +34,7 @@
 #include "procgen/TerrainGen.h"
 
 #include <cmath>
+#include <thread>
 #include <vector>
 
 using namespace vsim::procgen;
@@ -90,6 +91,8 @@ private slots:
   void spawnAndPadHeightsMatchCollisionSurface();
   void helipadFootprintsAreLevel();
   void fineReliefIsBoundedGentleAndOptIn();
+  void padCollisionSoupHasBothWindingsAndOnlyTheWindowsPads();
+  void padSearchIsTheSameOnAnyThread();
 };
 
 void TstProcgen::noiseIsDeterministicAndBounded() {
@@ -892,6 +895,68 @@ void TstProcgen::fineReliefIsBoundedGentleAndOptIn() {
     PresetData d;
     QVERIFY(buildWorldPreset(id, 5u, d));
     QVERIFY(d.field.reliefM > 0.0f && d.field.reliefM <= 0.3f);
+  }
+}
+
+// The solid the physics lands on: deck cap + wall per pad, each triangle in both
+// windings, and only the pads of the window (plus the footprint's margin).
+void TstProcgen::padCollisionSoupHasBothWindingsAndOnlyTheWindowsPads() {
+  const float R = 3.0f, deck = 0.9f;
+  // z is the surface elevation (up); the soup is in NED, so the deck is at
+  // -z - deck and the terrain under it at -z.
+  const std::vector<PgVec3> pads = {{10.0f, 20.0f, 50.0f},   // inside
+                                    {-2.0f, 20.0f, 40.0f},   // 2 m left of the window: inside by the margin
+                                    {-10.0f, 20.0f, 40.0f}}; // 10 m left: outside
+  const std::vector<PgVec3> soup =
+      helipadCollisionSoup(pads, 0.0f, 0.0f, 100.0f, 100.0f, R, deck, 20);
+  // 20 segments x 3 triangles x 2 windings x 3 vertices, for two pads.
+  QCOMPARE(soup.size(), std::size_t(2 * 20 * 3 * 2 * 3));
+  bool sawDeck = false, sawBase = false;
+  for (std::size_t i = 0; i + 5 < soup.size(); i += 6) {
+    // (a, b, c) then (a, c, b): the reverse winding of the same triangle.
+    QCOMPARE(soup[i + 3].x, soup[i].x);
+    QCOMPARE(soup[i + 4].x, soup[i + 2].x);
+    QCOMPARE(soup[i + 5].x, soup[i + 1].x);
+    for (std::size_t k = 0; k < 6; ++k) {
+      const float z = soup[i + k].z;
+      sawDeck = sawDeck || std::fabs(z - (-50.0f - deck)) < 1e-4f;
+      sawBase = sawBase || std::fabs(z - (-50.0f)) < 1e-4f;
+    }
+  }
+  QVERIFY(sawDeck && sawBase);
+  // Nothing from the pad outside the margin: every vertex is within R of a
+  // pad centre that is inside.
+  for (const PgVec3 &v : soup)
+    QVERIFY(v.x > -2.0f - R - 1e-3f);
+  QVERIFY(helipadCollisionSoup({}, 0, 0, 1, 1, R, deck).empty());
+}
+
+// The pad search runs on the collision worker, not the GUI thread, so it must
+// give the same pads wherever and however often it runs at once.
+void TstProcgen::padSearchIsTheSameOnAnyThread() {
+  FieldParams fp;
+  fp.seed = 7u;
+  const TerrainField f(fp);
+  const HeightFn surface = [&f](float x, float y) {
+    return surfaceHeight(f, x, y, 128.0f, 16);
+  };
+  const HeightFn raw = [&f](float x, float y) { return f.height(x, y); };
+  auto search = [&] { return helipadsAround(surface, raw, 40.0f, -30.0f, 300.0f); };
+  const std::vector<PgVec3> here = search();
+  QVERIFY2(here.size() > 1, "the test world has no pads to compare");
+  std::vector<PgVec3> a, b;
+  std::thread ta([&] { a = search(); });
+  std::thread tb([&] { b = search(); });
+  std::vector<PgVec3> c = search(); // all three at once
+  ta.join();
+  tb.join();
+  for (const std::vector<PgVec3> *other : {&a, &b, &c}) {
+    QCOMPARE(other->size(), here.size());
+    for (std::size_t i = 0; i < here.size(); ++i) {
+      QCOMPARE((*other)[i].x, here[i].x);
+      QCOMPARE((*other)[i].y, here[i].y);
+      QCOMPARE((*other)[i].z, here[i].z);
+    }
   }
 }
 

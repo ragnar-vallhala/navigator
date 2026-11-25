@@ -59,4 +59,15 @@ std::vector<PgVec3> helipadsAround(const HeightFn &surface, const HeightFn &raw,
                                    float cx, float cy, float range,
                                    const HelipadParams &p = HelipadParams());
 
+// The solid the physics needs for pads: for every pad whose centre lies inside
+// the rectangle [x0,x1] x [y0,y1] grown by radiusM, a deck cap at the deck top
+// and a side wall down to the terrain, `segments` around the ring. Every triangle
+// is emitted with BOTH windings so it collides whatever the BVH's sidedness (the
+// vehicle must rest on the deck top). A pure function of its inputs, so it runs
+// on any thread.
+std::vector<PgVec3> helipadCollisionSoup(const std::vector<PgVec3> &pads,
+                                         float x0, float y0, float x1, float y1,
+                                         float radiusM, float deckM,
+                                         int segments = 20);
+
 } // namespace vsim::procgen

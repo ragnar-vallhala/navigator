@@ -102,4 +102,42 @@ std::vector<PgVec3> helipadsAround(const HeightFn &surface, const HeightFn &raw,
   return pads;
 }
 
+std::vector<PgVec3> helipadCollisionSoup(const std::vector<PgVec3> &pads,
+                                         float x0, float y0, float x1, float y1,
+                                         float radiusM, float deckM,
+                                         int segments) {
+  std::vector<PgVec3> out;
+  const float R = radiusM;
+  const int N = segments;
+  auto tri2 = [&](const PgVec3 &a, const PgVec3 &b, const PgVec3 &c) {
+    out.push_back(a);
+    out.push_back(b);
+    out.push_back(c);
+    out.push_back(a);
+    out.push_back(c);
+    out.push_back(b);
+  };
+  for (const PgVec3 &pad : pads) {
+    if (pad.x < x0 - R || pad.x > x1 + R || pad.y < y0 - R || pad.y > y1 + R)
+      continue;
+    const float px = pad.x, py = pad.y;
+    const float zDeck = -pad.z - deckM; // top
+    const float zBase = -pad.z;         // terrain
+    const PgVec3 ctr{px, py, zDeck};
+    for (int j = 0; j < N; ++j) {
+      const double a0 = 2 * M_PI * j / N, a1 = 2 * M_PI * (j + 1) / N;
+      const PgVec3 r0{static_cast<float>(px + R * std::cos(a0)),
+                      static_cast<float>(py + R * std::sin(a0)), zDeck};
+      const PgVec3 r1{static_cast<float>(px + R * std::cos(a1)),
+                      static_cast<float>(py + R * std::sin(a1)), zDeck};
+      const PgVec3 b0{r0.x, r0.y, zBase};
+      const PgVec3 b1{r1.x, r1.y, zBase};
+      tri2(ctr, r0, r1); // deck cap (landing surface)
+      tri2(r0, b0, b1);  // side wall down to terrain
+      tri2(r0, b1, r1);
+    }
+  }
+  return out;
+}
+
 } // namespace vsim::procgen
