@@ -64,6 +64,20 @@ struct BatteryData {
 };
 
 // -----------------------------------------------------------
+// Failsafe status – mirrors NavLink FAILSAFE_STATUS (msgid 1051): what the FC's
+// own safety logic has decided (a decision, not a measurement). Raw wire values;
+// core/FailsafeStatus.h turns them into the text the UI shows. A GCS that has
+// never received one shows "unknown", not "OK": an older FC does not send it.
+// -----------------------------------------------------------
+struct FailsafeStatusData {
+  uint8_t battLevel = 0;  // NAVLINK_BATT_LEVEL_* (OK/WARN/LAND/CRITICAL)
+  uint8_t landCause = 0;  // NAVLINK_LANDING_CAUSE_* bitmask
+  uint8_t flags = 0;      // NAVLINK_FAILSAFE_FLAGS_* bitmask
+  uint8_t armRefusal = 0; // NAVLINK_ARM_REFUSAL_* (0 = nothing refuses an arm)
+  uint8_t cells = 0;      // pack cell count of the board, 0 = battery logic off
+};
+
+// -----------------------------------------------------------
 // Vertical state – mirrors NavLink VERTICAL_STATE (msgid 1040), the fused
 // 2-state baro+accel estimate (VERT). altitude/climbRate are the fused outputs;
 // baroAltitude is the raw sensor altitude carried alongside so the GCS can chart

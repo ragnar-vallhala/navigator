@@ -52,6 +52,11 @@ navigator_test(tst_battery_alert tst_battery_alert.cpp)
 target_include_directories(tst_battery_alert PRIVATE ${SRC}/core)
 target_link_libraries(tst_battery_alert PRIVATE navlink_codec)
 
+# ---- FAILSAFE_STATUS display rules (unknown until seen, refusal only disarmed) ----
+navigator_test(tst_failsafe_status tst_failsafe_status.cpp)
+target_include_directories(tst_failsafe_status PRIVATE ${SRC}/core)
+target_link_libraries(tst_failsafe_status PRIVATE navlink_codec)
+
 # ---- Battery calibration: fit, band, 16-byte file, dialog ------------------
 navigator_test(tst_battery_calib
     tst_battery_calib.cpp
@@ -636,6 +641,12 @@ navigator_test(tst_statustext
     tst_statustext.cpp
     ${SRC}/protocol/NavlinkRouter.cpp)
 target_link_libraries(tst_statustext PRIVATE navlink_codec)
+
+# ---- FAILSAFE_STATUS decode: a real frame through the router ---------------
+navigator_test(tst_failsafe_decode
+    tst_failsafe_decode.cpp
+    ${SRC}/protocol/NavlinkRouter.cpp)
+target_link_libraries(tst_failsafe_decode PRIVATE navlink_codec)
 
 # ---- NavLink 3: COMMAND_ACK frame seq shares the GCS tx counter -----------
 navigator_test(tst_ack_seq

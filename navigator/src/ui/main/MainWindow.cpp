@@ -1606,6 +1606,10 @@ void MainWindow::onUiTimer() {
   // flags, not the voltage: an unplugged pack still reads a few volts.
   const bool battFresh =
       s.lastBatteryMs != 0 && (nowMs - s.lastBatteryMs) < kTelemetryStaleMs;
+  // FAILSAFE_STATUS: what the FC itself decided. Fresh = one arrived recently;
+  // never before the first (that reads "unknown", not OK).
+  const bool fsFresh =
+      s.lastFailsafeMs != 0 && (nowMs - s.lastFailsafeMs) < kTelemetryStaleMs;
   if (m_batteryCalibDialog) {
     // Counts are evidence of the divider whether or not a pack is PRESENT.
     const uint8_t f = s.battery.flags;
@@ -1626,7 +1630,11 @@ void MainWindow::onUiTimer() {
     // replayed log must not raise a live alarm (toast, chime) for a pack that
     // was low when it was recorded.
     const battery::AlertTracker::Result alert = m_batteryAlert.update(b, nowMs);
-    if (m_source.state() != SourceState::Replay)
+    // The FC's own level wins once it sends one for a board that has a battery
+    // to judge (cells > 0); this local alert is the fallback for an FC that
+    // never sends it, and for a board whose battery logic is off.
+    if (m_source.state() != SourceState::Replay &&
+        !failsafe::fcOwnsBatteryAlert(fsFresh, s.failsafe))
       announceBattery(alert);
     if (b.pack) {
       const QString volts = QString("%1 V").arg(b.volts, 0, 'f', 1);
@@ -1645,6 +1653,20 @@ void MainWindow::onUiTimer() {
       m_imuPanel->setBatteryUnavailable(why);
       m_motorWidget->setBattery(why);
     }
+  }
+
+  if (fsFresh) {
+    if (m_source.state() != SourceState::Replay)
+      announceFailsafe(s.failsafe, s.armed);
+    m_lastFailsafe = s.failsafe;
+    m_failsafeSeen = true;
+    m_motorWidget->setFailsafe(
+        failsafe::statusLine(true, s.armed, s.failsafe).remove(
+            QStringLiteral("Failsafe: ")),
+        failsafe::isAlarm(s.failsafe));
+  } else {
+    m_failsafeSeen = false;
+    m_motorWidget->setFailsafe(tr("unknown"), false);
   }
 
   // Sparse pills + arm state — edge-guarded so we only restyle on change.
@@ -2081,6 +2103,30 @@ void MainWindow::announceBattery(const battery::AlertTracker::Result &r) {
     Notify::warn(this, msg);
   m_chime.play(crit ? ChimeAudio::Kind::BatteryCritical
                     : ChimeAudio::Kind::BatteryWarn);
+}
+
+// The FC's safety decision, announced once per step up: a battery level above
+// the last one, or an automatic landing that was not there before. The first
+// message after a (re)connect counts against "nothing wrong". The arm-refusal
+// reason is left out here: it is for the status field, only while disarmed.
+void MainWindow::announceFailsafe(const FailsafeStatusData &now, bool armed) {
+  const FailsafeStatusData before = m_failsafeSeen ? m_lastFailsafe
+                                                   : FailsafeStatusData{};
+  if (!failsafe::shouldAnnounce(before, now))
+    return;
+  const QString msg = failsafe::statusLine(true, armed, now)
+                          .remove(QStringLiteral("Failsafe: "));
+  const bool severe = now.battLevel >= NAVLINK_BATT_LEVEL_LAND ||
+                      failsafe::isLanding(now);
+  m_logPanel->appendLog("[FC] " + msg);
+  if (severe)
+    Notify::error(this, msg);
+  else
+    Notify::warn(this, msg);
+  m_chime.play(now.battLevel >= NAVLINK_BATT_LEVEL_CRITICAL
+                   ? ChimeAudio::Kind::BatteryCritical
+               : failsafe::isLanding(now) ? ChimeAudio::Kind::Failsafe
+                                          : ChimeAudio::Kind::BatteryWarn);
 }
 
 void MainWindow::openBatteryCalibration() {
