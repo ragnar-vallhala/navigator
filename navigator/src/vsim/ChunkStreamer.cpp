@@ -151,7 +151,7 @@ StreamPlan ChunkStreamer::plan(float wx, float wy, float vx, float vy) {
     };
     std::sort(missing.begin(), missing.end(),
               [&](qint64 a, qint64 b) { return cheb(a) < cheb(b); });
-    int budget = cfg_.maxInFlight - static_cast<int>(inflight_.size());
+    int budget = cfg_.maxQueued - static_cast<int>(inflight_.size());
     for (qint64 key : missing) {
       if (budget <= 0)
         break;

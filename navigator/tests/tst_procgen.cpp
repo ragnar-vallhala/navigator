@@ -23,6 +23,7 @@
 #include <QtTest/QtTest>
 
 #include "ChunkStreamer.h"
+#include "ChunkWorkQueue.h"
 #include "procgen/Flora.h"
 #include "procgen/EdgeTrack.h"
 #include "procgen/GroundCover.h"
@@ -81,6 +82,12 @@ private slots:
   void fieldChunksTileSeamlessly();
   void fieldChunkSoupIntegrity();
   void streamerLoadsNeighborhood();
+  void planHandsOutTheWholeWindowAtOnce();
+  void workQueueServesTheNearestChunkFirst();
+  void workQueueDropsChunksThatLeftTheWindow();
+  void workQueueIgnoresAStaleGeneration();
+  void workQueueHandsEachChunkToOneWorker();
+  void workQueueCapsTheRunners();
   void streamerStableWithinCell();
   void streamerPagesOnCrossing();
   void collisionRecentreHysteresis();
@@ -291,7 +298,7 @@ static vsim::ChunkStreamer::Config streamCfg(int renderRadius) {
   c.resolution = 8; // tiny chunks -> fast test
   c.renderRadius = renderRadius;
   c.collisionRadius = 1;
-  c.maxInFlight = 4; // cap per plan(); drain over several calls
+  c.maxQueued = 4; // cap per plan(); drain over several calls
   return c;
 }
 
@@ -315,6 +322,120 @@ static DrainResult drain(vsim::ChunkStreamer &s, float wx, float wy) {
       break;
   }
   return r;
+}
+
+// The default hand-out is the whole window in ONE plan(): the workers pull
+// from a queue, so how many chunks the GUI hands over per tick no longer
+// decides how long the mesh pool has work.
+void TstProcgen::planHandsOutTheWholeWindowAtOnce() {
+  vsim::ChunkStreamer s;
+  vsim::ChunkStreamer::Config c = streamCfg(3);
+  c.maxQueued = vsim::ChunkStreamer::Config().maxQueued; // the default
+  s.configure(c);
+  const vsim::StreamPlan p = s.plan(0.0f, 0.0f);
+  QCOMPARE(p.toBuild.size(), std::size_t(49)); // 7x7
+  QCOMPARE(s.centreCx(), 0);
+  QCOMPARE(s.centreCy(), 0);
+}
+
+static std::vector<vsim::ChunkReq> cells(
+    std::initializer_list<std::pair<int, int>> l) {
+  std::vector<vsim::ChunkReq> v;
+  for (const auto &c : l)
+    v.push_back({vsim::ChunkStreamer::keyOf(c.first, c.second), c.first,
+                 c.second});
+  return v;
+}
+
+void TstProcgen::workQueueServesTheNearestChunkFirst() {
+  vsim::ChunkWorkQueue q;
+  q.reset(1);
+  q.setWindow(0, 0, 5);
+  q.push(cells({{3, 3}, {0, 1}, {-2, 0}, {0, 0}, {1, 1}}), 1);
+  vsim::ChunkReq r;
+  std::vector<std::pair<int, int>> order;
+  while (q.pop(1, r))
+    order.push_back({r.cx, r.cy});
+  const std::vector<std::pair<int, int>> want = {
+      {0, 0}, {0, 1}, {1, 1}, {-2, 0}, {3, 3}};
+  QCOMPARE(order, want);
+  // The view moves: what is nearest is decided at pop time, not push time.
+  q.push(cells({{0, 0}, {4, 4}}), 1);
+  q.setWindow(4, 4, 5);
+  QVERIFY(q.pop(1, r));
+  QCOMPARE(std::make_pair(r.cx, r.cy), std::make_pair(4, 4));
+}
+
+void TstProcgen::workQueueDropsChunksThatLeftTheWindow() {
+  vsim::ChunkWorkQueue q;
+  q.reset(1);
+  q.setWindow(0, 0, 2);
+  q.push(cells({{0, 0}, {2, 2}, {9, 9}}), 1);
+  q.setWindow(0, 0, 2);
+  QCOMPARE(q.pending(), std::size_t(2)); // {9,9} dropped by the window
+  q.setWindow(20, 20, 2);                // everything left
+  QCOMPARE(q.pending(), std::size_t(0));
+  const std::vector<qint64> dropped = q.takeDropped();
+  QCOMPARE(dropped.size(), std::size_t(3));
+  QVERIFY(q.takeDropped().empty()); // taken once
+  vsim::ChunkReq r;
+  QVERIFY(!q.pop(1, r));
+}
+
+void TstProcgen::workQueueIgnoresAStaleGeneration() {
+  vsim::ChunkWorkQueue q;
+  q.reset(1);
+  q.push(cells({{0, 0}, {1, 0}}), 1);
+  q.reset(2); // world changed: pending work is gone
+  QCOMPARE(q.pending(), std::size_t(0));
+  q.push(cells({{5, 5}}), 1); // a late push from the old generation
+  QCOMPARE(q.pending(), std::size_t(0));
+  vsim::ChunkReq r;
+  QVERIFY(!q.pop(1, r)); // an old worker gets nothing and ends
+  q.push(cells({{5, 5}}), 2);
+  QVERIFY(!q.pop(1, r));
+  QVERIFY(q.pop(2, r));
+}
+
+// Many workers popping at once: every chunk is served exactly once.
+void TstProcgen::workQueueHandsEachChunkToOneWorker() {
+  vsim::ChunkWorkQueue q;
+  q.reset(7);
+  q.setWindow(0, 0, 100);
+  std::vector<vsim::ChunkReq> all;
+  for (int i = 0; i < 40; ++i)
+    for (int j = 0; j < 40; ++j)
+      all.push_back({vsim::ChunkStreamer::keyOf(i, j), i, j});
+  q.push(all, 7);
+  std::mutex m;
+  std::vector<qint64> got;
+  std::vector<std::thread> ts;
+  for (int t = 0; t < 4; ++t)
+    ts.emplace_back([&] {
+      vsim::ChunkReq r;
+      while (q.pop(7, r)) {
+        std::lock_guard<std::mutex> g(m);
+        got.push_back(r.key);
+      }
+    });
+  for (auto &t : ts)
+    t.join();
+  QCOMPARE(got.size(), all.size());
+  std::sort(got.begin(), got.end());
+  QVERIFY(std::adjacent_find(got.begin(), got.end()) == got.end());
+}
+
+void TstProcgen::workQueueCapsTheRunners() {
+  vsim::ChunkWorkQueue q;
+  QVERIFY(q.acquireRunner(2));
+  QVERIFY(q.acquireRunner(2));
+  QVERIFY(!q.acquireRunner(2)); // the global pool keeps room for other jobs
+  q.releaseRunner();
+  QVERIFY(q.acquireRunner(2));
+  q.releaseRunner();
+  q.releaseRunner();
+  q.releaseRunner(); // an extra release does not go negative
+  QCOMPARE(q.runners(), 0);
 }
 
 void TstProcgen::streamerLoadsNeighborhood() {

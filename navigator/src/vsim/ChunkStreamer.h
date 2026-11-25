@@ -115,6 +115,10 @@ public:
     float collisionLookaheadS = 1.0f;   // recentre toward where we will be
     float collisionHysteresis = 0.25f;  // dead zone beyond the chunk, in chunks
     int maxInFlight = 6;          // cap on concurrent off-thread chunk builds
+    // Cap on chunks handed out by one plan(): they go to a work queue the
+    // workers pull from (ChunkWorkQueue), so this is a bound on queued work,
+    // not on what runs at once. Large enough for a whole render window.
+    int maxQueued = 128;
   };
 
   void configure(const Config &c);
@@ -129,12 +133,15 @@ public:
 
   // Plan the work for centre world-XY (wx, wy). Chunks returned in toBuild are
   // marked in-flight (won't be re-requested); call markBuilt or forget when
-  // each resolves. toBuild is nearest-first and capped to the in-flight budget.
+  // each resolves. toBuild is nearest-first and capped to maxQueued.
   // (vx, vy) [m/s] lets the collision window lead the vehicle (see
   // collisionRecentre); the render window stays keyed to the current cell.
   StreamPlan plan(float wx, float wy, float vx = 0.0f, float vy = 0.0f);
 
   bool wanted(qint64 key) const { return desired_.count(key) > 0; }
+  // The cell the render window is centred on (INT_MIN until the first plan()).
+  int centreCx() const { return curCx_; }
+  int centreCy() const { return curCy_; }
   void markBuilt(qint64 key); // a build resolved -> loaded
   void forget(qint64 key);    // dropped from the renderer -> untrack
 

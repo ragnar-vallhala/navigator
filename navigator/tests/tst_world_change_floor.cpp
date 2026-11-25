@@ -96,6 +96,9 @@ public:
     w_.m_colCy = cy;
     w_.tryBuildCollision();
   }
+  // Chunk meshing: finished by workers so far, and still waiting for one.
+  int chunksPosted() const { return w_.m_chunkSink->posted(); }
+  size_t chunksQueued() const { return w_.m_chunkQueue->pending(); }
   bool shipRunning() const { return w_.m_shipWatcher != nullptr; }
   bool shipQueued() const { return w_.m_shipPending.has_value(); }
   bool collisionPending() const { return w_.m_collisionPending; }
@@ -925,6 +928,55 @@ private slots:
     a_->shipDelay(0);
     // Both landed: the covering one was not dropped for the newer one.
     QCOMPARE(a_->logText().count(landed), 2);
+  }
+
+  // The GUI thread hands chunk jobs to the mesh pool once per stream tick; with
+  // software GL a single frame took 11-12 s, the pool ran dry after its first
+  // few chunks and the terrain stopped growing until the frame ended. Workers
+  // now pull from a queue, so a blocked GUI thread costs nothing until the
+  // whole needed set is built.
+  void meshingContinuesWhileTheGuiThreadIsBlocked() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    if (!SitlModule::instance().available())
+      QSKIP("no engine module (set VAYU_SITL_MODULE)");
+    a_->changeWorld([](vsim::WorldConfig &c) {
+      QVERIFY(vsim::applyWorldPreset(c, QStringLiteral("hills"), 5));
+    });
+    if (!a_->running()) {
+      a_->start();
+      QVERIFY(a_->running());
+    }
+    QVERIFY(waitFor(
+        [&] {
+          return a_->logText().contains(
+                     QStringLiteral("world mesh \u2192 daemon")) &&
+                 !a_->shipBusy() && a_->chunksCached() >= 25 &&
+                 a_->chunksQueued() == 0;
+        },
+        60000));
+    pump(500);
+    // A far spot: its whole 7x7 window is missing, far more than one tick's
+    // hand-out used to be (6). Poll in small steps so only ONE tick has planned
+    // when the GUI thread blocks.
+    const int base = a_->chunksPosted();
+    a_->teleport(20000.0f, 20000.0f, 5.0f);
+    QElapsedTimer t;
+    t.start();
+    while (a_->chunksQueued() == 0 && a_->chunksPosted() == base &&
+           t.elapsed() < 20000)
+      pump(5);
+    QVERIFY2(a_->chunksQueued() > 0 || a_->chunksPosted() > base,
+             "the far spot was never planned");
+    // No event processing: the GUI thread is busy for four seconds, as a
+    // software-GL frame on a starved machine keeps it.
+    QThread::msleep(4000);
+    const int builtWhileBlocked = a_->chunksPosted() - base;
+    QVERIFY2(builtWhileBlocked >= 10,
+             qPrintable(QStringLiteral("only %1 chunks were meshed while the "
+                                       "GUI thread was blocked (one tick used "
+                                       "to hand out 6)")
+                            .arg(builtWhileBlocked)));
   }
 
   void dropOnEveryPadRestsOnDeck() {
