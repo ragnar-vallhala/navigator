@@ -472,10 +472,23 @@ private slots:
         30000));
     for (const auto &pr : vsim::worldPresetList()) {
       pump(1500);
+      QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 30000));
       a_->teleport(0.0f, 0.0f, 40.0f); // airborne, 40 m up
-      QVERIFY(waitFor([&] { return !a_->shipBusy() && altAbove(*a_) > 5.0f; },
-                      30000));
-      QVERIFY(altAbove(*a_) > 5.0f);
+      // Nothing holds it there: it falls and lands in about 3 s. The GUI's copy
+      // of the pose lags the engine by seconds on a slow runner and then plays
+      // the whole fall back in one burst, so it can miss the airborne window
+      // altogether. Read the engine's own pose, polling without processing
+      // events, and change the world while it is in the air.
+      const auto engineAlt = [&] {
+        const QVector3D p = a_->lastPos();
+        return -p.z() - (a_->hasGround() ? a_->groundAt(p.x(), p.y()) : 0.0f);
+      };
+      QElapsedTimer fall;
+      fall.start();
+      bool airborne = false;
+      while (fall.elapsed() < 5000 && !(airborne = engineAlt() > 5.0f))
+        QThread::msleep(5);
+      QVERIFY2(airborne, qPrintable(pr.first));
       bool applied = false;
       a_->changeWorld([&](vsim::WorldConfig &c) {
         applied = vsim::applyWorldPreset(c, pr.first, 5);
