@@ -25,7 +25,9 @@
 // other GL view tests. NAV_VEGETATION is forced on for the scenes.
 #include "ChunkStreamer.h"
 #include "SimRendererWidget.h"
+#include "TerrainTextures.h"
 #include "VegetationRenderer.h"
+#include "procgen/EdgeTrack.h"
 #include "procgen/GroundCover.h"
 #include "procgen/TerrainField.h"
 #include "procgen/Vegetation.h"
@@ -37,6 +39,7 @@
 #include <QStandardPaths>
 #include <QSurfaceFormat>
 #include <QVBoxLayout>
+#include <numeric>
 #include <QtTest>
 
 #include <cmath>
@@ -86,7 +89,7 @@ void loadTerrain(SimRendererWidget *r, const World &w) {
     const ProcMesh m = meshFieldChunk(*w.field, w.cells[i].first, w.cells[i].second,
                                       kChunkM, kRes);
     const ChunkMeshData d = toChunkMeshData(w.keys[i], m);
-    r->setWorldChunk(d.key, d.positions, d.normals, d.colors);
+    r->setWorldChunk(d.key, d.positions, d.normals, d.colors, d.splitColors, d.edge, d.edgeColors);
   }
 }
 
@@ -130,6 +133,19 @@ int distinctColours(const QImage &img) {
   return int(s.size());
 }
 
+// Share of pixels that differ at all (any channel) between two frames.
+double anyDiffFraction(const QImage &a, const QImage &b) {
+  const QImage x = a.convertToFormat(QImage::Format_RGB32);
+  const QImage y = b.convertToFormat(QImage::Format_RGB32);
+  if (x.size() != y.size())
+    return 1.0;
+  long n = 0;
+  for (int j = 0; j < x.height(); ++j)
+    for (int i = 0; i < x.width(); ++i)
+      n += x.pixel(i, j) != y.pixel(i, j);
+  return double(n) / double(x.width() * x.height());
+}
+
 // Share of pixels whose colour differs noticeably between two frames.
 double changedFraction(const QImage &a, const QImage &b) {
   const QImage x = a.convertToFormat(QImage::Format_RGB32);
@@ -157,6 +173,10 @@ struct Rig {
     r = new SimRendererWidget;
     r->setGlErrorCheck(true);
     r->setVegetationTreesEnabled(trees); // explicit, whatever the default is
+    // The caster tests switch the shadow casters on. Every other test measures
+    // the trees against the same frame without them: a cast shadow on the ground
+    // is a change those counts would take for foliage.
+    r->setVegCastersOffForTest(true);
     auto *box = QWidget::createWindowContainer(r, &host);
     box->setFixedSize(800, 500);
     lay->addWidget(box);
@@ -171,20 +191,23 @@ struct Rig {
 // apart sideways (so about as far from a camera behind them), each with its own
 // yaw. Several trees keep the pixel counts of far rows large enough to compare.
 constexpr int kStandTrees = 4;
-World standWorld(int kind, int trees = kStandTrees, int variant = 0) {
+constexpr double kFarStippleMax = 0.8; // pinholes + dots over tree pixels, far fade (dither 1.5 to 1.7, blend 0.1 to 0.5)
+// `seed` moves a lone tree a little and turns it: the per-instance mirror and lean
+// follow its position, so other seeds are other looks of the same kind.
+World standWorld(int kind, int trees = kStandTrees, int variant = 0, int seed = 0) {
   World w = buildWorld(kPalForest, -1, 0);
   for (auto &v : w.veg)
     v.clear();
   for (size_t i = 0; i < w.cells.size(); ++i)
     if (w.cells[i].first == 0 && w.cells[i].second == 0)
       for (int n = 0; n < trees; ++n) {
-        const float y = trees == 1 ? 0.0f : -30.0f + 20.0f * float(n);
+        const float y = trees == 1 ? 0.37f * float(seed) : -30.0f + 20.0f * float(n);
         VegInstance t;
         t.species = kVegTree;
         t.kind = uint8_t(kind);
         t.variant = uint8_t(variant);
         t.scale = 1.0f;
-        t.yaw = 0.3f + 1.3f * float(n);
+        t.yaw = 0.3f + 1.3f * float(n) + 0.9f * float(seed);
         t.tint = 0.5f;
         t.pos = {40.0f, y, -surfaceHeight(*w.field, 40.0f, y, kChunkM, kRes)};
         w.veg[i].push_back(t);
@@ -197,6 +220,19 @@ World standWorld(int kind, int trees = kStandTrees, int variant = 0) {
 void aimAtStand(SimRendererWidget *r, const World &w, float d, float elevDeg) {
   const float e = elevDeg * 3.14159265f / 180.0f;
   aimCamera(r, w, 40.0f - d * std::cos(e), 0.0f, 6.0f + d * std::sin(e), 0.0f, e);
+}
+
+// A pixel belongs to the trees when the frame differs from the same pose with
+// vegetation off by more than this (sum of the channel differences). It has to
+// be small: a dark crown against the lit ground differs by only a few levels,
+// so a bigger cut makes the coverage depend on the crown's brightness (a dimmer
+// but identical crown would "lose" pixels). TVR_DIFF overrides it for studies.
+int coverDiff() {
+  static const int d = qEnvironmentVariableIsSet("TVR_DIFF") ? qEnvironmentVariableIntValue("TVR_DIFF") : 8;
+  return d;
+}
+inline bool treeDiffers(QRgb a, QRgb b) {
+  return std::abs(qRed(a) - qRed(b)) + std::abs(qGreen(a) - qGreen(b)) + std::abs(qBlue(a) - qBlue(b)) > coverDiff();
 }
 
 struct TreePixels {
@@ -220,8 +256,7 @@ TreePixels treeAdded(const QImage &onIn, const QImage &offIn) {
   for (int y = 0; y < on.height(); ++y)
     for (int x = 0; x < on.width(); ++x) {
       const QRgb a = on.pixel(x, y), b = off.pixel(x, y);
-      if (std::abs(qRed(a) - qRed(b)) + std::abs(qGreen(a) - qGreen(b)) +
-              std::abs(qBlue(a) - qBlue(b)) <= 24)
+      if (!treeDiffers(a, b))
         continue;
       ++t.all;
       sum += 0.299 * qRed(a) + 0.587 * qGreen(a) + 0.114 * qBlue(a);
@@ -234,8 +269,7 @@ TreePixels treeAdded(const QImage &onIn, const QImage &offIn) {
   for (int y = 0; y < H; ++y)
     for (int x = 0; x < W; ++x) {
       const QRgb a = on.pixel(x, y), b = off.pixel(x, y);
-      cov[size_t(y) * size_t(W) + size_t(x)] =
-          std::abs(qRed(a) - qRed(b)) + std::abs(qGreen(a) - qGreen(b)) + std::abs(qBlue(a) - qBlue(b)) > 24 ? 1 : 0;
+      cov[size_t(y) * size_t(W) + size_t(x)] = treeDiffers(a, b) ? 1 : 0;
     }
   for (int y = 1; y + 1 < H; ++y)
     for (int x = 1; x + 1 < W; ++x) {
@@ -292,8 +326,7 @@ Outline outlineOf(const QImage &onIn, const QImage &offIn) {
   for (int y = 0; y < H; ++y)
     for (int x = 0; x < W; ++x) {
       const QRgb a = on.pixel(x, y), b = off.pixel(x, y);
-      cov[size_t(y) * size_t(W) + size_t(x)] =
-          std::abs(qRed(a) - qRed(b)) + std::abs(qGreen(a) - qGreen(b)) + std::abs(qBlue(a) - qBlue(b)) > 24 ? 1 : 0;
+      cov[size_t(y) * size_t(W) + size_t(x)] = treeDiffers(a, b) ? 1 : 0;
     }
   // A closing (dilate, then erode, 5x5): the sparse needle cards and the
   // impostor's holes fill in, the silhouette stays.
@@ -345,6 +378,191 @@ Outline soloOutline(SimRendererWidget *r, const World &w, float d, float elev, i
     on = r->grabFrame();
   r->setVegetationForcedLod(-1);
   return outlineOf(on, off);
+}
+
+// One object (a tree or a rock) alone at (40, 0), the camera 7 m before it at
+// eye height. Returns how much the frame with vegetation on is darker than the
+// same pose with it off at ground point (40 - ahead, 0), as on / off luma over a
+// small window: below 1 where the contact blob darkens the ground. The tree
+// itself covers none of the probed pixels (they are nearer the camera than its
+// foot), and the sun shadow map and the terrain are the same on and off, as
+// vegetation never casts.
+constexpr float kProbeCamBackM = 7.0f, kProbeEyeM = 1.7f, kProbeDownRad = 0.22f;
+
+double windowLuma(const QImage &im, int cx, int cy) {
+  double sum = 0;
+  int n = 0;
+  for (int y = cy - 2; y <= cy + 2; ++y)
+    for (int x = cx - 2; x <= cx + 2; ++x) {
+      if (x < 0 || y < 0 || x >= im.width() || y >= im.height())
+        continue;
+      const QRgb c = im.pixel(x, y);
+      sum += 0.299 * qRed(c) + 0.587 * qGreen(c) + 0.114 * qBlue(c);
+      ++n;
+    }
+  return n ? sum / n : 0.0;
+}
+
+// Screen position of the point `ahead` metres before the object, at the height
+// of its foot (the blob is a flat disc there; from a grazing camera the slope
+// under it would move the probe off the disc by more than a few pixels).
+QPoint probePixel(SimRendererWidget *r, const World &w, float ahead) {
+  const float g = surfaceHeight(*w.field, 40.0f, 0.0f, kChunkM, kRes);
+  const QPointF p = r->worldToPixelForTest(QVector3D(40.0f - ahead, 0.0f, -g));
+  return QPoint(int(std::lround(p.x())), int(std::lround(p.y())));
+}
+
+void aimProbe(SimRendererWidget *r, const World &w) {
+  aimCamera(r, w, 40.0f - kProbeCamBackM, 0.0f, kProbeEyeM, 0.0f, kProbeDownRad);
+}
+
+World loneWorld(uint8_t species, int kind) {
+  World w = standWorld(0, 0);
+  for (size_t i = 0; i < w.cells.size(); ++i)
+    if (w.cells[i].first == 0 && w.cells[i].second == 0) {
+      VegInstance t;
+      t.species = species;
+      t.kind = uint8_t(kind);
+      t.scale = 1.0f;
+      t.yaw = 0.3f;
+      t.tint = 0.5f;
+      t.pos = {40.0f, 0.0f, -surfaceHeight(*w.field, 40.0f, 0.0f, kChunkM, kRes)};
+      w.veg[i].push_back(t);
+    }
+  return w;
+}
+
+// Trees and rocks as shadow casters: a lone tree `distM` ahead of a raised
+// camera with the sun in the north (behind the tree), so its shadow falls on the
+// ground toward the camera.
+QPoint casterGroundPx(SimRendererWidget *r, const World &w, float x, float y) {
+  const float g = surfaceHeight(*w.field, x, y, kChunkM, kRes);
+  const QPointF p = r->worldToPixelForTest(QVector3D(x, y, -g));
+  return QPoint(int(std::lround(p.x())), int(std::lround(p.y())));
+}
+// High shadows, the sun in the north, the camera 14 m up and distM before x = 40.
+void casterScene(SimRendererWidget *r, const World &w, float distM, float sunEl = 30.0f,
+                 float down = 0.2f) {
+  r->setSun(sunEl, 0.0f);
+  r->setTerrainQuality(vsim::terrain::Quality::High);
+  r->setShadowQuality(ShadowQuality::High);
+  aimCamera(r, w, 40.0f - distM, 0.0f, 14.0f, 0.0f, down);
+}
+
+} // namespace
+
+namespace {
+// ---- Parcel-border tracks are drawn per pixel (EdgeTrack.h) -----------------
+
+  // A point on a tracked border of the hills palette (flat ground, track at full
+  // strength) and the unit direction the border runs in, found from the signed
+  // distance's gradient.
+  struct BorderPoint { float x = 0, y = 0, tx = 1, ty = 0; bool ok = false; };
+BorderPoint findBorder(const TerrainField &f, float x0, float x1, float y0, float y1) {
+    const float step = kChunkM / float(kRes);
+    auto at = [&](float x, float y) {
+      const float h = f.height(x, y);
+      const PgVec3 n = f.normal(x, y, step);
+      return f.colorAtSplit(x, y, h, n.z < 0.0f ? -n.z : 0.0f);
+    };
+    BorderPoint b;
+    for (int iy = 0; float(iy) * 2.0f < y1 - y0 && !b.ok; ++iy)
+      for (int ix = 0; float(ix) * 0.5f < x1 - x0; ++ix) {
+        const float x = x0 + float(ix) * 0.5f, y = y0 + float(iy) * 2.0f;
+        const auto s = at(x, y);
+        if (s.edgeA > 0.05f || s.edgeK < 0.95f)
+          continue;
+        const float e = 0.5f;
+        const float gx = (at(x + e, y).edgeS - at(x - e, y).edgeS) / (2 * e);
+        const float gy = (at(x, y + e).edgeS - at(x, y - e).edgeS) / (2 * e);
+        const float gl = std::hypot(gx, gy);
+        if (gl < 0.5f || gl > 2.0f)
+          continue; // not a clean single border (corner or jump)
+        // the border must stay a straight, tracked line for 12 m either way
+        const float tx = -gy / gl, ty = gx / gl;
+        bool good = true;
+        for (int k = -4; k <= 4 && good; ++k) {
+          const float t = float(k) * 3.0f;
+          const auto q = at(x + tx * t, y + ty * t);
+          good = q.edgeA < 0.35f && q.edgeK > 0.9f;
+        }
+        if (!good)
+          continue;
+        b = {x, y, tx, ty, true};
+        break;
+      }
+    return b;
+  }
+
+  // Left and right edge of the dirt band down the middle of a frame whose camera
+  // looks along the border: per row where redness (r - g) crosses the middle
+  // between the band and the grass at the image sides. Returns the RMS of each
+  // edge about its best straight line (pixels, averaged) and the mean 25-75 %
+  // transition width.
+  struct BandEdges { double rms = 0, width = 0; int rows = 0; };
+BandEdges bandEdges(const QImage &imgIn) {
+    const QImage img = imgIn.convertToFormat(QImage::Format_RGB32);
+    const int W = img.width();
+    BandEdges out;
+    std::vector<double> ys, xl, xr, wl;
+    for (int y = 220; y < 440; ++y) {
+      std::vector<double> v(size_t(W), 0.0);
+      for (int x = 3; x < W - 3; ++x) {
+        double a = 0;
+        for (int k = -3; k <= 3; ++k) {
+          const QRgb p = img.pixel(x + k, y);
+          a += qRed(p) - qGreen(p);
+        }
+        v[size_t(x)] = a / 7.0;
+      }
+      auto mean = [&](int a, int b) { double s = 0; for (int x = a; x < b; ++x) s += v[size_t(x)]; return s / (b - a); };
+      const double band = mean(W / 2 - 6, W / 2 + 6), grass = 0.5 * (mean(20, 120) + mean(W - 120, W - 20));
+      if (band - grass < 14.0)
+        continue; // no band in this row
+      auto cross = [&](double lvl, int dir) { // subpixel, from the middle outward
+        for (int x = W / 2; x > 3 && x < W - 4; x += dir)
+          if (v[size_t(x)] < lvl) {
+            const double v0 = v[size_t(x - dir)], v1 = v[size_t(x)];
+            return double(x - dir) + dir * (v0 - lvl) / (v0 - v1);
+          }
+        return -1.0;
+      };
+      const double l50 = cross(grass + 0.5 * (band - grass), -1), r50 = cross(grass + 0.5 * (band - grass), +1);
+      const double l25 = cross(grass + 0.25 * (band - grass), -1), l75 = cross(grass + 0.75 * (band - grass), -1);
+      if (l50 < 0 || r50 < 0 || l25 < 0 || l75 < 0)
+        continue;
+      ys.push_back(y); xl.push_back(l50); xr.push_back(r50); wl.push_back(std::fabs(l25 - l75));
+    }
+    auto rmsLine = [&](const std::vector<double> &x) {
+      const size_t n = ys.size();
+      double sy = 0, sx = 0, syy = 0, sxy = 0;
+      for (size_t i = 0; i < n; ++i) { sy += ys[i]; sx += x[i]; syy += ys[i] * ys[i]; sxy += ys[i] * x[i]; }
+      const double d = double(n) * syy - sy * sy;
+      const double b = d != 0 ? (double(n) * sxy - sy * sx) / d : 0, a = (sx - b * sy) / double(n);
+      double r = 0;
+      for (size_t i = 0; i < n; ++i) r += (x[i] - (a + b * ys[i])) * (x[i] - (a + b * ys[i]));
+      return std::sqrt(r / double(n));
+    };
+    out.rows = int(ys.size());
+    if (out.rows < 40)
+      return out;
+    out.rms = 0.5 * (rmsLine(xl) + rmsLine(xr));
+    out.width = std::accumulate(wl.begin(), wl.end(), 0.0) / double(wl.size());
+    return out;
+  }
+
+// The same ground twice, as the renderer gets it: the new mesh data (baked
+// colour plus the track-free colour and track distances) and the old one (the
+// baked colour only, which is what the mesher gave before).
+void loadHillsTerrain(SimRendererWidget *r, const World &w, bool split) {
+  for (size_t i = 0; i < w.keys.size(); ++i) {
+    const ProcMesh m = meshFieldChunk(*w.field, w.cells[i].first, w.cells[i].second, kChunkM, kRes);
+    const ChunkMeshData d = toChunkMeshData(w.keys[i], m);
+    if (split)
+      r->setWorldChunk(d.key, d.positions, d.normals, d.colors, d.splitColors, d.edge, d.edgeColors);
+    else
+      r->setWorldChunk(d.key, d.positions, d.normals, d.colors);
+  }
 }
 
 } // namespace
@@ -721,6 +939,76 @@ private slots:
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
 
+  // The far fade-out (the last 14% before the billboard range ends, from about
+  // 480 m) is an alpha blend, not a one-pixel screen door: the dither read as a
+  // checkerboard on the tree line. At 520 m the fade is about one half, which the
+  // dither turned into the most alternating pattern (bayer at 0.5); the blend
+  // leaves the crown's own texture and outline only. Low terrain draws the
+  // same billboards.
+  void farFadeOutIsBlendedNotDithered_data() {
+    QTest::addColumn<int>("kind");
+    QTest::addColumn<bool>("high");
+    QTest::newRow("fir High") << 0 << true;
+    QTest::newRow("jacaranda High") << 2 << true;
+    QTest::newRow("jacaranda Low") << 2 << false;
+  }
+  void farFadeOutIsBlendedNotDithered() {
+    QFETCH(int, kind);
+    QFETCH(bool, high);
+    World w = standWorld(kind);
+    Rig rig(true);
+    QVERIFY(rig.show());
+    rig.r->setTerrainQuality(high ? vsim::terrain::Quality::High : vsim::terrain::Quality::Low);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    standView(rig.r, w, 160.0f, 0.0f, -1); // the atlas bakes from a nearer view
+    const TreePixels t = standView(rig.r, w, 520.0f, 0.0f, -1);
+    if (rig.r->vegetationStats().impostorVariants == 0)
+      QSKIP("no impostor atlas on this context");
+    qInfo("kind %d %s, 520 m: tree px %d, stipple %.3f", kind, high ? "High" : "Low", t.all, t.stipple());
+    QVERIFY2(t.all > 30, qPrintable(QString("trees not found (%1 px)").arg(t.all)));
+    QVERIFY2(t.stipple() < kFarStippleMax, qPrintable(QString("stipple %1").arg(t.stipple())));
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // Two variants in the far fade-out: every variant's opaque billboard pass is
+  // drawn before any blended far pass. Per variant the far pass would let a later
+  // variant's opaque billboard (depth write on, the faded quad wrote none) paint
+  // over an earlier variant's faded one that is in front of it. The draw order is
+  // read from the renderer's stats, and the frame must still show the trees.
+  void farFadePassesRunAfterEveryOpaquePass() {
+    World w = standWorld(0, 2);
+    for (size_t i = 0; i < w.cells.size(); ++i)
+      if (w.cells[i].first == 0 && w.cells[i].second == 0)
+        for (int n = 0; n < 2; ++n) {
+          VegInstance t;
+          t.species = kVegTree;
+          t.kind = 2;
+          t.scale = 1.0f;
+          t.yaw = 0.7f + float(n);
+          t.tint = 0.5f;
+          const float y = -10.0f + 20.0f * float(n);
+          t.pos = {40.0f, y, -surfaceHeight(*w.field, 40.0f, y, kChunkM, kRes)};
+          w.veg[i].push_back(t);
+        }
+    Rig rig(true);
+    QVERIFY(rig.show());
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    standView(rig.r, w, 160.0f, 0.0f, -1); // the atlas bakes from a nearer view
+    const TreePixels t = standView(rig.r, w, 520.0f, 0.0f, -1);
+    if (rig.r->vegetationStats().impostorVariants < 2)
+      QSKIP("no impostor atlas on this context");
+    const std::string passes = rig.r->vegetationStats().impostorPasses;
+    qInfo("far fade passes '%s', tree px %d", passes.c_str(), t.all);
+    const size_t firstFar = passes.find('f');
+    QVERIFY2(firstFar != std::string::npos && passes.rfind('f') > firstFar,
+             "two variants should each have a far fade-out pass");
+    QVERIFY2(passes.find('o', firstFar) == std::string::npos, passes.c_str());
+    QVERIFY2(t.all > 60, qPrintable(QString("trees not found (%1 px)").arg(t.all)));
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
   // No pop where a tree changes from mesh to impostor (130 m), for every kind,
   // level with the crowns and from 45 and 60 degrees up: the foliage the trees
   // add to the frame (scaled by distance squared) and its mean luminance, step
@@ -833,20 +1121,24 @@ private slots:
     QTest::addColumn<float>("dist");
     QTest::addColumn<float>("elev");
     QTest::addColumn<int>("variant");
+    QTest::addColumn<int>("seed");
     for (int kind : {0, 1})
       for (int var : {0, 2}) // variant 1 is the same shape as 0, and a fir has one
         if (kind == 1 || var == 0)
           for (float d : {100.0f, 160.0f})
-          for (float e : {10.0f, 20.0f, 30.0f, 45.0f})
-            QTest::newRow(qPrintable(QString("%1 v%2 %3 m %4 deg").arg(kind ? "pine" : "fir").arg(var).arg(double(d)).arg(double(e))))
-                << kind << d << e << var;
+            for (float e : {10.0f, 20.0f, 30.0f, 45.0f, 70.0f, 85.0f})
+              for (int seed : {0, 3}) // another position and heading: the mirror state changes
+                if (seed == 0 || e > 40.0f)
+                  QTest::newRow(qPrintable(QString("%1 v%2 %3 m %4 deg s%5").arg(kind ? "pine" : "fir").arg(var).arg(double(d)).arg(double(e)).arg(seed)))
+                      << kind << d << e << var << seed;
   }
   void impostorKeepsTheTreesShapeFromAbove() {
     QFETCH(int, kind);
     QFETCH(float, dist);
     QFETCH(float, elev);
     QFETCH(int, variant);
-    World w = standWorld(kind, 1, variant);
+    QFETCH(int, seed);
+    World w = standWorld(kind, 1, variant, seed);
     Rig rig(true);
     loadTerrain(rig.r, w);
     loadVegetation(rig.r, w);
@@ -887,10 +1179,22 @@ private slots:
     const bool high = elev >= 40.0f;
     const double minHeight = kind == 0 ? 0.75 : 0.62;
     QVERIFY2(hRatio >= minHeight, qPrintable(QString("spire or trunk lost: height x%1").arg(hRatio)));
-    QVERIFY2(wRatio <= 1.5, qPrintable(QString("flat saucer: widest row x%1").arg(wRatio)));
-    QVERIFY2(area <= (high ? 1.5 : 1.4), qPrintable(QString("crown filled out: area x%1").arg(area)));
+    QVERIFY2(wRatio <= 1.25, qPrintable(QString("flat saucer: widest row x%1").arg(wRatio)));
+    QVERIFY2(area <= (high ? 1.25 : 1.4), qPrintable(QString("crown filled out: area x%1").arg(area)));
+    // Straight down the top tile is the whole crown, a disc: the cone's outline would cut
+    // it to a wedge (area x0.77-0.91 and widest row x0.81-0.94 of the mesh's at 70 and
+    // 85 degrees), so the clip is gone by 70 degrees and the impostor keeps its width.
+    if (elev >= 60.0f) {
+      QVERIFY2(area >= 0.95, qPrintable(QString("crown clipped to a wedge: area x%1").arg(area)));
+      QVERIFY2(wRatio >= 0.97, qPrintable(QString("crown clipped to a wedge: widest row x%1").arg(wRatio)));
+    }
     if (elev >= 20.0f)
       QVERIFY2(waist >= 0.5, qPrintable(QString("neck under the crown: x%1").arg(waist)));
+    // A cone seen from 45 degrees stays a cone: the top tile's disc, as wide as the
+    // base, used to make a ball on the spire (upper bands x1.27 to x1.42 of the mesh's
+    // for a fir at 100 m; the cone mask in the top tile brings them to x1.17 at most).
+    if (high && elev < 60.0f && dist < 135.0f)
+      QVERIFY2(over <= 1.22, qPrintable(QString("ball on the spire: upper bands x%1").arg(over)));
     if (elev >= 20.0f && !high)
       QVERIFY2(over <= 2.2, qPrintable(QString("bulb on the crown: upper bands x%1").arg(over)));
     QCOMPARE(rig.r->glErrorCount(), 0);
@@ -930,6 +1234,395 @@ private slots:
   }
 
   // The impostor's coverage has no screen-door pattern where the top tile blends in.
+  // The impostor must be about as bright as the mesh it replaces. A lone tree on
+  // bare ground, the mesh forced to LOD1 and then the impostor, mean luminance of
+  // the crown pixels (green over red in the mesh view) both cover. The mesh
+  // lights a tree differently when instVary mirrors it (the winding flips, so
+  // gl_FrontFacing inverts and the whole shading normal turns over), and the
+  // impostor follows that per instance: x = 40 hashes to a mirrored tree and
+  // x = 43 to an unmirrored one (fract(sin(dot(p, (12.9898, 78.233))) * 43758.5453)
+  // is 0.60 and 0.22; mirrored above 0.5). Fir and pine are asserted to a band
+  // (mean over 0 and 45 degrees, three suns); jacaranda and island are measured
+  // and printed only: island stays 1.0-1.5 and jacaranda reaches 1.5 behind-the-
+  // crown at sun 25 (see the commit message).
+  void impostorLuminanceMatchesMesh_data() {
+    QTest::addColumn<int>("kind");
+    QTest::addColumn<bool>("mirrored");
+    for (int k = 0; k < 4; ++k)
+      for (bool m : {true, false})
+        QTest::newRow(qPrintable(QString("%1 %2").arg(k == 0 ? "fir" : k == 1 ? "pine" : k == 2 ? "jacaranda" : "island").arg(m ? "mirrored" : "unmirrored")))
+            << k << m;
+  }
+  void impostorLuminanceMatchesMesh() {
+    QFETCH(int, kind);
+    QFETCH(bool, mirrored);
+    const float px = mirrored ? 40.0f : 43.0f;
+    World w = buildWorld(kPalForest, -1, 0);
+    for (auto &v : w.veg)
+      v.clear();
+    for (size_t i = 0; i < w.cells.size(); ++i)
+      if (w.cells[i].first == 0 && w.cells[i].second == 0) {
+        VegInstance t;
+        t.species = kVegTree;
+        t.kind = uint8_t(kind);
+        t.variant = 0;
+        t.scale = 1.0f;
+        t.yaw = 0.3f;
+        t.tint = 0.5f;
+        t.pos = {px, 0.0f, -surfaceHeight(*w.field, px, 0.0f, kChunkM, kRes)};
+        w.veg[i].push_back(t);
+      }
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    QString failures;
+    for (const auto sunp : {std::pair<float, float>{46.0f, 37.0f}, {25.0f, 200.0f}, {70.0f, 300.0f}}) {
+      double sum = 0;
+      int rows = 0;
+      for (float e : {0.0f, 45.0f}) {
+        rig.r->setSun(sunp.first, sunp.second);
+        const float er = e * 3.14159f / 180.0f;
+        aimCamera(rig.r, w, px + 50.0f * std::cos(er), 0.0f, 6.0f + 50.0f * std::sin(er), 3.14159f, er);
+        rig.r->setVegetationEnabled(false);
+        const QImage off = rig.r->grabFrame().convertToFormat(QImage::Format_RGB32);
+        rig.r->setVegetationEnabled(true);
+        QImage img[4];
+        for (int lod : {1, 3}) {
+          rig.r->setVegetationForcedLod(lod);
+          QImage on = settledFrame(rig.r);
+          for (int i = 0; i < 40 && lod == 3 && rig.r->vegetationStats().impostors == 0; ++i)
+            on = rig.r->grabFrame();
+          img[lod] = on.convertToFormat(QImage::Format_RGB32);
+        }
+        rig.r->setVegetationForcedLod(-1);
+        double sm = 0, si = 0;
+        int n = 0;
+        for (int y = 0; y < off.height(); ++y)
+          for (int x = 0; x < off.width(); ++x) {
+            const QRgb o = off.pixel(x, y), a = img[1].pixel(x, y), b = img[3].pixel(x, y);
+            if (!treeDiffers(a, o) || !treeDiffers(b, o) || qGreen(a) <= qRed(a) + 4)
+              continue;
+            auto lum = [](QRgb c) { return 0.299 * qRed(c) + 0.587 * qGreen(c) + 0.114 * qBlue(c); };
+            ++n;
+            sm += lum(a);
+            si += lum(b);
+          }
+        QVERIFY2(n > 150 && sm > 0, "crown pixels not found");
+        const double r = si / sm;
+        qInfo("LUMBAND kind %d %s sun %.0f/%.0f %.0f deg: impostor/mesh crown luminance x%.2f (%d px)", kind, mirrored ? "mirrored" : "unmirrored",
+              double(sunp.first), double(sunp.second), double(e), r, n);
+        sum += r;
+        ++rows;
+      }
+      const double mean = sum / rows;
+      if (kind <= 1 && (mean < 0.75 || mean > 1.25))
+        failures += QString("[sun %1/%2: x%3] ").arg(double(sunp.first)).arg(double(sunp.second)).arg(mean, 0, 'f', 2);
+    }
+    QVERIFY2(failures.isEmpty(), qPrintable("impostor crown luminance vs mesh, outside 0.75..1.25: " + failures));
+  }
+
+  void borderTrackIsStraightAndCrisp_data() {
+    QTest::addColumn<float>("aboveM");
+    QTest::addColumn<float>("downRad");
+    QTest::addColumn<bool>("high");
+    QTest::newRow("High h6") << 6.0f << 0.8f << true;
+    QTest::newRow("High h10") << 10.0f << 0.9f << true;
+  }
+  void borderTrackIsStraightAndCrisp() {
+    QFETCH(float, aboveM);
+    QFETCH(float, downRad);
+    QFETCH(bool, high);
+    Rig rig;
+    QVERIFY(rig.show());
+    rig.r->setTerrainQuality(high ? vsim::terrain::Quality::High : vsim::terrain::Quality::Low);
+    QVERIFY(high); // Low keeps the baked track: see lowKeepsTheBakedBorderTracks
+    rig.r->setVegetationEnabled(false);
+    World w;
+    FieldParams fp;
+    fp.seed = 11u;
+    fp.palette = kPalHills;
+    fp.heightM = 30.0f;
+    w.field = std::make_unique<TerrainField>(fp);
+    for (int cy = -1; cy <= 1; ++cy)
+      for (int cx = -1; cx <= 1; ++cx) {
+        w.keys.push_back(ChunkStreamer::keyOf(cx, cy));
+        w.cells.push_back({cx, cy});
+      }
+    const BorderPoint b = findBorder(*w.field, -170.0f, 170.0f, -170.0f, 170.0f);
+    QVERIFY2(b.ok, "no straight tracked border in the hills world");
+    const float D = aboveM / std::tan(downRad);
+    const float heading = std::atan2(b.ty, b.tx);
+    BandEdges res[2];
+    for (int split = 0; split < 2; ++split) {
+      rig.r->clearWorldChunks();
+      loadHillsTerrain(rig.r, w, split == 1);
+      aimCamera(rig.r, w, b.x - b.tx * D, b.y - b.ty * D, aboveM, heading, downRad);
+      res[split] = bandEdges(settledFrame(rig.r, 3));
+    }
+    qInfo("ZZ border track at (%.1f,%.1f): old rms %.2f px width %.2f px (%d rows) | new rms %.2f px width %.2f px (%d rows)",
+          double(b.x), double(b.y), res[0].rms, res[0].width, res[0].rows, res[1].rms, res[1].width, res[1].rows);
+    // The band must exist in both frames (a missing track would measure as 0),
+    // and drawn per pixel it is much straighter and its edge much sharper than
+    // the node-sampled one: measured about 4x on rms and 2x on width at High.
+    QVERIFY2(res[0].rows >= 40 && res[1].rows >= 40, "no dirt band in the frame");
+    QVERIFY(res[1].rms < 0.6 * res[0].rms);
+    QVERIFY(res[1].rms < 3.5);
+    QVERIFY(res[1].width < 0.75 * res[0].width);
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // Low keeps the old baked border tracks: the chunk's node colour is exactly
+  // colorAt() (what the mesher gave before), and with the new per-pixel data
+  // present the frame equals the one drawn from that colour alone, pixel for
+  // pixel. A live switch to High and back changes nothing at Low.
+  void lowKeepsTheBakedBorderTracks() {
+    Rig rig;
+    QVERIFY(rig.show());
+    rig.r->setTerrainQuality(vsim::terrain::Quality::Low);
+    rig.r->setVegetationEnabled(false);
+    World w;
+    FieldParams fp;
+    fp.seed = 11u;
+    fp.palette = kPalHills;
+    fp.heightM = 30.0f;
+    w.field = std::make_unique<TerrainField>(fp);
+    for (int cy = -1; cy <= 1; ++cy)
+      for (int cx = -1; cx <= 1; ++cx) {
+        w.keys.push_back(ChunkStreamer::keyOf(cx, cy));
+        w.cells.push_back({cx, cy});
+      }
+    const ProcMesh m = meshFieldChunk(*w.field, 0, 0, kChunkM, kRes);
+    int differs = 0, trackNodes = 0;
+    for (size_t k = 0; k < m.positions.size(); k += 7) {
+      const PgVec3 p = m.positions[k], n = m.normals[k];
+      const PgVec3 c = w.field->colorAt(p.x, p.y, -p.z, n.z < 0.0f ? -n.z : 0.0f).color;
+      differs += (c.x != m.colors[k].x || c.y != m.colors[k].y || c.z != m.colors[k].z);
+      trackNodes += (m.colors[k].x != m.splitColors[k].x || m.colors[k].y != m.splitColors[k].y);
+    }
+    QCOMPARE(differs, 0);
+    QVERIFY2(trackNodes > 20, "the chunk must hold baked border tracks for this to mean anything");
+    const float D = 10.0f / std::tan(0.6f);
+    QImage f[2];
+    for (int split = 0; split < 2; ++split) {
+      rig.r->clearWorldChunks();
+      loadHillsTerrain(rig.r, w, split == 1);
+      aimCamera(rig.r, w, 8.0f - D, 12.0f, 10.0f, 0.0f, 0.6f);
+      f[split] = settledFrame(rig.r, 3);
+    }
+    QCOMPARE(anyDiffFraction(f[0], f[1]), 0.0);
+    // High with the same data differs (the track is drawn per pixel), and back
+    // to Low is the baked frame again.
+    rig.r->setTerrainQuality(vsim::terrain::Quality::High);
+    const QImage hi = settledFrame(rig.r, 3);
+    QVERIFY(anyDiffFraction(f[1], hi) > 0.0);
+    rig.r->setTerrainQuality(vsim::terrain::Quality::Low);
+    QCOMPARE(anyDiffFraction(f[1], settledFrame(rig.r, 3)), 0.0);
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // A palette without parcels has no border tracks: the new mesh data must leave
+  // its frame exactly as it was, at both qualities.
+  void worldsWithoutParcelsRenderUnchanged_data() {
+    QTest::addColumn<bool>("high");
+    QTest::newRow("High") << true;
+    QTest::newRow("Low") << false;
+  }
+  void worldsWithoutParcelsRenderUnchanged() {
+    QFETCH(bool, high);
+    Rig rig;
+    QVERIFY(rig.show());
+    rig.r->setTerrainQuality(high ? vsim::terrain::Quality::High : vsim::terrain::Quality::Low);
+    rig.r->setVegetationEnabled(false);
+    World w;
+    FieldParams fp;
+    fp.seed = 11u;
+    fp.palette = kPalForest;
+    fp.heightM = 40.0f;
+    w.field = std::make_unique<TerrainField>(fp);
+    for (int cy = -1; cy <= 1; ++cy)
+      for (int cx = -1; cx <= 1; ++cx) {
+        w.keys.push_back(ChunkStreamer::keyOf(cx, cy));
+        w.cells.push_back({cx, cy});
+      }
+    QImage f[2];
+    for (int split = 0; split < 2; ++split) {
+      rig.r->clearWorldChunks();
+      loadHillsTerrain(rig.r, w, split == 1);
+      aimCamera(rig.r, w, -6.0f, 12.0f, 10.0f, 0.0f, 0.6f);
+      f[split] = settledFrame(rig.r, 3);
+    }
+    QCOMPARE(changedFraction(f[0], f[1]), 0.0);
+    QVERIFY(f[0].convertToFormat(QImage::Format_RGB32) == f[1].convertToFormat(QImage::Format_RGB32));
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // The textured ground skips the grass photo where the dirt (or rock) weight
+  // reaches 0.999, but the grass term is still blended in at 45% (15% on rock).
+  // With no photo sample its brightness detail must be neutral; clamp(0) was
+  // 0.35 and drew hard-edged dark slivers wherever the cover crossed the 0.999
+  // contour (hills, High only). A flat chunk whose node colour steps across the
+  // contour must read the same on both sides of it.
+  void dirtWeightContourLeavesNoBrightnessStep() {
+    Rig rig;
+    QVERIFY(rig.show());
+    rig.r->setTerrainQuality(vsim::terrain::Quality::High);
+    rig.r->setVegetationEnabled(false);
+    const World w = buildWorld(kPalFlat, -1, 1);
+    const float cell = kChunkM / float(kRes);
+    const float yc = 12.0f;
+    const float yLo = std::floor(yc / cell) * cell, yHi = yLo + cell;
+    // dirt weight 0.98 on the low side, exactly 1 on the high side (kDirtEdge1 is 0.10)
+    const float g = 0.30f, b = 0.20f;
+    const float rLow = vsim::terrain::kDirtG * g + 0.088f, rHigh = vsim::terrain::kDirtG * g + 0.108f;
+    for (size_t i = 0; i < w.keys.size(); ++i) {
+      const ProcMesh m = meshFieldChunk(*w.field, w.cells[i].first, w.cells[i].second, kChunkM, kRes);
+      ChunkMeshData d = toChunkMeshData(w.keys[i], m);
+      for (size_t k = 0; k < d.colors.size(); ++k)
+        d.colors[k] = QVector3D(d.positions[k].y() <= yLo + 0.01f ? rLow : rHigh, g, b);
+      rig.r->setWorldChunk(d.key, d.positions, d.normals, d.colors);
+    }
+    const float h = 12.0f, D = h / std::tan(0.6f);
+    aimCamera(rig.r, w, 8.0f - D, yc, h, 0.0f, 0.6f);
+    const QImage im = settledFrame(rig.r, 3);
+    auto bandLuma = [&](float y) {
+      const float gz = surfaceHeight(*w.field, 8.0f, y, kChunkM, kRes);
+      const QPointF p = rig.r->worldToPixelForTest(QVector3D(8.0f, y, -gz));
+      double sum = 0;
+      int n = 0;
+      for (int dy = -8; dy <= 8; ++dy)
+        for (int dx = -8; dx <= 8; ++dx) {
+          const int x = int(p.x()) + dx, yy = int(p.y()) + dy;
+          if (x < 0 || yy < 0 || x >= im.width() || yy >= im.height()) continue;
+          const QRgb c = im.pixel(x, yy);
+          sum += 0.299 * qRed(c) + 0.587 * qGreen(c) + 0.114 * qBlue(c);
+          ++n;
+        }
+      return n ? sum / n : 0.0;
+    };
+    const double lo = bandLuma(yLo - 2.0f), hi = bandLuma(yHi + 2.0f);
+    qInfo("ZZ dirt contour: luma below %.2f above %.2f ratio %.4f", lo, hi, hi / lo);
+    QVERIFY(lo > 20.0 && hi > 20.0);
+    QVERIFY2(hi / lo > 0.93 && hi / lo < 1.07, "a brightness step across the dirt weight 0.999 contour");
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // The GLSL track weight is generated from the constants of procgen/EdgeTrack.h
+  // (as the splat rule is from TerrainMaterial.h), so it cannot drift from the
+  // C++ rule the tests and the mesher use.
+  void edgeTrackGlslIsGeneratedFromTheSharedConstants() {
+    const QString g = QString::fromLatin1(vsim::terrain::terrainMaterialGLSL());
+    auto f = [](float v) { return QString::number(double(v), 'f', 4); };
+    const int at = g.indexOf("float edgeTrackWeight(vec2 trk)");
+    QVERIFY(at >= 0);
+    const QString fn = g.mid(at);
+    QVERIFY(fn.contains("trk.y >= " + f(vsim::procgen::kEdgeValidMax)));
+    QVERIFY(fn.contains(f(vsim::procgen::kEdgeTrackMax) + " * (1.0 - smoothstep(" + f(vsim::procgen::kEdgeTrackD0) +
+                        ", " + f(vsim::procgen::kEdgeTrackD1) + ", abs(trk.x)))"));
+  }
+
+  // The survey grid is a close-ground hint: present 30 m from the eye, gone by
+  // 60 m (its long straight lines read as seams from the air). Measured as the
+  // pixels a frame changes between grid on and grid off, looking straight down
+  // from 30 m and from 60 m over flat ground.
+  void surveyGridIsGoneBeyondSixtyMetres_data() {
+    QTest::addColumn<bool>("high");
+    QTest::newRow("High") << true;
+    QTest::newRow("Low") << false;
+  }
+  void surveyGridIsGoneBeyondSixtyMetres() {
+    QFETCH(bool, high);
+    Rig rig;
+    QVERIFY(rig.show());
+    rig.r->setTerrainQuality(high ? vsim::terrain::Quality::High : vsim::terrain::Quality::Low);
+    rig.r->setVegetationEnabled(false);
+    World w;
+    FieldParams fp;
+    fp.seed = 11u;
+    fp.palette = kPalForest;
+    fp.heightM = 3.0f; // flat: the grid only draws on level ground
+    w.field = std::make_unique<TerrainField>(fp);
+    for (int cy = -1; cy <= 1; ++cy)
+      for (int cx = -1; cx <= 1; ++cx) {
+        w.keys.push_back(ChunkStreamer::keyOf(cx, cy));
+        w.cells.push_back({cx, cy});
+      }
+    loadTerrain(rig.r, w);
+    double changed[3] = {};
+    const float eye[3] = {20.0f, 30.0f, 60.0f};
+    for (int i = 0; i < 3; ++i) {
+      aimCamera(rig.r, w, 0.0f, 0.0f, eye[i], 0.0f, 1.5f);
+      rig.r->setSurveyGrid(true);
+      const QImage on = settledFrame(rig.r, 3);
+      rig.r->setSurveyGrid(false);
+      const QImage off = settledFrame(rig.r, 3);
+      changed[i] = anyDiffFraction(on, off);
+      if (i == 0)
+        QVERIFY2(changed[0] > 0.0, "the grid must show at 20 m");
+    }
+    qInfo("ZZ grid pixels changed by the grid: 20 m %.5f, 30 m %.5f, 60 m %.5f", changed[0], changed[1], changed[2]);
+    QVERIFY2(changed[1] > 0.0, "the grid lines are still there at 30 m");
+    QCOMPARE(changed[2], 0.0);
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // The survey grid is a View option, off by default and stored under
+  // "sim/surveyGrid": a renderer made with nothing stored has it off and draws
+  // no grid pixel (identical to an explicit off, at 20 m over flat ground where
+  // the grid is strongest); the stored value is read back and applied.
+  void surveyGridIsAnOffByDefaultSetting() {
+    QStandardPaths::setTestModeEnabled(true);
+    {
+      QSettings s;
+      s.remove("sim/surveyGrid");
+    }
+    QVERIFY(!SimRendererWidget::surveyGridByConfig());
+    Rig rig;
+    QVERIFY(rig.show());
+    QVERIFY(!rig.r->surveyGrid());
+    rig.r->setVegetationEnabled(false);
+    World w;
+    FieldParams fp;
+    fp.seed = 11u;
+    fp.palette = kPalForest;
+    fp.heightM = 3.0f;
+    w.field = std::make_unique<TerrainField>(fp);
+    for (int cy = -1; cy <= 1; ++cy)
+      for (int cx = -1; cx <= 1; ++cx) {
+        w.keys.push_back(ChunkStreamer::keyOf(cx, cy));
+        w.cells.push_back({cx, cy});
+      }
+    loadTerrain(rig.r, w);
+    aimCamera(rig.r, w, 0.0f, 0.0f, 20.0f, 0.0f, 1.5f);
+    const QImage byDefault = settledFrame(rig.r, 3);
+    rig.r->setSurveyGrid(false);
+    QCOMPARE(anyDiffFraction(byDefault, settledFrame(rig.r, 3)), 0.0);
+    rig.r->setSurveyGrid(true);
+    QVERIFY2(anyDiffFraction(byDefault, settledFrame(rig.r, 3)) > 0.01, "switching it on must show lines");
+    rig.r->setSurveyGrid(false);
+    QCOMPARE(anyDiffFraction(byDefault, settledFrame(rig.r, 3)), 0.0); // and off again: zero grid pixels
+    // The setting round-trips and a renderer built after it follows it.
+    {
+      QSettings s;
+      s.setValue("sim/surveyGrid", true);
+    }
+    QVERIFY(SimRendererWidget::surveyGridByConfig());
+    {
+      Rig on;
+      QVERIFY(on.show());
+      QVERIFY(on.r->surveyGrid());
+    }
+    {
+      QSettings s;
+      s.setValue("sim/surveyGrid", false);
+    }
+    QVERIFY(!SimRendererWidget::surveyGridByConfig());
+    {
+      QSettings s;
+      s.remove("sim/surveyGrid");
+    }
+  }
+
   void impostorTopBlendHasNoScreenDoor_data() {
     QTest::addColumn<int>("kind");
     QTest::addColumn<float>("dist");
@@ -1185,6 +1878,251 @@ private slots:
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
 
+  // ---- trees and rocks as shadow casters ----------------------------------
+  void treesCastIntoTheFirstCascades_data() {
+    QTest::addColumn<int>("kind");
+    QTest::addColumn<float>("distM");
+    QTest::addColumn<int>("maxTrisPerInstance"); // the coarsest LOD, not LOD0/1
+    QTest::newRow("jacaranda c1") << 2 << 70.0f << 5900;
+    QTest::newRow("fir c1") << 0 << 70.0f << 300;
+    QTest::newRow("island c1") << 3 << 70.0f << 1500;
+  }
+  // The ground in a tree's shadow is darker with casters on than off, ground
+  // beside it is not, and what was drawn is the coarsest LOD in cascade 1 only.
+  void treesCastIntoTheFirstCascades() {
+    QFETCH(int, kind);
+    QFETCH(float, distM);
+    QFETCH(int, maxTrisPerInstance);
+    World w = loneWorld(kVegTree, kind);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    casterScene(rig.r, w, distM);
+    rig.r->setVegCasterFirstCascadeForTest(1);
+    rig.r->setVegCastersOffForTest(true);
+    const QImage off = settledFrame(rig.r).convertToFormat(QImage::Format_RGB32);
+    rig.r->setVegCastersOffForTest(false);
+    const QImage on = settledFrame(rig.r).convertToFormat(QImage::Format_RGB32);
+    const auto &cs = rig.r->vegCasterStatsForTest();
+    QVERIFY2(cs.instances[1] >= 1, "the tree is drawn into cascade 1");
+    QCOMPARE(cs.instances[0], 0);
+    QCOMPARE(cs.instances[2], 0);
+    QVERIFY2(cs.triangles[1] / cs.instances[1] <= maxTrisPerInstance, "coarsest LOD");
+    const QPoint a = casterGroundPx(rig.r, w, 40.0f - 12.0f, 0.0f);
+    const QPoint b = casterGroundPx(rig.r, w, 40.0f - 12.0f, 14.0f);
+    const double shadowRatio = windowLuma(on, a.x(), a.y()) / windowLuma(off, a.x(), a.y());
+    const double controlRatio = windowLuma(on, b.x(), b.y()) / windowLuma(off, b.x(), b.y());
+    qInfo("caster probe: shadow %.3f control %.3f (tris/instance %lld)", shadowRatio, controlRatio,
+          cs.triangles[1] / cs.instances[1]);
+    QVERIFY2(shadowRatio < 0.9, "ground in the tree's shadow is darker with casters");
+    QVERIFY2(controlRatio > 0.97, "ground beside the shadow is not");
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // The flags decide: trees off, vegetation off, Low quality, and the test switch
+  // each leave the frame as it is without casters, and switching one back on with
+  // the camera still shows the shadow again (a tile reused from before the switch
+  // would not).
+  void casterFlagsAndLowGateTheShadow() {
+    World w = loneWorld(kVegTree, 2);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    casterScene(rig.r, w, 70.0f);
+    rig.r->setVegCasterFirstCascadeForTest(1);
+    settledFrame(rig.r); // the projection the probe needs is the drawn one
+    const QPoint a = casterGroundPx(rig.r, w, 28.0f, 0.0f);
+    auto ratio = [&](const QImage &x, const QImage &y) {
+      return windowLuma(x, a.x(), a.y()) / windowLuma(y, a.x(), a.y());
+    };
+    auto frame = [&]() { return settledFrame(rig.r).convertToFormat(QImage::Format_RGB32); };
+    rig.r->setVegCastersOffForTest(true);
+    const QImage none = frame();
+    rig.r->setVegCastersOffForTest(false);
+    const QImage withTrees = frame();
+    QVERIFY(ratio(withTrees, none) < 0.9);
+    // Trees off: the shadow goes (a stale tile would keep it).
+    rig.r->setVegetationTreesEnabled(false);
+    QVERIFY2(ratio(frame(), none) > 0.97, "trees off");
+    rig.r->setVegetationTreesEnabled(true);
+    QVERIFY2(ratio(frame(), none) < 0.9, "trees back on");
+    // Vegetation off altogether, then on.
+    rig.r->setVegetationEnabled(false);
+    rig.r->grabFrame();
+    const QImage vegOff = frame();
+    rig.r->setVegetationEnabled(true);
+    QVERIFY2(ratio(frame(), vegOff) < 0.9, "vegetation back on");
+    // Low: one 1024 map over 150 m (texel 0.35 m): no casters at all.
+    rig.r->setShadowQuality(ShadowQuality::Low);
+    const QImage lowOn = frame();
+    const auto &cs = rig.r->vegCasterStatsForTest();
+    const int passes = cs.passes;
+    rig.r->setVegCastersOffForTest(true);
+    const QImage lowOff = frame();
+    QCOMPARE(cs.passes, passes); // never drawn at Low
+    QVERIFY2(changedFraction(lowOn, lowOff) < 0.001, "Low is the same with or without casters");
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // The finest cascade (texel 5 cm, the drone's) takes trees too, so ground near
+  // the camera is shadowed like the rest: a tree 24 m ahead shadows the ground
+  // 6 m in front of it. Without the finest cascade it does not.
+  void treesCastIntoTheFinestCascade() {
+    World w = loneWorld(kVegTree, 2);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    casterScene(rig.r, w, 24.0f, 30.0f, 0.5f);
+    settledFrame(rig.r); // the projection the probes need is the drawn one
+    const QPoint a = casterGroundPx(rig.r, w, 40.0f - 6.0f, 0.0f);
+    const QPoint c = casterGroundPx(rig.r, w, 40.0f - 6.0f, 14.0f);
+    auto frame = [&]() { return settledFrame(rig.r).convertToFormat(QImage::Format_RGB32); };
+    rig.r->setVegCastersOffForTest(true);
+    const QImage none = frame();
+    rig.r->setVegCastersOffForTest(false);
+    frame(); // as the renderer ships: the finest cascade has them
+    qInfo("default casters: %d/%d/%d passes %d", rig.r->vegCasterStatsForTest().instances[0],
+          rig.r->vegCasterStatsForTest().instances[1], rig.r->vegCasterStatsForTest().instances[2],
+          rig.r->vegCasterStatsForTest().passes);
+    QVERIFY2(rig.r->vegCasterStatsForTest().instances[0] >= 1, "the default includes cascade 0");
+    rig.r->setVegCasterFirstCascadeForTest(1);
+    const QImage c1only = frame();
+    QCOMPARE(rig.r->vegCasterStatsForTest().instances[0], 0);
+    rig.r->setVegCasterFirstCascadeForTest(0);
+    const QImage withC0 = frame();
+    QVERIFY(rig.r->vegCasterStatsForTest().instances[0] >= 1);
+    const double r1 = windowLuma(c1only, a.x(), a.y()) / windowLuma(none, a.x(), a.y());
+    const double r0 = windowLuma(withC0, a.x(), a.y()) / windowLuma(none, a.x(), a.y());
+    const double rc = windowLuma(withC0, c.x(), c.y()) / windowLuma(none, c.x(), c.y());
+    qInfo("finest cascade: c1 only %.3f, with c0 %.3f, control %.3f", r1, r0, rc);
+    QVERIFY2(r1 > 0.97, "without the finest cascade the near ground is not shadowed");
+    QVERIFY2(r0 < 0.9, "with it, it is");
+    QVERIFY2(rc > 0.97, "ground beside it is not");
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // The casters are culled to the light window: a forest seen from its corner
+  // draws far fewer than the forest holds.
+  void casterListIsCulledToTheLightWindow() {
+    World w = buildWorld(kPalForest, -2, 2);
+    size_t held = 0;
+    for (const auto &v : w.veg)
+      for (const VegInstance &t : v)
+        held += (t.species == kVegTree || t.species == kVegRock) ? 1 : 0;
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    rig.r->setSun(30.0f, 0.0f);
+    rig.r->setTerrainQuality(vsim::terrain::Quality::High);
+    rig.r->setShadowQuality(ShadowQuality::High);
+    rig.r->setVegCastersOffForTest(false);
+    rig.r->setVegCasterFirstCascadeForTest(0);
+    aimCamera(rig.r, w, -380.0f, -380.0f, 12.0f, 3.1f, 0.2f); // corner, looking out
+    settledFrame(rig.r);
+    const auto &cs = rig.r->vegCasterStatsForTest();
+    const int drawn = cs.instances[0] + cs.instances[1];
+    qInfo("culled casters: drew %d of %zu", drawn, held);
+    QVERIFY(drawn > 0);
+    QVERIFY2(size_t(drawn) < held / 3, "casters outside the cascade windows are skipped");
+  }
+
+  // The push that keeps a crown clear of its own hull also lifts the start of a
+  // shadow; scaled with the height above the base it must not detach the trunk's
+  // shadow from its foot: at 30 deg the ground beside a lone jacaranda is
+  // shadowed from within 0.7 m of the base (0.55 m with no push and with the
+  // ramp, 0.9 m flat -1, 1.8 m flat -2).
+  void lowSunShadowStaysAtTheTrunkFoot() {
+    World w = loneWorld(kVegTree, 2);
+    Rig rig(true);
+    rig.r->freezeAnimationForTest(true); // clock stays 0, as in the caster pass
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    rig.r->setTerrainQuality(vsim::terrain::Quality::High);
+    rig.r->setShadowQuality(ShadowQuality::High);
+    rig.r->setVegCasterFirstCascadeForTest(0);
+    rig.r->setSun(30.0f, 90.0f);
+    aimCamera(rig.r, w, 33.0f, 0.0f, 1.5f, 0.0f, 0.18f);
+    rig.r->setVegCastersOffForTest(true);
+    const QImage off = settledFrame(rig.r).convertToFormat(QImage::Format_RGB32);
+    rig.r->setVegCastersOffForTest(false);
+    const QImage on = settledFrame(rig.r).convertToFormat(QImage::Format_RGB32);
+    float onset = -1.0f;
+    for (int i = 3; i <= 70 && onset < 0.0f; ++i) {
+      const float t = 0.05f * float(i);
+      const QPoint a = casterGroundPx(rig.r, w, 40.0f, -t);
+      const QPoint b = casterGroundPx(rig.r, w, 40.0f, -t - 0.15f);
+      QVERIFY(a.x() > 4 && a.y() > 4 && a.x() < on.width() - 4 && a.y() < on.height() - 4);
+      const double ra = windowLuma(on, a.x(), a.y()) / windowLuma(off, a.x(), a.y());
+      const double rb = windowLuma(on, b.x(), b.y()) / windowLuma(off, b.x(), b.y());
+      if (ra < 0.85 && rb < 0.85)
+        onset = t;
+    }
+    qInfo("shadow starts %.2f m from the trunk's foot", double(onset));
+    QVERIFY2(onset > 0.0f, "the tree casts a shadow on the ground beside it");
+    QVERIFY2(onset < 0.7f, "the shadow starts at the trunk's foot");
+  }
+
+  // The clock is frozen at 0 in this test and the one above: the wind sways the
+  // trees in the main pass (floraTime_) but the caster pass draws them at time
+  // 0, so the ratios would vary with the sway otherwise.
+  // The crowns are not darkened by their own caster: seen from the sun's side the
+  // lit face of a crown keeps its brightness with casters on (a coarse LOD
+  // shadowing the finer mesh behind it would show as acne), in the finest
+  // cascade and in cascade 1. The bound is 0.88: pinned on llvmpipe the ratios
+  // are 0.922 jacaranda and 0.903 fir in the finest cascade (margin 0.003 over
+  // 0.9, thin for another driver), 0.98 and 0.994 in cascade 1; with the flat
+  // 1 m push they are 0.863 and 0.852, and with no push 0.785 and 0.699.
+  void crownsDoNotShadowThemselves_data() {
+    QTest::addColumn<int>("kind");
+    QTest::addColumn<float>("distM");
+    QTest::newRow("jacaranda c0") << 2 << 24.0f;
+    QTest::newRow("fir c0") << 0 << 24.0f;
+    QTest::newRow("jacaranda c1") << 2 << 80.0f;
+    QTest::newRow("island c1") << 3 << 80.0f;
+  }
+  void crownsDoNotShadowThemselves() {
+    QFETCH(int, kind);
+    QFETCH(float, distM);
+    World w = loneWorld(kVegTree, kind);
+    Rig rig(true);
+    rig.r->freezeAnimationForTest(true); // clock stays 0, as in the caster pass
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    casterScene(rig.r, w, distM, 50.0f);
+    rig.r->setSun(50.0f, 180.0f); // behind the camera: the visible face is the lit one
+    rig.r->setVegCasterFirstCascadeForTest(0);
+    rig.r->setVegetationEnabled(false);
+    rig.r->grabFrame();
+    const QImage bare = rig.r->grabFrame().convertToFormat(QImage::Format_RGB32);
+    rig.r->setVegetationEnabled(true);
+    rig.r->setVegCastersOffForTest(true);
+    const QImage off = settledFrame(rig.r).convertToFormat(QImage::Format_RGB32);
+    rig.r->setVegCastersOffForTest(false);
+    const QImage on = settledFrame(rig.r).convertToFormat(QImage::Format_RGB32);
+    // Crown pixels: the trees' pixels with casters off; their mean luminance.
+    double lumOff = 0.0, lumOn = 0.0;
+    long n = 0;
+    for (int y = 0; y < off.height(); ++y)
+      for (int x = 0; x < off.width(); ++x)
+        if (treeDiffers(off.pixel(x, y), bare.pixel(x, y))) {
+          const QRgb p = off.pixel(x, y), q = on.pixel(x, y);
+          lumOff += 0.299 * qRed(p) + 0.587 * qGreen(p) + 0.114 * qBlue(p);
+          lumOn += 0.299 * qRed(q) + 0.587 * qGreen(q) + 0.114 * qBlue(q);
+          ++n;
+        }
+    QVERIFY2(n > 300, "the tree is in view");
+    const double ratio = lumOn / lumOff;
+    qInfo("crown luminance with casters / without: %.3f (%ld px)", ratio, n);
+    QVERIFY2(ratio > 0.88, "a crown's lit face keeps its brightness");
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
   // Every tree kind must reach the screen, conifers included: a pool or table
   // that never picks a kind looks exactly like a forest without them.
   void everyTreeKindIsDrawn() {
@@ -1236,6 +2174,250 @@ private slots:
       rig.r->resetGlResources();
       settledFrame(rig.r);
       QCOMPARE(rig.r->liveGlObjects(), live);
+    }
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // The soft contact blob under a trunk or a rock: the ground a little way from
+  // the foot is darker than ground 3 m away, by the blob alone (the sun shadow
+  // map and the terrain are the same with vegetation on and off).
+  void contactBlobDarkensTheFoot_data() {
+    QTest::addColumn<int>("species");
+    QTest::addColumn<int>("kind");
+    QTest::addColumn<float>("nearM"); // probe distance before the foot
+    QTest::addColumn<double>("maxRatio");
+    using B = VegContactBlob;
+    // 60% of the way out in the blob, clear of the object itself.
+    QTest::newRow("jacaranda") << int(kVegTree) << 2
+                          << 0.6f * B::kTrunkRadiusMult * kVegTreeKinds[2].trunkRadiusM << 0.88;
+    QTest::newRow("rock") << int(kVegRock) << 0
+                          << 0.6f * 0.5f * kVegRockSpanM * B::kRockRadiusMult << 0.94;
+  }
+  void contactBlobDarkensTheFoot() {
+    QFETCH(int, species);
+    QFETCH(int, kind);
+    QFETCH(float, nearM);
+    QFETCH(double, maxRatio);
+    World w = loneWorld(uint8_t(species), kind);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    rig.r->setSun(46.0f, 37.0f);
+    rig.r->setTerrainQuality(vsim::terrain::Quality::High);
+    aimProbe(rig.r, w);
+    rig.r->setVegetationEnabled(false);
+    rig.r->grabFrame();
+    const QImage off = rig.r->grabFrame().convertToFormat(QImage::Format_RGB32);
+    rig.r->setVegetationEnabled(true);
+    const QImage on = settledFrame(rig.r).convertToFormat(QImage::Format_RGB32);
+    QVERIFY(rig.r->vegetationStats().blobs >= 1);
+    const QPoint a = probePixel(rig.r, w, nearM);
+    const QPoint b = probePixel(rig.r, w, 3.0f);
+    const double nearRatio = windowLuma(on, a.x(), a.y()) / windowLuma(off, a.x(), a.y());
+    const double farRatio = windowLuma(on, b.x(), b.y()) / windowLuma(off, b.x(), b.y());
+    qInfo("blob probe: near %.3f far %.3f", nearRatio, farRatio);
+    QVERIFY2(farRatio > 0.97, "ground 3 m away must be untouched by the blob");
+    QVERIFY2(nearRatio < maxRatio, "ground at the foot must be darker with the blob");
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // No trees, no tree blob: a world of one tree with trees off draws no blob and
+  // leaves the frame as it is with vegetation off.
+  void treesOffMeansNoBlob() {
+    World w = loneWorld(kVegTree, 1);
+    Rig rig(false);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    rig.r->setSun(46.0f, 37.0f);
+    rig.r->setTerrainQuality(vsim::terrain::Quality::High);
+    aimProbe(rig.r, w);
+    rig.r->setVegetationEnabled(false);
+    rig.r->grabFrame();
+    const QImage off = rig.r->grabFrame();
+    rig.r->setVegetationEnabled(true);
+    const QImage on = settledFrame(rig.r);
+    QCOMPARE(rig.r->vegetationStats().blobs, 0);
+    QVERIFY(changedFraction(on, off) < 0.001);
+    // and with them on, the blob is there
+    rig.r->setVegetationTreesEnabled(true);
+    settledFrame(rig.r);
+    QVERIFY(rig.r->vegetationStats().blobs >= 1);
+    // vegetation off altogether: nothing is reported either
+    rig.r->setVegetationEnabled(false);
+    rig.r->grabFrame();
+    QCOMPARE(rig.r->vegetationStats().blobs, 0);
+  }
+
+  // The drone's blob lies on the ground under it while it is low, is gone far
+  // above the ground, and needs the terrain field to know where the ground is.
+  // It does not depend on the vegetation: the same with trees off, vegetation
+  // off, and no vegetation loaded at all.
+  void droneBlobSitsUnderTheDrone_data() {
+    QTest::addColumn<bool>("trees");
+    QTest::addColumn<bool>("vegetation");
+    QTest::addColumn<bool>("loaded");
+    QTest::newRow("vegetation on") << true << true << true;
+    QTest::newRow("trees off") << false << true << true;
+    QTest::newRow("vegetation off") << true << false << true;
+    QTest::newRow("vegetation unloaded") << true << true << false;
+  }
+  void droneBlobSitsUnderTheDrone() {
+    QFETCH(bool, trees);
+    QFETCH(bool, vegetation);
+    QFETCH(bool, loaded);
+    World w = loneWorld(kVegTree, 1);
+    for (auto &v : w.veg)
+      for (auto &t : v)
+        t.pos.y = 60.0f; // out of view
+    FieldParams fp;
+    fp.seed = 11u;
+    fp.palette = kPalForest;
+    fp.heightM = 20.0f;
+    auto field = std::make_shared<const TerrainField>(fp);
+    Rig rig(trees);
+    rig.r->setMotorsEditable(false); // the simulator running: the drone is flying
+    rig.r->setTerrainField(field);
+    loadTerrain(rig.r, w);
+    if (loaded)
+      loadVegetation(rig.r, w);
+    rig.r->setVegetationEnabled(vegetation);
+    QVERIFY(rig.show());
+    rig.r->setSun(46.0f, 37.0f);
+    rig.r->setTerrainQuality(vsim::terrain::Quality::High);
+    const float g = surfaceHeight(*w.field, 40.0f, 0.0f, kChunkM, kRes);
+    auto frame = [&](float aboveM) {
+      aimCamera(rig.r, w, 34.0f, 0.0f, 3.5f, 0.0f, 0.3f);
+      SimSnapshot s;
+      s.pos_w = {40.0f, 0.0f, -(g + aboveM)};
+      rig.r->setSnapshot(s);
+      return settledFrame(rig.r).convertToFormat(QImage::Format_RGB32);
+    };
+    const QImage high = frame(60.0f);
+    QVERIFY(!rig.r->droneBlobDrawnForTest());
+    const QImage low = frame(1.5f);
+    QVERIFY(rig.r->droneBlobDrawnForTest());
+    // Ground under the drone, seen from behind: the blob darkens it (the drone
+    // itself is above, and the analytic sun shadow falls elsewhere).
+    const QPointF p = rig.r->worldToPixelForTest(QVector3D(40.0f, 0.0f, -g - 0.02f));
+    const double ratio = windowLuma(low, int(p.x()), int(p.y())) /
+                         windowLuma(high, int(p.x()), int(p.y()));
+    qInfo("drone blob ratio %.3f", ratio);
+    QVERIFY(ratio < 0.9);
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // The drone casts a real shadow: its hull (solid) and its rotors (full radius,
+  // dithered to the blade solidity kRotorCoverage) are drawn into the sun's depth
+  // map, so the ground down the sun ray is darker with the drone low than with it
+  // 60 m up in the same frame. The camera looks south from the shadow's side, so
+  // the drone is behind its own shadow and hides nothing. Rotor coverage 0 / default / 1 is rendered for each row:
+  // the default must darken the footprint a little more than no rotor shadow and
+  // far less than a solid disc, which pins the dither to its coverage.
+  void droneShadowFallsDownTheSunRay_data() {
+    QTest::addColumn<bool>("high");
+    QTest::addColumn<float>("aboveM");
+    QTest::addColumn<float>("sunEl");
+    QTest::newRow("high 0.5 m sun 50") << true << 0.5f << 50.0f;
+    QTest::newRow("high 1.5 m sun 50") << true << 1.5f << 50.0f;
+    QTest::newRow("high 3 m sun 50") << true << 3.0f << 50.0f;
+    QTest::newRow("high 1.5 m sun 20") << true << 1.5f << 20.0f;
+    // Landed: the shadow falls right under the drone, which must still get it
+    // (the map's depth bias alone would hide a caster that low).
+    QTest::newRow("high landed 0.05 m sun 50") << true << 0.05f << 50.0f;
+    QTest::newRow("low 1.5 m sun 50") << false << 1.5f << 50.0f;
+  }
+  void droneShadowFallsDownTheSunRay() {
+    QFETCH(bool, high);
+    QFETCH(float, aboveM);
+    QFETCH(float, sunEl);
+    World w = loneWorld(kVegTree, 1);
+    for (auto &v : w.veg)
+      for (auto &t : v)
+        t.pos.y = 60.0f; // out of view
+    FieldParams fp;
+    fp.seed = 11u;
+    fp.palette = kPalForest;
+    fp.heightM = 20.0f;
+    auto field = std::make_shared<const TerrainField>(fp);
+    Rig rig(true);
+    rig.r->setMotorsEditable(false);
+    rig.r->setTerrainField(field);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    rig.r->setShadowQuality(high ? vsim::ShadowQuality::High : vsim::ShadowQuality::Low);
+    rig.r->setSun(sunEl, 180.0f); // from the south: the shadow falls north, away
+    rig.r->setTerrainQuality(vsim::terrain::Quality::High);
+    const float g = surfaceHeight(*w.field, 40.0f, 0.0f, kChunkM, kRes);
+    auto frame = [&](float above) {
+      aimCamera(rig.r, w, 50.0f, 0.0f, 12.0f, 3.14159265f, 0.9f);
+      SimSnapshot s;
+      s.pos_w = {40.0f, 0.0f, -(g + above)};
+      rig.r->setSnapshot(s);
+      return settledFrame(rig.r).convertToFormat(QImage::Format_RGB32);
+    };
+    const QImage far = frame(60.0f);
+    // Where the sun ray from the drone meets the terrain (it slopes about 10%).
+    const float tanEl = std::tan(qDegreesToRadians(sunEl));
+    float sx = 40.0f;
+    for (int i = 0; i < 20; ++i)
+      sx = 40.0f + (g + aboveM - surfaceHeight(*w.field, sx, 0.0f, kChunkM, kRes)) / tanEl;
+    const float sg = surfaceHeight(*w.field, sx, 0.0f, kChunkM, kRes);
+    // The drone's footprint (rotor span about 0.64 m), and its mean luma.
+    constexpr float kHalf = 0.32f;
+    int x0 = 1 << 20, x1 = -1, y0 = 1 << 20, y1 = -1;
+    for (int c = 0; c < 4; ++c) {
+      const QPointF q = rig.r->worldToPixelForTest(QVector3D(
+          sx + ((c & 1) ? kHalf : -kHalf),
+          ((c & 2) ? kHalf : -kHalf), -sg - 0.02f));
+      x0 = std::min(x0, int(q.x())), x1 = std::max(x1, int(q.x()));
+      y0 = std::min(y0, int(q.y())), y1 = std::max(y1, int(q.y()));
+    }
+    auto meanLuma = [&](const QImage &im) {
+      double sum = 0;
+      int n = 0;
+      for (int y = y0; y <= y1; ++y)
+        for (int x = x0; x <= x1; ++x, ++n) {
+          const QRgb c = im.pixel(x, y);
+          sum += 0.299 * qRed(c) + 0.587 * qGreen(c) + 0.114 * qBlue(c);
+        }
+      return n ? sum / n : 0.0;
+    };
+    const double ref = meanLuma(far);
+    auto ratioAt = [&](float cover) {
+      rig.r->setRotorCoverageForTest(cover);
+      const QImage near = frame(aboveM);
+      return meanLuma(near) / ref;
+    };
+    const double r0 = high ? ratioAt(0.0f) : 0.0;
+    const double rd = ratioAt(-1.0f);
+    // The same frame with no drone caster at all: what the drone's shadow does,
+    // with the drone's own pixels identical in both (so it also works landed).
+    rig.r->setDroneCasterOffForTest(true);
+    const double rOff = ratioAt(-1.0f);
+    rig.r->setDroneCasterOffForTest(false);
+    qInfo("with caster %.4f, without %.4f -> shadow x%.4f", rd, rOff, rd / rOff);
+    const double r1 = high ? ratioAt(1.0f) : 0.0;
+    // High: the drone is in the map. Low: its texel is too coarse, so the
+    // analytic cylinder keeps the shadow.
+    QCOMPARE(rig.r->droneInShadowMapForTest(), high);
+    qInfo("drone shadow %s %.1f m sun %.0f: footprint %dx%d px, ratio hull-only %.4f, "
+          "default %.4f, solid rotors %.4f",
+          high ? "high" : "low", double(aboveM), double(sunEl), x1 - x0 + 1, y1 - y0 + 1, r0,
+          rd, r1);
+    if (!high) {
+      QVERIFY(rd < 0.97); // the cylinder
+    } else {
+      if (aboveM > 0.2f)
+        QVERIFY(r0 < 0.99);        // the hull shadows the ground (landed: the
+                                   // drone's own pixels cover it, so not here)
+      QVERIFY(rd / rOff < 0.995);  // the caster darkens the footprint, landed or not
+      QVERIFY(r0 - r1 > 0.004);    // solid rotor discs add a measurable shadow
+      const double frac = (r0 - rd) / (r0 - r1); // the default is a fraction of solid
+      qInfo("rotor shadow fraction of solid %.3f (coverage %.2f)", frac, 0.15);
+      QVERIFY(frac > 0.05 && frac < 0.25);
     }
     QCOMPARE(rig.r->glErrorCount(), 0);
   }

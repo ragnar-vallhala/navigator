@@ -16,8 +16,10 @@
  */
 #include "SimRendererWidget.h"
 
+#include "procgen/EdgeTrack.h"
 #include "procgen/PropStyle.h"
 
+#include <QSettings>
 #include <QCursor>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -60,6 +62,16 @@ QMatrix4x4 helipadModel(const QVector3D &pad) {
   return m;
 }
 
+constexpr float kDroneMapMaxTexelM = 0.05f; // finest cascade texel that resolves the drone
+// Fraction of a rotor disc the blades cover (solidity = blades x chord / (pi R)),
+// used as the shadow coverage of a spinning prop. Basis: the procedural drone's
+// own numbers in DroneModel.cpp styleOf(), with the chord profile's mean of 0.79:
+// 5in freestyle 3 x 14.5 mm / (pi x 62 mm) x 0.79 = 0.18; 3in 0.19; 7in
+// long-range (2 blades) 0.11; 10in 0.10. 0.15 is the middle of that range and
+// coord's figure.
+constexpr float kDronePushM = 0.4f; // drone caster depth pull toward the sun [m]
+constexpr float kRotorCoverage = 0.15f;
+constexpr float kPropDiscThickM = 0.01f; // drone prop disc caster (shadow pass)
 constexpr float kFovYDeg = 60.0f; // vertical field of view (also fits the shadow cascades)
 constexpr int kGridHalf = 10; // m, ground plane extends +/- this
 constexpr float kGridStep = 1.0f;
@@ -100,11 +112,21 @@ const char *kLitVertexShader = R"GLSL(
 layout(location=0) in vec3 a_pos;
 layout(location=1) in vec3 a_normal;
 layout(location=2) in vec3 a_color;
+#ifdef TERRAIN_EDGE
+layout(location=3) in vec2 a_trk;   // terrain: signed, unsigned distance to a parcel-border track
+layout(location=4) in vec3 a_trkc;  // terrain: the ground's colour on that track
+layout(location=5) in vec3 a_split; // terrain: a_color without the border track
+#endif
 uniform mat4 u_mvp;
 uniform mat4 u_model;
 uniform mat3 u_nmat;
 out vec3 v_normal;
 out vec3 v_color;
+#ifdef TERRAIN_EDGE
+out vec2 v_trk;
+out vec3 v_trkc;
+out vec3 v_split;
+#endif
 out vec3 v_world;
 out vec3 v_local;
 void main() {
@@ -113,6 +135,11 @@ void main() {
   gl_Position = u_mvp * vec4(a_pos, 1.0);
   v_normal = u_nmat * a_normal;
   v_color = a_color;
+#ifdef TERRAIN_EDGE
+  v_trk = a_trk;
+  v_trkc = a_trkc;
+  v_split = a_split;
+#endif
 }
 )GLSL";
 
@@ -120,11 +147,17 @@ const char *kLitFragmentHead = R"GLSL(
 #version 330 core
 in vec3 v_normal;
 in vec3 v_color;
+#ifdef TERRAIN_EDGE
+in vec2 v_trk;
+in vec3 v_trkc;
+in vec3 v_split;
+#endif
 in vec3 v_world;
 in vec3 v_local;             // object-space position (unit solids)
 out vec4 o_color;
 uniform vec3 u_color;
 uniform float u_terrain;     // 1 = ground: procedural albedo detail + grid
+uniform float u_grid;        // 1 = draw the survey grid on that ground
 uniform float u_bands;       // >0: pole painted in this many 1 m red/white bands
 )GLSL";
 
@@ -193,12 +226,22 @@ void main() {
   // Hemispheric ambient: NED up is -Z, so up-facing (n.z<0) catches sky light.
   // Cool-but-warmed overcast ambient (shadows read soft teal, not cold).
   vec3 ambient = ambientLight(n) * u_ambstr;
-  vec3 base = u_color * v_color;
+  // Parcel-border tracks are drawn per pixel from the interpolated distance, not
+  // baked into the node colour (EdgeTrack.h).
+  vec3 vcol = v_color;
+#ifdef TERRAIN_EDGE
+  // High draws the parcel-border track per pixel over the track-free colour;
+  // Low (and any other mesh) is the other program and keeps it baked in v_color;
+  // a chunk sent without a track-free colour (negative) does too.
+  if (u_terrain > 0.5 && v_split.x >= 0.0)
+    vcol = mix(v_split, v_trkc, edgeTrackWeight(v_trk));
+#endif
+  vec3 base = u_color * vcol;
   if (u_terrain > 0.5) {
     vec2 p = v_world.xy;
     if (u_matq > 0.5) {
       // Textured ground (TerrainMaterial.cpp): albedo and normal from photos.
-      terrainMaterial(v_color, p, dist, base, n);
+      terrainMaterial(vcol, p, dist, base, n);
       wrap = clamp(dot(n, sun) * 0.45 + 0.55, 0.0, 1.0); wrap *= wrap;
       ambient = ambientLight(n) * u_ambstr;
     } else {
@@ -213,13 +256,16 @@ void main() {
     vec3 macroTint = vec3(1.0 + 0.30 * m1 + 0.10 * m2, 1.0 + 0.10 * m1, 1.0 - 0.26 * m1 - 0.08 * m2);
     base *= (1.0 + v) * macroTint;
     }
-    // Survey grid: a calm hint, not a net. The fine lines fade out within ~30 m,
-    // the 10 m lines by ~250 m, and only the 100 m lines reach the horizon.
-    float up = smoothstep(0.55, 0.85, -n.z);       // grid only on level ground
-    float g = 0.030 * gridLine(p, 1.0, 0.012) * (1.0 - smoothstep(6.0, 30.0, dist)) +
-              0.060 * gridLine(p, 10.0, 0.004) * (1.0 - smoothstep(60.0, 260.0, dist)) +
-              0.100 * gridLine(p, 100.0, 0.0015) * (1.0 - smoothstep(300.0, 900.0, dist));
-    base = mix(base, base * 0.55 + vec3(0.40, 0.41, 0.38), clamp(g * up, 0.0, 0.2));
+    // Survey grid: a calm hint for the close ground, not a net. The fine lines
+    // fade out within ~30 m and every line is gone by 60 m: from the air the
+    // long straight lines read as seams in the ground, not as a scale.
+    if (u_grid > 0.5) {
+      float up = smoothstep(0.55, 0.85, -n.z);       // grid only on level ground
+      float g = 0.030 * gridLine(p, 1.0, 0.012) * (1.0 - smoothstep(6.0, 30.0, dist)) +
+                0.060 * gridLine(p, 10.0, 0.004) * (1.0 - smoothstep(30.0, 60.0, dist)) +
+                0.100 * gridLine(p, 100.0, 0.0015) * (1.0 - smoothstep(30.0, 60.0, dist));
+      base = mix(base, base * 0.55 + vec3(0.40, 0.41, 0.38), clamp(g * up, 0.0, 0.2));
+    }
   }
   if (u_bands > 0.5) {                              // survey pole: 1 m bands
     float k = floor((v_local.z + 0.5) * u_bands);
@@ -311,11 +357,26 @@ const char *kDepthVertexShader = R"GLSL(
 #version 330 core
 layout(location = 0) in vec3 a_pos;
 uniform mat4 u_lightmvp;   // lightVP * model
-void main() { gl_Position = u_lightmvp * vec4(a_pos, 1.0); }
+uniform float u_push;      // pull the depth toward the sun by this much (clip z)
+void main() {
+  gl_Position = u_lightmvp * vec4(a_pos, 1.0);
+  gl_Position.z -= u_push * gl_Position.w;
+}
 )GLSL";
 const char *kDepthFragmentShader = R"GLSL(
 #version 330 core
-void main() {}
+uniform float u_cover;   // 1 = solid; below 1 only that fraction of the texels is written
+void main() {
+  if (u_cover < 1.0) {
+    // Ordered 4x4 dither fixed to the shadow texels (no flicker): the PCF of the
+    // receiver averages it back to a partial shadow.
+    ivec2 p = ivec2(gl_FragCoord.xy) & 3;
+    int b = (((p.x ^ p.y) & 1) << 3) | ((p.y & 1) << 2) | ((((p.x ^ p.y) >> 1) & 1) << 1) |
+            ((p.y >> 1) & 1);
+    if ((float(b) + 0.5) / 16.0 >= u_cover)
+      discard;
+  }
+}
 )GLSL";
 
 // Shadow-receive helper for the lit program: the cascade lookup (see
@@ -325,12 +386,14 @@ void main() {}
 const char *kShadowGLSL = R"GLSL(
 uniform vec3 u_drone;     // drone position (world, NED)
 uniform float u_droner;   // drone shadow radius [m]; 0 = off
+uniform float u_dronemap; // 1 = the drone is drawn into the shadow map: no cylinder
+uniform float u_dronebody; // 1 only while the drone's own meshes are drawn
 // Analytic soft shadow of the drone: a cylinder along the sun ray from the
 // drone, with the penumbra growing with distance. The shadow map cannot
 // resolve a 0.25 m quad, and this needs no ground height, so it lands on any
 // terrain and doubles as a height cue.
 float droneShadow(vec3 wpos, vec3 lightDir) {
-  if (u_droner <= 0.0) return 1.0;
+  if (u_droner <= 0.0 || u_dronemap > 0.5) return 1.0;
   vec3 L = normalize(lightDir);
   vec3 v = wpos - u_drone;
   float a = dot(v, -L);               // distance past the drone, away from the sun
@@ -341,6 +404,10 @@ float droneShadow(vec3 wpos, vec3 lightDir) {
   return 1.0 - 0.6 * cover / (1.0 + a / 150.0);
 }
 float shadowMapFactor(vec3 wpos, vec3 nrm, vec3 lightDir) {
+  // The drone is its own caster: its own meshes (and only those) skip the map,
+  // which would otherwise acne them. Everything else, the ground under a landed
+  // drone included, gets the full shadow.
+  if (u_dronebody > 0.5 && u_dronemap > 0.5) return 1.0;
   vec3 n = normalize(nrm);
   vec3 L = normalize(lightDir);
   // The interpolated normal is smooth but the mesh is faceted: on a steep face
@@ -682,7 +749,7 @@ int SimRendererWidget::liveGlObjects() const {
   for (const auto &kv : worldChunks_)
     n += kv.second->liveObjects();
   n += skyVao_.isCreated() ? 1 : 0;
-  n += (prog_ ? 1 : 0) + (progLit_ ? 1 : 0) + (progDepth_ ? 1 : 0) +
+  n += (prog_ ? 1 : 0) + (progLit_ ? 1 : 0) + (progLitEdge_ ? 1 : 0) + (progDepth_ ? 1 : 0) +
        (progSky_ ? 1 : 0);
   n += (shadowFbo_ ? 1 : 0) + (shadowTex_ ? 1 : 0);
   n += terrainTex_.loaded() ? 6 : 0;
@@ -810,6 +877,7 @@ void SimRendererWidget::releaseGLResources(bool readBack) {
   skyVao_.destroy();
   prog_.reset();
   progLit_.reset();
+  progLitEdge_.reset();
   progDepth_.reset();
   progSky_.reset();
   if (shadowFbo_)
@@ -960,6 +1028,11 @@ void SimRendererWidget::drawDroneLocator(const QMatrix4x4 &view,
   proj_ = savedProj;
 }
 
+float SimRendererWidget::droneVisualScale() const {
+  const float d = (camEye_ - snap_.pos_w).length();
+  return std::clamp(1.0f + (d - 12.0f) / 40.0f, 1.0f, 1.5f);
+}
+
 void SimRendererWidget::drawDroneModel(const QMatrix4x4 &view,
                                        const QMatrix4x4 &modelIn) {
   // Far-visibility boost: past ~12 m the model grows gently about its origin
@@ -967,11 +1040,9 @@ void SimRendererWidget::drawDroneModel(const QMatrix4x4 &view,
   // screen-space locator covers the distance where it is still tiny. Not in
   // the editor, where the geometry must read true to scale.
   QMatrix4x4 model = modelIn;
-  if (!editable_) {
-    const float d = (camEye_ - snap_.pos_w).length();
-    const float s = std::clamp(1.0f + (d - 12.0f) / 40.0f, 1.0f, 1.5f);
-    model.scale(s);
-  }
+  if (!editable_)
+    model.scale(droneVisualScale());
+  drawingDroneBody_ = true;
   drawLit(modelBody_, view, model, QVector3D(1, 1, 1));
   for (int i = 0; i < 4; ++i) {
     QMatrix4x4 m = model;
@@ -980,6 +1051,7 @@ void SimRendererWidget::drawDroneModel(const QMatrix4x4 &view,
     m.rotate(qRadiansToDegrees(rotorAngle_[i]), 0.0f, 0.0f, -1.0f);
     drawLit(modelProp_[i], view, m, QVector3D(1, 1, 1));
   }
+  drawingDroneBody_ = false;
   // Motion-blur discs, after the opaque solids: constant-alpha blend so the
   // flat-colour program needs no alpha channel.
   bool any = false;
@@ -1032,6 +1104,25 @@ buildProgram(const char *name, const QByteArray &vs, const QByteArray &fs) {
 }
 } // namespace
 
+void SimRendererWidget::LitLocs::resolve(QOpenGLShaderProgram *p) {
+  mvp = p->uniformLocation("u_mvp");
+  model = p->uniformLocation("u_model");
+  nmat = p->uniformLocation("u_nmat");
+  color = p->uniformLocation("u_color");
+  campos = p->uniformLocation("u_campos");
+  fogdensity = p->uniformLocation("u_fogdensity");
+  fogstart = p->uniformLocation("u_fogstart");
+  csm.resolve(p);
+  drone = p->uniformLocation("u_drone");
+  droner = p->uniformLocation("u_droner");
+  sunint = p->uniformLocation("u_sunint");
+  ambstr = p->uniformLocation("u_ambstr");
+  terrain = p->uniformLocation("u_terrain");
+  grid = p->uniformLocation("u_grid");
+  bands = p->uniformLocation("u_bands");
+  matq = p->uniformLocation("u_matq");
+}
+
 void SimRendererWidget::initResources() {
   // A new context: anything still held belongs to the previous one and is
   // released first, so init can run any number of times without leaking or
@@ -1056,31 +1147,26 @@ void SimRendererWidget::initResources() {
   u_mvp_ = prog_->uniformLocation("u_mvp");
   u_color_ = prog_->uniformLocation("u_color");
 
-  progLit_ = buildProgram("lit", kLitVertexShader,
-                          QByteArray(kLitFragmentHead) + kAtmosphereGLSL + kFogGLSL +
+  {
+    const QByteArray fsBody = QByteArray(kLitFragmentHead) + kAtmosphereGLSL + kFogGLSL +
                               kLightingGLSL + kCascadeShadowGLSL + kShadowGLSL +
-                              vsim::terrain::terrainMaterialGLSL() +
-                              kLitFragmentMain);
-  ul_mvp_ = progLit_->uniformLocation("u_mvp");
-  ul_model_ = progLit_->uniformLocation("u_model");
-  ul_nmat_ = progLit_->uniformLocation("u_nmat");
-  ul_color_ = progLit_->uniformLocation("u_color");
-  ul_campos_ = progLit_->uniformLocation("u_campos");
-  ul_fogdensity_ = progLit_->uniformLocation("u_fogdensity");
-  ul_fogstart_ = progLit_->uniformLocation("u_fogstart");
-  litCsm_.resolve(progLit_.get());
-  ul_drone_ = progLit_->uniformLocation("u_drone");
-  ul_droner_ = progLit_->uniformLocation("u_droner");
-  ul_sunint_ = progLit_->uniformLocation("u_sunint");
-  ul_ambstr_ = progLit_->uniformLocation("u_ambstr");
-  ul_terrain_ = progLit_->uniformLocation("u_terrain");
-  ul_bands_ = progLit_->uniformLocation("u_bands");
-  ul_matq_ = progLit_->uniformLocation("u_matq");
+                              vsim::terrain::terrainMaterialGLSL() + kLitFragmentMain;
+    // The edge build is the same source with TERRAIN_EDGE defined after #version.
+    auto withEdge = [](QByteArray src) {
+      return src.replace("#version 330 core\n", "#version 330 core\n#define TERRAIN_EDGE 1\n");
+    };
+    progLit_ = buildProgram("lit", kLitVertexShader, fsBody);
+    progLitEdge_ = buildProgram("lit+edge", withEdge(kLitVertexShader), withEdge(fsBody));
+    litLoc_.resolve(progLit_.get());
+    litLocEdge_.resolve(progLitEdge_.get());
+  }
   terrainDefault_ = vsim::terrain::defaultQuality(
       reinterpret_cast<const char *>(glGetString(GL_RENDERER)));
 
   progDepth_ = buildProgram("depth", kDepthVertexShader, kDepthFragmentShader);
   ud_lightmvp_ = progDepth_->uniformLocation("u_lightmvp");
+  ud_cover_ = progDepth_->uniformLocation("u_cover");
+  ud_push_ = progDepth_->uniformLocation("u_push");
   buildShadowMap();
 
   progSky_ = buildProgram("sky", kSkyVertexShader,
@@ -1301,10 +1387,9 @@ void SimRendererWidget::paintGL() {
 
   // Shadow map: render terrain depth from the sun's view into the FBO first, so
   // the lit terrain + grass can sample it. Restores the default FBO + viewport.
-  renderShadowPass(showWorld, showChunks, view);
-
-  // Analytic drone shadow: radius follows the drawn model (same distance boost
-  // as drawDroneModel); off in the editor, where the drone is a fixed marker.
+  // Drone state first: the shadow pass draws the drone as a caster.
+  // Radius follows the drawn model (same distance boost as drawDroneModel); off
+  // in the editor, where the drone is a fixed marker.
   droneShadowPos_ = snap_.pos_w;
   if (editable_) {
     droneShadowR_ = 0.0f;
@@ -1313,13 +1398,14 @@ void SimRendererWidget::paintGL() {
     for (int i = 0; i < 4; ++i)
       half = std::max(half, std::hypot(model_.hub[i][0], model_.hub[i][1]) +
                                 model_.visualPropRadius);
-    const float d = (camEye_ - snap_.pos_w).length();
-    const float boost = std::clamp(1.0f + (d - 12.0f) / 40.0f, 1.0f, 1.5f);
-    droneShadowR_ = std::clamp(half * boost, 0.08f, 1.5f);
+    droneShadowR_ = std::clamp(half * droneVisualScale(), 0.08f, 1.5f);
   }
+  renderShadowPass(showWorld, showChunks, view);
+
 
   // Sky-dome background (gradient + sun glow along the per-pixel view ray).
   // Drawn first with depth test off so the scene paints over it.
+  applyAtmosphere(progLitEdge_.get());
   applyAtmosphere(progLit_.get()); // once per frame; uniforms persist per program
 #ifdef VAYU_SIM_GRASS
   applyAtmosphere(progFlora_.get());
@@ -1392,6 +1478,8 @@ void SimRendererWidget::paintGL() {
 
   if (vegEnabled_ && worldVisible_ && !training && veg_)
     drawVegetation(view);
+  if (worldVisible_ && !training)
+    drawDroneBlob(view);
 
   // Water over the carved ponds, after the opaque scene (it blends).
   if (worldVisible_ && !training && water_ && waterField_ &&
@@ -1458,7 +1546,9 @@ void SimRendererWidget::paintGL() {
 
   if (!hideBody) {
     if (hasMesh_) {
+      drawingDroneBody_ = true;
       drawLit(droneMesh_, view, model, QVector3D(0.80f, 0.81f, 0.85f));
+      drawingDroneBody_ = false;
     } else {
       if (modelDirty_)
         rebuildDroneModel();
@@ -1628,6 +1718,7 @@ void SimRendererWidget::buildShadowMap() {
 void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks,
                                          const QMatrix4x4 &view) {
   shadowOn_ = false;
+  droneInMap_ = false;
   csm_.count = 0;
   if (shadowRebuild_)
     buildShadowMap();
@@ -1643,6 +1734,27 @@ void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks,
                            float(fbW_) / std::max(1, fbH_),
                            high ? kMaxCascades : 1, tile, shadowSnap_);
 
+  // Trees and rocks cast into the cascades whose texel is fine enough for them.
+  // What they put in the tiles is the vegetation's own state, so its version and
+  // the cascade set are part of the geometry version: a change redraws the tiles.
+  bool vegCast[kMaxCascades] = {false, false, false};
+  bool anyVegCast = false;
+  if (veg_ && vegEnabled_ && worldVisible_ && !vegCastersOffForTest_ && veg_->glReady())
+    for (int ci = vegCasterFirst_; ci < csm_.count; ++ci) {
+      vegCast[ci] = csm_.info[ci].x() <= kVegCasterMaxTexelM;
+      anyVegCast = anyVegCast || vegCast[ci];
+    }
+  {
+    const quint64 key = !anyVegCast ? 0
+                                    : (quint64(veg_->casterVersion()) << 3 |
+                                       quint64((vegCast[0] ? 1 : 0) | (vegCast[1] ? 2 : 0) |
+                                               (vegCast[2] ? 4 : 0))) + 1;
+    if (key != vegCasterKey_) {
+      vegCasterKey_ = key;
+      ++shadowGeomVer_;
+    }
+  }
+
   // Which cascades need drawing: a cascade whose casters, sun, size and
   // visibility are unchanged and whose window moved by < kReuseTexels keeps its
   // tile (and the matrices that tile was rendered with).
@@ -1653,8 +1765,52 @@ void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks,
   const QVector3D eye = view.inverted().map(QVector3D(0, 0, 0));
   bool redraw[kMaxCascades] = {true, true, true};
   constexpr float kReuseTexels = 3.0f;
+
+  // The drone is a caster too. It moves, so it has its own pose key: a change
+  // re-renders only the cascades whose window holds the drone, never the far
+  // ones (their tiles keep the terrain), and a still drone costs nothing.
+  const bool casterOn = !editable_ && droneCasterReady();
+  {
+    const float sc = droneVisualScale();
+    const bool moved =
+        casterOn != droneKeyReady_ ||
+        (casterOn && ((snap_.pos_w - droneKeyPos_).lengthSquared() > 1e-4f ||
+                      1.0f - std::abs(QQuaternion::dotProduct(snap_.att, droneKeyAtt_)) > 1e-5f ||
+                      std::abs(sc - droneKeyScale_) > 1e-3f));
+    if (moved) {
+      ++droneShadowVer_;
+      droneKeyReady_ = casterOn;
+      droneKeyPos_ = snap_.pos_w;
+      droneKeyAtt_ = snap_.att;
+      droneKeyScale_ = sc;
+    }
+  }
+  bool droneIn[kMaxCascades] = {false, false, false};
+  // Only the finest cascade: a 0.3 m drone is ~10 texels there, a sliver in the
+  // others. Where that cascade is coarser than kDroneMapMaxTexelM (Low quality)
+  // or the drone is outside it, the cylinder stays.
+  for (int ci = 0; ci < std::min(csm_.count, 1) && casterOn &&
+                   csm_.info[0].x() <= kDroneMapMaxTexelM;
+       ++ci) {
+    // Sideways in light space: the drone's bounding sphere against the window.
+    const float r = droneShadowR_ + 0.05f;
+    int out[4] = {0, 0, 0, 0};
+    for (int c = 0; c < 8; ++c) {
+      const QVector3D q = csm_.vp[ci].map(
+          snap_.pos_w + QVector3D((c & 1) ? r : -r, (c & 2) ? r : -r, (c & 4) ? r : -r));
+      out[0] += q.x() < -1.0f;
+      out[1] += q.x() > 1.0f;
+      out[2] += q.y() < -1.0f;
+      out[3] += q.y() > 1.0f;
+    }
+    droneIn[ci] = !(out[0] == 8 || out[1] == 8 || out[2] == 8 || out[3] == 8);
+    droneInMap_ = droneInMap_ || droneIn[ci];
+  }
   for (int ci = 0; ci < csm_.count; ++ci) {
-    if (tilesValid && shadowCacheVer_[ci] == shadowGeomVer_ &&
+    const bool droneSame =
+        droneIn[ci] == shadowCacheDroneIn_[ci] &&
+        (!droneIn[ci] || shadowCacheDroneVer_[ci] == droneShadowVer_);
+    if (tilesValid && droneSame && shadowCacheVer_[ci] == shadowGeomVer_ &&
         std::abs(shadowCache_.info[ci].x() - csm_.info[ci].x()) < 1e-6f) {
       const QVector4D a = csm_.vp[ci] * QVector4D(eye, 1.0f);
       const QVector4D b = shadowCache_.vp[ci] * QVector4D(eye, 1.0f);
@@ -1674,6 +1830,8 @@ void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks,
       shadowCache_.vp[ci] = csm_.vp[ci];
       shadowCache_.info[ci] = csm_.info[ci];
       shadowCacheVer_[ci] = shadowGeomVer_;
+      shadowCacheDroneIn_[ci] = droneIn[ci];
+      shadowCacheDroneVer_[ci] = droneShadowVer_;
     }
   }
   shadowCache_.count = csm_.count;
@@ -1693,6 +1851,8 @@ void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks,
     glEnable(GL_DEPTH_CLAMP);
 #endif
   progDepth_->bind();
+  progDepth_->setUniformValue(ud_cover_, 1.0f);
+  progDepth_->setUniformValue(ud_push_, 0.0f);
   for (int ci = 0; ci < csm_.count; ++ci) {
     if (!redraw[ci])
       continue;
@@ -1737,6 +1897,21 @@ void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks,
         QOpenGLVertexArrayObject::Binder b(&helipadDisk_.vao);
         glDrawArrays(GL_TRIANGLES, 0, helipadDisk_.vertex_count);
       }
+    if (veg_ && !vegCast[ci])
+      veg_->clearCasterStats(ci);
+    if (vegCast[ci]) {
+      veg_->drawShadowCasters(lightVP, ci, 2.0f * vegCasterPushM_ / csm_.info[ci].y());
+      progDepth_->bind(); // the vegetation drew with its own program
+    }
+    if (droneIn[ci] && !noCasterForTest_) {
+      // The receiver's depth bias (about 12 texels) would swallow the shadow of
+      // anything that low, a landed drone. Pulling the drone toward the sun in
+      // depth only (not sideways: the projection is orthographic) lets it shadow
+      // the ground under it without changing where the shadow falls.
+      progDepth_->setUniformValue(ud_push_, 2.0f * kDronePushM / csm_.info[ci].y());
+      drawDroneCaster(lightVP);
+      progDepth_->setUniformValue(ud_push_, 0.0f);
+    }
   }
   progDepth_->release();
 #ifdef GL_DEPTH_CLAMP
@@ -1748,6 +1923,44 @@ void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks,
   glBindFramebuffer(GL_FRAMEBUFFER, context()->defaultFramebufferObject());
   glViewport(0, 0, fbW_, fbH_);
   shadowOn_ = true;
+}
+
+bool SimRendererWidget::droneCasterReady() const {
+  return hasMesh_ ? droneMesh_.vertex_count > 0 : modelBody_.vertex_count > 0;
+}
+
+// The drone into the depth pass: the hull is solid; each spinning prop is a thin
+// disc of the full rotor radius at its hub that writes only kRotorCoverage of its
+// texels (a stable dither the receiver's PCF averages), because a spinning rotor
+// shades like a disc of that solidity, not a solid one. An imported mesh is drawn
+// as it is.
+void SimRendererWidget::drawDroneCaster(const QMatrix4x4 &lightVP) {
+  auto draw = [&](const Mesh &m, const QMatrix4x4 &model) {
+    if (m.vertex_count == 0)
+      return;
+    progDepth_->setUniformValue(ud_lightmvp_, lightVP * model);
+    QOpenGLVertexArrayObject::Binder b(const_cast<QOpenGLVertexArrayObject *>(&m.vao));
+    glDrawArrays(GL_TRIANGLES, 0, m.vertex_count);
+  };
+  QMatrix4x4 model = modelMatrix();
+  if (hasMesh_) {
+    draw(droneMesh_, model);
+    return;
+  }
+  model.scale(droneVisualScale());
+  draw(modelBody_, model);
+  float hubR = 1e9f;
+  for (int i = 0; i < 4; ++i)
+    hubR = std::min(hubR, std::hypot(model_.hub[i][0], model_.hub[i][1]));
+  const float pr = model_.visualPropRadius > 0.0f ? model_.visualPropRadius : 0.4f * hubR;
+  for (int i = 0; i < 4; ++i) {
+    QMatrix4x4 m = model;
+    m.translate(model_.hub[i][0], model_.hub[i][1], model_.hub[i][2]);
+    m.scale(pr, pr, kPropDiscThickM);
+    progDepth_->setUniformValue(ud_cover_, rotorCoverageForTest_ >= 0.0f ? rotorCoverageForTest_ : kRotorCoverage);
+    draw(helipadDisk_, m); // unit cylinder, local z in [-1, 0]
+  }
+  progDepth_->setUniformValue(ud_cover_, 1.0f);
 }
 
 void SimRendererWidget::applyAtmosphere(QOpenGLShaderProgram *prog) const {
@@ -1769,34 +1982,39 @@ void SimRendererWidget::drawLit(const Mesh &m, const QMatrix4x4 &view,
                                 bool terrain, float bands) {
   if (m.vertex_count == 0)
     return;
-  progLit_->bind();
-  progLit_->setUniformValue(ul_mvp_, proj_ * view * model);
-  progLit_->setUniformValue(ul_model_, model);
-  progLit_->setUniformValue(ul_nmat_, model.normalMatrix());
-  progLit_->setUniformValue(ul_color_, color);
-  progLit_->setUniformValue(ul_campos_, camEye_);
+  // The textures upload on first use; a missing resource leaves the plain look.
+  const bool mat = terrain && terrainQuality() == vsim::terrain::Quality::High &&
+                   (terrainTex_.loaded() || terrainTex_.load(this));
+  // High ground that carries the border-track data takes the per-pixel build;
+  // everything else (Low, other meshes) the one without those interpolants.
+  const bool edge = mat && m.trackData && progLitEdge_ && progLitEdge_->isLinked();
+  QOpenGLShaderProgram *prog = edge ? progLitEdge_.get() : progLit_.get();
+  const LitLocs &L = edge ? litLocEdge_ : litLoc_;
+  prog->bind();
+  prog->setUniformValue(L.mvp, proj_ * view * model);
+  prog->setUniformValue(L.model, model);
+  prog->setUniformValue(L.nmat, model.normalMatrix());
+  prog->setUniformValue(L.color, color);
+  prog->setUniformValue(L.campos, camEye_);
   // Aerial perspective: gentle haze that fully veils the streamed-terrain edge.
-  progLit_->setUniformValue(ul_fogdensity_, atmo_.fogDensity);
-  progLit_->setUniformValue(ul_fogstart_, atmo_.fogStartM);
-  progLit_->setUniformValue("u_fogbase", fogBaseZ_);
-  progLit_->setUniformValue("u_fogheight", atmo_.fogHeightM);
-  progLit_->setUniformValue("u_ringclip", drawingFarRing_ ? QVector4D(farTerrain_.clipRect()[0], farTerrain_.clipRect()[1], farTerrain_.clipRect()[2], farTerrain_.clipRect()[3]) : QVector4D());
-  litCsm_.upload(progLit_.get(), csm_, shadowOn_);
-  progLit_->setUniformValue(ul_drone_, droneShadowPos_);
-  progLit_->setUniformValue(ul_droner_, droneShadowR_);
-  progLit_->setUniformValue(ul_sunint_, litSunInt_);
-  progLit_->setUniformValue(ul_ambstr_, litAmbStr_);
-  progLit_->setUniformValue(ul_terrain_, terrain ? 1.0f : 0.0f);
-  {
-    // The textures upload on first use; a missing resource leaves the plain look.
-    const bool mat = terrain &&
-                     terrainQuality() == vsim::terrain::Quality::High &&
-                     (terrainTex_.loaded() || terrainTex_.load(this));
-    progLit_->setUniformValue(ul_matq_, mat ? 1.0f : 0.0f);
-    if (mat)
-      terrainTex_.bind(this, progLit_.get());
-  }
-  progLit_->setUniformValue(ul_bands_, bands);
+  prog->setUniformValue(L.fogdensity, atmo_.fogDensity);
+  prog->setUniformValue(L.fogstart, atmo_.fogStartM);
+  prog->setUniformValue("u_fogbase", fogBaseZ_);
+  prog->setUniformValue("u_fogheight", atmo_.fogHeightM);
+  prog->setUniformValue("u_ringclip", drawingFarRing_ ? QVector4D(farTerrain_.clipRect()[0], farTerrain_.clipRect()[1], farTerrain_.clipRect()[2], farTerrain_.clipRect()[3]) : QVector4D());
+  L.csm.upload(prog, csm_, shadowOn_);
+  prog->setUniformValue(L.drone, droneShadowPos_);
+  prog->setUniformValue(L.droner, droneShadowR_);
+  prog->setUniformValue("u_dronemap", droneInMap_ ? 1.0f : 0.0f);
+  prog->setUniformValue("u_dronebody", drawingDroneBody_ ? 1.0f : 0.0f);
+  prog->setUniformValue(L.sunint, litSunInt_);
+  prog->setUniformValue(L.ambstr, litAmbStr_);
+  prog->setUniformValue(L.terrain, terrain ? 1.0f : 0.0f);
+  prog->setUniformValue(L.grid, gridOn_ ? 1.0f : 0.0f);
+  prog->setUniformValue(L.matq, mat ? 1.0f : 0.0f);
+  if (mat)
+    terrainTex_.bind(this, prog);
+  prog->setUniformValue(L.bands, bands);
   glActiveTexture(GL_TEXTURE1);
   glBindTexture(GL_TEXTURE_2D, shadowTex_);
   glActiveTexture(GL_TEXTURE0);
@@ -1807,7 +2025,7 @@ void SimRendererWidget::drawLit(const Mesh &m, const QMatrix4x4 &view,
   // enable attribute 2 and override this.
   glVertexAttrib3f(2, 1.0f, 1.0f, 1.0f);
   glDrawArrays(GL_TRIANGLES, 0, m.vertex_count);
-  progLit_->release();
+  prog->release();
 }
 
 // Tree crown: blobs of the crown colour packed inside the obstacle's sphere
@@ -1934,7 +2152,8 @@ void SimRendererWidget::uploadLitMesh(Mesh &m, const std::vector<float> &data) {
 }
 
 void SimRendererWidget::uploadColoredMesh(Mesh &m,
-                                          const std::vector<float> &data) {
+                                          const std::vector<float> &data,
+                                          int fpv) {
   if (!m.vao.isCreated())
     m.vao.create();
   m.vao.bind();
@@ -1942,7 +2161,7 @@ void SimRendererWidget::uploadColoredMesh(Mesh &m,
     m.vbo.create();
   m.vbo.bind();
   m.vbo.allocate(data.data(), int(data.size() * sizeof(float)));
-  const int stride = 9 * sizeof(float);
+  const int stride = fpv * int(sizeof(float));
   glEnableVertexAttribArray(0);
   glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
   glEnableVertexAttribArray(1);
@@ -1951,12 +2170,24 @@ void SimRendererWidget::uploadColoredMesh(Mesh &m,
   glEnableVertexAttribArray(2);
   glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride,
                         reinterpret_cast<void *>(6 * sizeof(float)));
+  if (fpv >= 17) { // terrain: border-track distances, colour, track-free colour
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, stride,
+                          reinterpret_cast<void *>(9 * sizeof(float)));
+    glEnableVertexAttribArray(4);
+    glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, stride,
+                          reinterpret_cast<void *>(11 * sizeof(float)));
+    glEnableVertexAttribArray(5);
+    glVertexAttribPointer(5, 3, GL_FLOAT, GL_FALSE, stride,
+                          reinterpret_cast<void *>(14 * sizeof(float)));
+    m.trackData = true;
+  }
   m.vbo.release();
   m.vao.release();
-  m.vertex_count = int(data.size() / 9);
+  m.vertex_count = int(data.size() / size_t(fpv));
   m.primitive = GL_TRIANGLES;
   m.bmin = m.bmax = QVector3D();
-  for (size_t i = 0; i + 8 < data.size(); i += 9) {
+  for (size_t i = 0; i + size_t(fpv) - 1 < data.size(); i += size_t(fpv)) {
     const QVector3D p(data[i], data[i + 1], data[i + 2]);
     if (i == 0)
       m.bmin = m.bmax = p;
@@ -2151,19 +2382,30 @@ void SimRendererWidget::setWorldMesh(const std::vector<QVector3D> &positions,
 void SimRendererWidget::setWorldChunk(qint64 key,
                                       const std::vector<QVector3D> &positions,
                                       const std::vector<QVector3D> &normals,
-                                      const std::vector<QVector3D> &colors) {
-  // Interleave [px,py,pz, nx,ny,nz, r,g,b] now (UI thread, no GL) and queue the
-  // VBO upload for paintGL.
+                                      const std::vector<QVector3D> &colors,
+                                      const std::vector<QVector3D> &splitColors,
+                                      const std::vector<QVector3D> &edge,
+                                      const std::vector<QVector3D> &edgeColors) {
+  // Interleave [px,py,pz, nx,ny,nz, r,g,b, signed, unsigned, er,eg,eb, sr,sg,sb]
+  // now (UI thread, no GL) and queue the VBO upload for paintGL. The colour is
+  // the baked one (track included); High takes the track-free one (sr..sb) and
+  // draws the track per pixel. A chunk without the data gets "no track near"
+  // (EdgeTrack.h kEdgeFar) and "no track-free colour" (negative).
   PendingChunk pc;
   pc.key = key;
-  pc.data.reserve(positions.size() * 9);
+  pc.data.reserve(positions.size() * 17);
+  const QVector3D far(procgen::kEdgeFar, procgen::kEdgeFar, 0.0f);
   for (size_t i = 0; i < positions.size(); ++i) {
     const QVector3D &p = positions[i];
     const QVector3D n = (i < normals.size()) ? normals[i] : QVector3D(0, 0, -1);
     const QVector3D c =
         (i < colors.size()) ? colors[i] : QVector3D(0.4f, 0.5f, 0.3f);
+    const QVector3D e = (i < edge.size()) ? edge[i] : far;
+    const QVector3D ec = (i < edgeColors.size()) ? edgeColors[i] : c;
+    const QVector3D sc = (i < splitColors.size()) ? splitColors[i] : QVector3D(-1, -1, -1);
     pc.data.insert(pc.data.end(), {p.x(), p.y(), p.z(), n.x(), n.y(), n.z(),
-                                   c.x(), c.y(), c.z()});
+                                   c.x(), c.y(), c.z(), e.x(), e.y(), ec.x(),
+                                   ec.y(), ec.z(), sc.x(), sc.y(), sc.z()});
   }
   pendingChunkUploads_.push_back(std::move(pc));
   chunksDirty_ = true;
@@ -2235,6 +2477,10 @@ void SimRendererWidget::clearChunkVegetation() {
   if (veg_)
     veg_->clearChunks();
 }
+bool SimRendererWidget::surveyGridByConfig() {
+  return QSettings().value(QStringLiteral("sim/surveyGrid"), false).toBool();
+}
+
 void SimRendererWidget::setVegetationEnabled(bool on) {
   vegEnabled_ = on;
   update();
@@ -2247,6 +2493,25 @@ void SimRendererWidget::setVegetationTreesEnabled(bool on) {
 const VegetationRenderer::Stats &SimRendererWidget::vegetationStats() const {
   static const VegetationRenderer::Stats none;
   return veg_ && vegEnabled_ ? veg_->stats() : none;
+}
+
+// The drone's contact blob on the ground under it: its own pass, whatever the
+// vegetation flags say (the height cue stays with vegetation off).
+void SimRendererWidget::drawDroneBlob(const QMatrix4x4 &view) {
+  if (!veg_)
+    return;
+  lastVegVp_ = proj_ * view; // for worldToPixelForTest
+  VegFrame f;
+  f.proj = proj_;
+  f.view = view;
+  f.camEye = camEye_;
+  f.dronePos = droneShadowPos_;
+  f.droneRadius = droneShadowR_;
+  if (farTerrain_.active()) {
+    f.droneGroundZ = farTerrain_.surfaceZ(droneShadowPos_.x(), droneShadowPos_.y(), 1e9f);
+    f.droneGroundKnown = f.droneGroundZ < 1e8f;
+  }
+  veg_->drawDroneBlob(f);
 }
 
 void SimRendererWidget::drawVegetation(const QMatrix4x4 &view) {
@@ -2263,6 +2528,7 @@ void SimRendererWidget::drawVegetation(const QMatrix4x4 &view) {
   f.sunDir = sunDir_;
   f.dronePos = droneShadowPos_;
   f.droneRadius = droneShadowR_;
+  f.droneInMap = droneInMap_;
   f.time = floraTime_;
   f.sunIntensity = litSunInt_;
   f.ambientStrength = litAmbStr_;
@@ -2379,7 +2645,7 @@ void SimRendererWidget::flushChunkUpdates() {
     std::unique_ptr<Mesh> &mesh = worldChunks_[pc.key];
     if (!mesh)
       mesh = std::make_unique<Mesh>();
-    uploadColoredMesh(*mesh, pc.data);
+    uploadColoredMesh(*mesh, pc.data, 17);
     if (chunkCpuMode())
       chunkCpu_[pc.key] = std::move(pc.data);
   }

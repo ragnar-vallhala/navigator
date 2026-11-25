@@ -213,7 +213,10 @@ public:
   // imported world mesh and chunks are mutually exclusive in practice.
   void setWorldChunk(qint64 key, const std::vector<QVector3D> &positions,
                      const std::vector<QVector3D> &normals,
-                     const std::vector<QVector3D> &colors);
+                     const std::vector<QVector3D> &colors,
+                     const std::vector<QVector3D> &splitColors = {},
+                     const std::vector<QVector3D> &edge = {},
+                     const std::vector<QVector3D> &edgeColors = {});
   void removeWorldChunk(qint64 key);
   void clearWorldChunks();
   // The streaming biome's field: drives the coarse far-terrain ring beyond the
@@ -424,6 +427,44 @@ public:
     cam_pitch_ = down;
     update();
   }
+  // Test hook: where a world point (NED) landed in the last
+  // frame, in device pixels from the top left (valid after a frame was drawn).
+  QPointF worldToPixelForTest(const QVector3D &w) const {
+    const QVector4D c = lastVegVp_ * QVector4D(w, 1.0f);
+    return {(c.x() / c.w() * 0.5 + 0.5) * fbW_, (0.5 - c.y() / c.w() * 0.5) * fbH_};
+  }
+  // The survey grid (1/10/100 m lines on level ground, faded out by 60 m) is a
+  // View option, off unless QSettings "sim/surveyGrid" is true.
+  static bool surveyGridByConfig();
+  void setSurveyGrid(bool on) {
+    gridOn_ = on;
+    update();
+  }
+  bool surveyGrid() const { return gridOn_; }
+  // Test hook: the last frame drew the drone's contact blob.
+  void setDroneCasterOffForTest(bool off) {
+    noCasterForTest_ = off;
+    ++shadowGeomVer_;
+  }
+  void setRotorCoverageForTest(float c) {
+    rotorCoverageForTest_ = c;
+    ++shadowGeomVer_; // the tiles hold the old coverage
+  }
+  bool droneInShadowMapForTest() const { return droneInMap_; }
+  // Tests: trees and rocks out of the shadow map (the drone and ground stay);
+  // the first cascade that gets them (default 1; 0 adds the finest one).
+  void setVegCastersOffForTest(bool off) { vegCastersOffForTest_ = off; }
+  void setVegCasterFirstCascadeForTest(int ci) { vegCasterFirst_ = ci; }
+  void setVegCasterPushForTest(float m) {
+    vegCasterPushM_ = m;
+    ++shadowGeomVer_;
+  }
+  // The vegetation caster counts of the last pass of each cascade.
+  const VegetationRenderer::CasterStats &vegCasterStatsForTest() const {
+    static const VegetationRenderer::CasterStats none;
+    return veg_ ? veg_->casterStats() : none;
+  }
+  bool droneBlobDrawnForTest() const { return veg_ && veg_->droneBlobDrawn(); }
   int contextGoneCount() const { return goneCount_; } // aboutToBeDestroyed seen
   bool contextWasCurrentWhenGone() const { return goneCurrent_; }
   // Drops every GL object and builds them all again in the CURRENT context,
@@ -473,12 +514,14 @@ private:
     int vertex_count = 0;
     GLenum primitive = GL_TRIANGLES;
     QVector3D bmin, bmax; // position bounds (uploadColoredMesh), for culling
+    bool trackData = false; // carries the parcel-border track attributes (3..5)
     // Frees the GL objects (context must be current) and returns the mesh to
     // its never-uploaded state, so a later build/upload recreates them.
     void release() {
       vbo.destroy();
       vao.destroy();
       vertex_count = 0;
+      trackData = false;
     }
     int liveObjects() const {
       return (vao.isCreated() ? 1 : 0) + (vbo.isCreated() ? 1 : 0);
@@ -521,7 +564,10 @@ private:
   void uploadLitMesh(Mesh &m, const std::vector<float> &interleaved);
   // As uploadLitMesh, but the array is [px,py,pz,nx,ny,nz,r,g,b] and vertex
   // colors (attribute 2) are enabled — used for the colored world mesh.
-  void uploadColoredMesh(Mesh &m, const std::vector<float> &interleaved);
+  // 9 floats per vertex (position, normal, colour), or 14 with the terrain's
+  // border-track data (signed and unsigned distance, then the track colour).
+  void uploadColoredMesh(Mesh &m, const std::vector<float> &interleaved,
+                         int floatsPerVertex = 9);
 
   // ---- gizmo editing (Blender-style; active only when editable_) ----
   enum class Tool { None, Move, Rotate, Scale };
@@ -570,24 +616,46 @@ private:
 
   // Lit shader: position + normal, directional Lambert + ambient, plus aerial
   // perspective (distance fog into the sky) and an ACES tonemap.
-  std::unique_ptr<QOpenGLShaderProgram> progLit_;
-  int ul_mvp_ = -1;
-  int ul_model_ = -1;
-  int ul_nmat_ = -1;
-  int ul_color_ = -1;
-  int ul_campos_ = -1;
-  int ul_fogdensity_ = -1;
-  int ul_fogstart_ = -1;
-  CascadeUniforms litCsm_;
-  int ul_drone_ = -1;
-  int ul_droner_ = -1;
+  // Two builds of it: progLit_ (everything, no per-pixel border tracks) and
+  // progLitEdge_ (TERRAIN_EDGE: the High chunk look, which draws the parcel-border
+  // track per pixel and so carries eight more interpolants). Low and all other
+  // meshes use the first, so they pay nothing for the second.
+  struct LitLocs {
+    int mvp = -1, model = -1, nmat = -1, color = -1, campos = -1;
+    int fogdensity = -1, fogstart = -1, drone = -1, droner = -1, sunint = -1;
+    int ambstr = -1, terrain = -1, grid = -1, bands = -1, matq = -1;
+    CascadeUniforms csm;
+    void resolve(QOpenGLShaderProgram *p);
+  };
+  std::unique_ptr<QOpenGLShaderProgram> progLit_, progLitEdge_;
+  LitLocs litLoc_, litLocEdge_;
   QVector3D droneShadowPos_;  // drone position for the analytic shadow
   float droneShadowR_ = 0.0f; // shadow radius [m]; 0 = off
-  int ul_sunint_ = -1;
-  int ul_ambstr_ = -1;
-  int ul_terrain_ = -1;
-  int ul_bands_ = -1;
-  int ul_matq_ = -1;
+  // The drone drawn into the shadow map (renderShadowPass). While it is, the
+  // analytic cylinder steps aside; it stays as the fallback otherwise.
+  bool droneInMap_ = false;
+  bool drawingDroneBody_ = false; // set only around the drone's own lit draws
+  float rotorCoverageForTest_ = -1.0f; // < 0: kRotorCoverage
+  bool noCasterForTest_ = false;       // map says "drone in map" but draws none
+  // Trees and rocks as shadow casters: the cascades from this one on (the finest, 0) whose texel
+  // is fine enough (kVegCasterMaxTexelM) get them. vegCasterKey_ is what the
+  // tiles were last drawn with (the vegetation's version, which cascades); a
+  // change bumps shadowGeomVer_.
+  int vegCasterFirst_ = 0;
+  float vegCasterPushM_ = kVegCasterPushM; // depth pull toward the sun (negative: away)
+  bool vegCastersOffForTest_ = false;
+  quint64 vegCasterKey_ = 0;
+  float droneVisualScale() const;
+  bool droneCasterReady() const;
+  void drawDroneCaster(const QMatrix4x4 &lightVP);
+  quint64 droneShadowVer_ = 1; // bumped when the drone's pose changes
+  QVector3D droneKeyPos_;
+  QQuaternion droneKeyAtt_;
+  float droneKeyScale_ = 0.0f;
+  bool droneKeyReady_ = false;
+  bool shadowCacheDroneIn_[kMaxCascades] = {false, false, false};
+  quint64 shadowCacheDroneVer_[kMaxCascades] = {0, 0, 0};
+  bool gridOn_ = surveyGridByConfig();
   vsim::terrain::TerrainTextures terrainTex_;
   vsim::terrain::Quality terrainQuality_ = vsim::terrain::Quality::High;
   vsim::terrain::Quality terrainDefault_ = vsim::terrain::Quality::High;
@@ -599,6 +667,8 @@ private:
   // frame (terrain casters); lit terrain + grass sample it to drop into shade.
   std::unique_ptr<QOpenGLShaderProgram> progDepth_; // depth-only, light-space
   int ud_lightmvp_ = -1;
+  int ud_cover_ = -1;
+  int ud_push_ = -1;
   unsigned int shadowFbo_ = 0;
   unsigned int shadowTex_ = 0;   // atlas: cascades side by side (ShadowCascades.h)
   ShadowQuality shadowQuality_ = ShadowQuality::High;
@@ -655,6 +725,7 @@ private:
   // the grass wind — kept general so it survives with grass compiled out.
   float floraTime_ = 0.0f;
   bool animFrozenForTest_ = false;
+  QMatrix4x4 lastVegVp_; // proj * view of the last vegetation pass (tests)
 
 #ifdef VAYU_SIM_GRASS
   // Flora shader: instanced grass/flower blades, wind + distance fade + fog.
@@ -773,11 +844,12 @@ private:
   std::shared_ptr<WaterRipples> ripples_; // shared with the other view when set
   bool vegEnabled_ = true;
   void drawVegetation(const QMatrix4x4 &view);
+  void drawDroneBlob(const QMatrix4x4 &view);
   std::map<qint64, std::unique_ptr<Mesh>> worldChunks_;
   struct PendingChunk {
     qint64 key;
     std::vector<float> data;
-  }; // 9 floats/vert
+  }; // 14 floats/vert (uploadColoredMesh)
   std::vector<PendingChunk> pendingChunkUploads_;
   std::vector<qint64> pendingChunkRemovals_;
   bool chunksDirty_ = false;

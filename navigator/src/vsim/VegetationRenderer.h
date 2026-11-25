@@ -54,10 +54,12 @@
 #include <QVector>
 #include <QVector3D>
 
+#include <algorithm>
 #include <array>
 #include <future>
 #include <map>
 #include <memory>
+#include <string>
 #include <vector>
 
 class QOpenGLShaderProgram;
@@ -79,6 +81,7 @@ struct VegFrame {
   QVector3D camEye, sunDir, dronePos;
   float time = 0.0f;
   float droneRadius = 0.0f;
+  bool droneInMap = false; // the drone is a caster in the shadow map: no cylinder
   float sunIntensity = 1.0f, ambientStrength = 1.0f;
   float fogDensity = 1.0f / 420.0f, fogStart = 45.0f;
   float fogBase = 0.0f, fogHeight = 150.0f; // height fog (FarTerrain.h kFogGLSL)
@@ -86,7 +89,73 @@ struct VegFrame {
   bool shadowOn = false;
   int defaultFbo = 0;
   int viewportW = 0, viewportH = 0;
+  // NED z of the terrain under the drone (the drone's contact blob sits there);
+  // droneGroundKnown is false when there is no terrain field to ask.
+  float droneGroundZ = 0.0f;
+  bool droneGroundKnown = false;
 };
+
+// The soft contact blob under every tree trunk, rock and the drone: a darkened,
+// feathered disc that grounds the object on the terrain (the sun shadow map is
+// too coarse for a trunk's foot, and there is no ground occlusion). One
+// instanced draw, multiplied into the framebuffer. Every number that shapes it
+// is here.
+struct VegContactBlob {
+  // Size, as a multiple of the object's own base radius.
+  static constexpr float kTrunkRadiusMult = 5.0f; // x the trunk radius (collider radius x scale)
+  static constexpr float kRockRadiusMult = 2.0f;  // x the rock's half span
+  static constexpr float kMinRadiusM = 0.35f;
+  // Darkness at the centre: 0 = none, 1 = black.
+  static constexpr float kTreeDarkness = 0.55f;
+  static constexpr float kRockDarkness = 0.5f;
+  // Falloff: full darkness out to this fraction of the radius, then a smooth
+  // fade to nothing at the rim.
+  static constexpr float kCoreFraction = 0.15f;
+  // Distance fade [m]: full to kFadeStartM, gone at kFadeEndM; blobs beyond are
+  // not even sent.
+  static constexpr float kFadeStartM = 35.0f;
+  static constexpr float kFadeEndM = 70.0f;
+  // The disc is flat, kLiftM above the surface at the object's foot.
+  static constexpr float kLiftM = 0.02f;
+  // Its depth is taken this far [m] toward the eye, so ground that is a little
+  // above the disc (a slope, a bump) does not hide it.
+  static constexpr float kDepthNudgeM = 1.0f;
+  // The drone: radius = drone shadow radius x (1 + height x kDroneSpread),
+  // darkness kDroneDarkness / (1 + height / kDroneHalfHeightM), none above
+  // kDroneMaxHeightM.
+  static constexpr float kDroneDarkness = 0.35f;
+  static constexpr float kDroneSpread = 0.12f;
+  static constexpr float kDroneHalfHeightM = 6.0f;
+  static constexpr float kDroneMaxHeightM = 40.0f;
+  static constexpr int kMaxInstances = 6000;
+};
+
+// Shadow casters (see VegetationRenderer::drawShadowCasters). Trees and rocks go
+// into the shadow cascades whose texel is at most kVegCasterMaxTexelM (a trunk
+// is one texel at 0.3 m; coarser maps give noise, and Low is 0.35), as the
+// coarsest mesh LOD, whatever the distance: a cascade's tile is reused while the
+// camera moves, so what it holds must not depend on the camera.
+constexpr float kVegCasterMaxTexelM = 0.3f;
+constexpr int kVegCasterLod = 2;
+// The casters are pulled this far [m] away from the sun in depth (the drone's
+// caster is pulled toward it), in full from kVegCasterRampM1 above the instance
+// base and not at all below kVegCasterRampM0 (a smoothstep between). A crown
+// seen from the sun's side is drawn from a finer LOD than the coarse hull in
+// the map, and the receiver's bias is only about 0.5 m in the finest cascade:
+// without the push the hull shades the leaves next to it (a 20-27% darker
+// crown). A push also lifts the start of a shadow off the ground along the sun
+// ray, so a flat one opens a gap at the trunk's foot with the sun low; scaling
+// it with the height above the base keeps the foot attached. Measured on a
+// lone jacaranda at sun 30 deg (the shadow starts this far from the base):
+// 0.55 m with no push, 0.90 m flat -1, 1.80 m flat -2, 0.55 m here (none
+// above 45 deg). Crown luminance with casters over without in the finest
+// cascade, jacaranda / fir: 0.79 / 0.73 with no push, 0.87 / 0.86 flat -1,
+// 0.93 / 0.97 flat -2, 0.93 / 0.93 here; 0.99 or better in cascade 1. What
+// is left: the fir's skirt reaches the ground, so its lowest ~2 m still
+// shade themselves at close to the no-push level.
+constexpr float kVegCasterPushM = -2.0f;
+constexpr float kVegCasterRampM0 = 0.5f;
+constexpr float kVegCasterRampM1 = 3.0f;
 
 // Which asset species stand in for each procgen species, and their sizes and
 // ranges: the one table to tune the look. Distances are metres from the eye.
@@ -101,6 +170,7 @@ struct VegSpeciesInfo {
   float sway;                // wind bend at the top, fraction of height
   bool impostor;             // gets a baked billboard beyond LOD2
   float barkGain = 1.0f;     // impostor trunk brightness against the mesh trunk (tests measure it)
+  float cone = 0.0f;         // 1 for a conifer: the impostor's top tile stays inside a cone's outline
 };
 const VegSpeciesInfo *vegSpeciesTable(int *count);
 // Model units to metres at instance scale 1 for one variant of a species.
@@ -166,6 +236,18 @@ constexpr float kVegTopSpireY0 = 0.0f;
 constexpr float kVegTopSpireY1 = 0.35f;
 constexpr float kVegTopSpireOut0 = 0.9f;
 constexpr float kVegTopSpireOut1 = 1.0f;
+// A conifer's outline in the quad's own coordinates (the top tile counts only inside
+// it): half-width kVegConeHalfWidth at kVegConeBase of the up axis, narrowing in a
+// straight line to nothing at kVegConeTip, softened over kVegConeSoft.
+constexpr float kVegConeHalfWidth = 0.68f;
+constexpr float kVegConeTip = 0.95f;
+constexpr float kVegConeBase = -0.6f;
+constexpr float kVegConeSoft = 0.12f;
+// Seen from above the top tile is the whole crown, a disc, and the outline would cut
+// it to a wedge: the clip's weight is 1 up to kVegConeFadeFromDeg of elevation and
+// 0 from kVegConeFadeToDeg on, where the impostor is the unclipped one.
+constexpr float kVegConeFadeFromDeg = 45.0f;
+constexpr float kVegConeFadeToDeg = 70.0f;
 
 // Vertex shader source of the billboard program, with the atlas layout filled
 // in from the constants above (exposed so a test can check it).
@@ -211,6 +293,36 @@ public:
   void releaseGL(); // frees every GL object; CPU data stays
   void draw(const VegFrame &f);
   bool glReady() const { return glReady_; }
+  // Shadow pass: draws the trees and rocks whose bounding sphere touches the
+  // light window of `lightVP` (world -> light clip, orthographic) as depth,
+  // coarsest LOD, with the cut-out alpha test; `push` pulls them toward the sun
+  // in clip z. The shadow framebuffer is bound, its viewport and scissor set.
+  // `cascade` only labels the statistics. Returns the instances drawn. Not for
+  // frame-rate use: the caller redraws a cascade only when its tile is stale.
+  int drawShadowCasters(const QMatrix4x4 &lightVP, int cascade, float push);
+  // Changes whenever what drawShadowCasters would draw changes (chunks, trees
+  // flag, assets or species turning ready, GL rebuilt): the renderer redraws the
+  // shadow tiles on a new value.
+  unsigned casterVersion() const { return casterVer_; }
+  struct CasterStats {
+    int instances[3] = {};          // last pass of each cascade
+    long long triangles[3] = {};
+    int drawCalls[3] = {};
+    int passes = 0;                 // drawShadowCasters calls so far
+  };
+  const CasterStats &casterStats() const { return casterStats_; }
+  // A cascade was redrawn without casters: its counts are zero.
+  void clearCasterStats(int cascade) {
+    const int ci = std::clamp(cascade, 0, 2);
+    casterStats_.instances[ci] = 0;
+    casterStats_.triangles[ci] = 0;
+    casterStats_.drawCalls[ci] = 0;
+  }
+  // The drone's contact blob, independent of the vegetation flags and assets: needs
+  // only a current GL context. Uses f.proj, view, camEye, dronePos, droneRadius
+  // and the drone ground fields.
+  void drawDroneBlob(const VegFrame &f);
+  bool droneBlobDrawn() const { return droneBlobDrawn_; } // by the last drawDroneBlob()
   int liveObjects() const; // GL names currently held
 
   // True while species are still decoding/uploading or impostors still to
@@ -221,11 +333,15 @@ public:
     int instancesDrawn = 0, drawCalls = 0, impostors = 0, chunksDrawn = 0;
     long long triangles = 0;
     int speciesReady = 0, impostorVariants = 0;
+    int blobs = 0;         // contact blobs drawn (trees and rocks)
     // Trees drawn this frame per kind (procgen::kVegTreeKinds order), as meshes
     // and as impostors, and the triangles the meshes cost.
     int treeMeshes[procgen::kVegTreeKindCount] = {};
     int treeImpostors[procgen::kVegTreeKindCount] = {};
     long long lodTriangles[3] = {}; // all species, by mesh LOD
+    // Billboard draws in order: 'o' a variant's opaque pass, 'f' its blended far
+    // fade-out. Every 'o' comes before the first 'f' (tests pin that).
+    std::string impostorPasses;
   };
   const Stats &stats() const { return stats_; }
   bool impostorsAvailable() const { return atlasOk_; }
@@ -288,8 +404,10 @@ private:
   bool buildAtlas();
   void drawBucket(VariantGpu &v, int lod, const std::vector<float> &data,
                   const VegFrame &f);
-  void drawImpostors(VariantGpu &v, const std::vector<float> &data,
+  bool drawImpostors(VariantGpu &v, const std::vector<float> &data,
                      const VegFrame &f);
+  void drawImpostorsFar(const std::vector<size_t> &variants);
+  void setImpostorUniforms(const VariantGpu &v);
   void setCommonUniforms(QOpenGLShaderProgram &p, const VegFrame &f);
   CascadeUniforms csmLocs_; // shadow uniforms of prog_, resolved once per program
   void freeSpeciesTextures(SpeciesGpu &s);
@@ -308,7 +426,14 @@ private:
   std::array<std::vector<int>, procgen::kVegTreeKindCount> treePool_;
   bool resolvedAssets_ = false;
 
-  std::unique_ptr<QOpenGLShaderProgram> prog_, progBillboard_, progBake_;
+  std::unique_ptr<QOpenGLShaderProgram> prog_, progBillboard_, progBake_, progBlob_;
+  unsigned blobVao_ = 0, blobDisc_ = 0, blobInst_ = 0;
+  std::vector<float> blobData_; // per frame: x, y, z, radius, darkness
+  void drawBlobs(const VegFrame &f);
+  void drawBlobInstances(const VegFrame &f, const float *data, int n);
+  bool ensureBlobGl();
+  void releaseBlobGL();
+  bool blobGlTried_ = false, droneBlobDrawn_ = false;
   // Per-draw uniform locations (the per-frame ones are set by name).
   struct Locs {
     int k = -1, height = -1, sway = -1, cutout = -1, cutoff = -1, a2c = -1;
@@ -318,6 +443,10 @@ private:
   unsigned atlasTex_ = 0, atlasFbo_ = 0, atlasDepth_ = 0, atlasMask_ = 0;
   bool bakeStats_ = false;
   int forcedLod_ = -1;
+  unsigned casterVer_ = 1;
+  CasterStats casterStats_;
+  std::unique_ptr<QOpenGLShaderProgram> progShadow_;
+  std::vector<std::vector<float>> casterBuckets_; // per variant, 8 floats an instance
   BakeStats bakeStatsOut_;
   bool atlasOk_ = false, glReady_ = false, atlasTried_ = false, treesOn_ = false;
   bool a2c_ = false; // alpha-to-coverage this frame (multisampled target)

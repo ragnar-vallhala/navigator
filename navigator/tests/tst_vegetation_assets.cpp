@@ -289,6 +289,81 @@ private slots:
       }
   }
 
+  // Seen from 70-130 m the pine must not turn into a bare pole with a tuft: the
+  // vertical extent of the needle triangles, binned at 1% of the height, leaves no
+  // run of bare trunk longer than 12% of the height (LOD2 once had 27-36%: three
+  // tiers spread over the crown), and covers about as much of the height as LOD1
+  // (the card-built fir's coarsest level covers 78% or more).
+  void pineLodsKeepTheCrownClosed() {
+    const VegSpeciesAssets *s = assets_.find("pine_sapling_medium");
+    QVERIFY(s);
+    for (const VegVariant &v : s->variants) {
+      double covered[kVegLodCount] = {};
+      for (int l = 0; l < kVegLodCount; ++l) {
+        const VegMesh &m = v.lods[l];
+        const VegSubmesh &sm = m.submeshes[1]; // needles
+        const float H = m.bboxMax.y();
+        std::vector<char> bin(100, 0);
+        for (uint32_t i = sm.firstIndex; i + 2 < sm.firstIndex + sm.indexCount; i += 3) {
+          float lo = H, hi = 0;
+          for (int k = 0; k < 3; ++k) {
+            const float y = m.vertices[size_t(m.indices[i + uint32_t(k)]) * VegMesh::kFloatsPerVertex + 1];
+            lo = std::min(lo, y);
+            hi = std::max(hi, y);
+          }
+          for (int b = int(std::max(lo, 0.0f) / H * 100.0f); b <= std::min(99, int(hi / H * 100.0f)); ++b)
+            bin[size_t(b)] = 1;
+        }
+        int top = 99;
+        while (top > 0 && !bin[size_t(top)])
+          --top;
+        int run = 0, gap = 0, n = 0;
+        for (int b = 0; b <= top; ++b) {
+          n += bin[size_t(b)];
+          run = bin[size_t(b)] ? 0 : run + 1;
+          gap = std::max(gap, run);
+        }
+        covered[l] = double(n) / double(top + 1);
+        qInfo("%s lod%d: needles cover %.0f%% of the height, longest bare run %d%%", qPrintable(v.name), l,
+              100.0 * covered[l], gap);
+        QVERIFY2(gap <= 12, qPrintable(QString("%1 lod%2: bare run %3% of the height").arg(v.name).arg(l).arg(gap)));
+      }
+      QVERIFY2(covered[2] >= 0.62 && covered[2] >= 0.9 * covered[1],
+               qPrintable(QString("%1 lod2 covers %2, lod1 %3").arg(v.name).arg(covered[2]).arg(covered[1])));
+    }
+  }
+
+  // The island tree's coarsest mesh keeps the leaf mass of the one before it: with
+  // 936 leaf triangles against 5,460 its cards must grow to cover the same area
+  // (the card enlargement cap once stopped them at 48% of LOD1's leaf area, which
+  // left the 70-130 m crown thin next to the jacaranda's).
+  void islandLod2KeepsTheLeafArea() {
+    const VegSpeciesAssets *s = assets_.find("island_tree_01");
+    QVERIFY(s);
+    for (const VegVariant &v : s->variants) {
+      double area[kVegLodCount] = {};
+      for (int l = 0; l < kVegLodCount; ++l) {
+        const VegMesh &m = v.lods[l];
+        for (const VegSubmesh &sm : m.submeshes) {
+          if (!s->materials[size_t(sm.material)].cutout())
+            continue;
+          for (uint32_t i = sm.firstIndex; i + 2 < sm.firstIndex + sm.indexCount; i += 3) {
+            QVector3D p[3];
+            for (int k = 0; k < 3; ++k) {
+              const float *f = &m.vertices[size_t(m.indices[i + uint32_t(k)]) * VegMesh::kFloatsPerVertex];
+              p[k] = QVector3D(f[0], f[1], f[2]);
+            }
+            area[l] += 0.5 * double(QVector3D::crossProduct(p[1] - p[0], p[2] - p[0]).length());
+          }
+        }
+      }
+      qInfo("%s leaf area %.1f / %.1f / %.1f m2", qPrintable(v.name), area[0], area[1], area[2]);
+      QVERIFY2(area[1] >= 0.8 * area[0], qPrintable(v.name));
+      QVERIFY2(area[2] >= 0.8 * area[1] && area[2] <= 1.3 * area[1],
+               qPrintable(QString("%1 lod2 leaf area %2 vs lod1 %3").arg(v.name).arg(area[2]).arg(area[1])));
+    }
+  }
+
   // The pine's trunk is sturdy and tapers (measured on the trunk submesh at
   // every LOD), and its whorls are widest low down and narrow toward the top.
   void pineTrunkTapersAndWhorlsNarrow() {
@@ -369,8 +444,13 @@ private slots:
           best = std::max(best, meanLum(m));
       return best;
     };
-    const double broad = std::min(cutoutLum("jacaranda_tree"), cutoutLum("island_tree_01"));
+    const double jac = cutoutLum("jacaranda_tree"), isl = cutoutLum("island_tree_01");
+    const double broad = std::min(jac, isl);
     QVERIFY(broad > 0.01);
+    // The island leaf scan is the darker one; the grade lifts it so the island crown
+    // is not far darker than the jacaranda's (it was 0.78 of it before).
+    qInfo("leaf luminance: island %.4f jacaranda %.4f (ratio %.2f)", isl, jac, isl / jac);
+    QVERIFY2(isl >= 0.88 * jac, qPrintable(QString("island %1 vs jacaranda %2").arg(isl).arg(jac)));
     for (const char *id : {"fir_tree_01", "pine_sapling_medium"}) {
       const double c = cutoutLum(id);
       qInfo("%s needle luminance %.4f, broadleaf %.4f", id, c, broad);

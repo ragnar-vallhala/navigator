@@ -104,6 +104,9 @@ public:
   // NED z of the terrain under (x, y), i.e. the fog reference height; `fallback`
   // when there is no field.
   float groundZ(float x, float y, float fallback) const;
+  // The same, on the streamed chunk surface the pilot sees (the raw field can sit
+  // over a metre from it); one small patch of work per call.
+  float surfaceZ(float x, float y, float fallback) const;
 
 private:
   struct Built {

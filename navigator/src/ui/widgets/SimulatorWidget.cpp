@@ -341,6 +341,7 @@ void SimulatorWidget::buildUi() {
   applyTerrainQuality();
   applyWaterQuality();
   applyVegetationTrees();
+  applySurveyGrid();
 
   m_rightStack = new QStackedWidget(splitter);
   splitter->addWidget(m_rightStack);
@@ -1212,9 +1213,9 @@ void SimulatorWidget::onChunkMeshed(qint64 key, const BuiltChunk &built) {
   m_chunkCache[key] =
       std::make_shared<const vsim::procgen::ProcMesh>(built.collMesh);
   const vsim::ChunkMeshData d = vsim::toChunkMeshData(key, built.mesh);
-  m_renderer->setWorldChunk(d.key, d.positions, d.normals, d.colors);
+  m_renderer->setWorldChunk(d.key, d.positions, d.normals, d.colors, d.splitColors, d.edge, d.edgeColors);
   if (m_downRenderer)
-    m_downRenderer->setWorldChunk(d.key, d.positions, d.normals, d.colors);
+    m_downRenderer->setWorldChunk(d.key, d.positions, d.normals, d.colors, d.splitColors, d.edge, d.edgeColors);
   if (m_renderer->vegetationEnabled()) {
     const float cm = m_chunkStreamer.config().chunkM;
     const float vx = (vsim::ChunkStreamer::cxOf(key) + 0.5f) * cm;
@@ -1831,6 +1832,13 @@ void SimulatorWidget::applyVegetationTrees() {
   for (vsim::SimRendererWidget *r : {m_renderer, m_downRenderer})
     if (r)
       r->setVegetationTreesEnabled(on);
+}
+
+void SimulatorWidget::applySurveyGrid() {
+  const bool on = vsim::SimRendererWidget::surveyGridByConfig();
+  for (vsim::SimRendererWidget *r : {m_renderer, m_downRenderer})
+    if (r)
+      r->setSurveyGrid(on);
 }
 
 void SimulatorWidget::pushRatesToSim() {

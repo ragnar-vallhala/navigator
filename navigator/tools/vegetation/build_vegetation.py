@@ -90,6 +90,9 @@ SMALL = (3000, 800, 150)
 # Broadleaf foliage: the scans are olive-yellow (hue about 70 deg); natural leaf
 # green sits near 90-100. (hue rotation in degrees, chroma and value factors)
 GRADE_LEAF = (-22.0, 0.95, 0.85)
+# The island tree's crown reads darker than the jacaranda's next to it; its leaf
+# scan is the darker one, so its value factor is 15% higher (0.85 -> 0.98).
+GRADE_ISLAND_LEAF = (-22.0, 0.95, 0.98)
 BIG_CONIFER = (32000, 7000, 1200)
 BIG_BROADLEAF = (36000, 7000, 1200)
 JACARANDA = (36000, 7000, 3000)
@@ -113,15 +116,15 @@ SPECIES = [
                     crop=(30, 40, 235, 455), grade=(0.85, 1.20, 1.35), thick=1.6, de_yellow=0.8,
                     bark_tint=(0.40, 0.395, 0.41),
                     variants=[
-                        dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.25, R=3.0, len=1.25,
+                        dict(H=12.0, tiers=(7, 6, 6), cards=(7, 6, 4), y0=0.25, R=3.0, len=1.25,
                              wid=1.5, droop=(10, 5), curve=0.32, r0=0.34, r1=0.08, trunk_top=0.9, jit=0.015, sag=0.06, az=0.38,
                              lower=0.6, lowlen=0.15, bark_u=3.0, bark_v=1.2,
                              spacing_jit=0.35, alongs=(2, 2, 2), lowbr=(9, 9, 5), lowy=(0.06, 0.30), lowdroop=34),
-                        dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.23, R=3.0, len=1.25,
+                        dict(H=12.0, tiers=(7, 6, 6), cards=(7, 6, 4), y0=0.23, R=3.0, len=1.25,
                              wid=1.5, droop=(12, 6), curve=0.34, r0=0.34, r1=0.08, trunk_top=0.9, jit=0.015, sag=0.06, az=0.38,
                              lower=0.6, lowlen=0.15, bark_u=3.0, bark_v=1.2,
                              spacing_jit=0.35, alongs=(2, 2, 2), lowbr=(9, 9, 5), lowy=(0.06, 0.30), lowdroop=34),
-                        dict(H=12.0, tiers=(7, 6, 3), cards=(7, 6, 5), y0=0.27, R=3.2, len=1.25,
+                        dict(H=12.0, tiers=(7, 6, 6), cards=(7, 6, 4), y0=0.27, R=3.2, len=1.25,
                              wid=1.5, droop=(8, 4), curve=0.30, r0=0.34, r1=0.08, trunk_top=0.9, jit=0.015, sag=0.06, az=0.38,
                              lower=0.6, lowlen=0.15, bark_u=3.0, bark_v=1.2,
                              spacing_jit=0.35, alongs=(2, 2, 2), lowbr=(9, 9, 5), lowy=(0.06, 0.30), lowdroop=34)])),
@@ -147,8 +150,8 @@ SPECIES = [
                # test drops once the leaf texture is minified), so its impostor
                # holds 1.5 to 3 times the mesh's pixels; a higher cut-off in the bake
                # alone brings it down. The mesh LODs keep the 0.5.
-               'island_tree_01_leaves': dict(weight=0.78, cutout=True, key_black=True, cull=True, grade=GRADE_LEAF,
-                                             size=1024, scale_cap=(3.5, 4.5, 6.0), tris_per_comp=2,
+               'island_tree_01_leaves': dict(weight=0.78, cutout=True, key_black=True, cull=True, grade=GRADE_ISLAND_LEAF,
+                                             size=1024, scale_cap=(3.5, 4.5, 8.0), tris_per_comp=2,
                                              impostor_cutoff=0.7),
                'island_tree_01_branches': dict(weight=0.12, cutout=False, cull=True, size=512,
                                                scale_cap=(2.0, 2.5, 3.0), tris_per_comp=12)}),

@@ -20,6 +20,7 @@
 #include <QOpenGLContext>
 #include <QOpenGLShaderProgram>
 #include <QSettings>
+#include <QVector2D>
 
 #include <algorithm>
 #include <cmath>
@@ -37,14 +38,17 @@ constexpr int kTilePx = 128;
 constexpr float kPi = 3.14159265358979f;
 constexpr float kSinkM = 0.06f;    // instances stand this far into the surface
 constexpr float kLodBand = 0.07f;  // cross-fade half width, fraction of the edge
+// Billboards past this distance fade out by alpha blending (the LOD cross-fades,
+// which dither, all end well inside it: the last LOD edge is 130 m).
+constexpr float kFarBlendM = 300.0f;
 
 // One row per asset species. lodEnd: LOD0 / LOD1 / LOD2 end; maxDist: the
 // farthest the species is drawn (the billboard range for trees, the fade-out
 // distance otherwise). Fog is nearly opaque by ~500 m, so nothing goes farther.
 const VegSpeciesInfo kTable[] = {
     // id                       cat            size  span   lod ends         max   fb    sway  imp
-    {"fir_tree_01",             procgen::kVegTree,  procgen::kVegTreeKinds[0].heightM, false, {30, 70, 130}, 560, 300, 0.012f, true, 0.6f},
-    {"pine_sapling_medium",     procgen::kVegTree,  procgen::kVegTreeKinds[1].heightM, false, {30, 70, 130}, 560, 300, 0.012f, true, 0.75f},
+    {"fir_tree_01",             procgen::kVegTree,  procgen::kVegTreeKinds[0].heightM, false, {30, 70, 130}, 560, 300, 0.012f, true, 0.6f, 1.0f},
+    {"pine_sapling_medium",     procgen::kVegTree,  procgen::kVegTreeKinds[1].heightM, false, {30, 70, 130}, 560, 300, 0.012f, true, 0.75f, 1.0f},
     {"jacaranda_tree",          procgen::kVegTree,  procgen::kVegTreeKinds[2].heightM, false, {30, 70, 130}, 560, 300, 0.008f, true, 1.7f},
     {"island_tree_01",          procgen::kVegTree,  procgen::kVegTreeKinds[3].heightM, false, {30, 70, 130}, 560, 300, 0.008f, true, 1.95f},
     {"shrub_03",                procgen::kVegBush,  1.0f, false, {25, 60, 110}, 170, 170, 0.030f, false},
@@ -101,6 +105,8 @@ uniform float u_k;       // model unit -> metres at instance scale 1
 uniform float u_height;  // variant height, model units
 uniform float u_sway;    // wind bend at the top, fraction of the height
 uniform float u_time;
+uniform float u_push;    // shadow pass: pull the depth toward the sun (clip z); 0 otherwise
+uniform vec2 u_pushRamp; // shadow pass: height above the base [m] where the push is 0 and full
 out vec3 v_world;
 out vec3 v_nrm;
 out vec2 v_uv;
@@ -157,6 +163,23 @@ void main() {
   v_paint = i_misc.w;
   v_hm = g.y * s;
   gl_Position = u_vp * vec4(v_world, 1.0);
+  gl_Position.z -= u_push * smoothstep(u_pushRamp.x, max(u_pushRamp.y, u_pushRamp.x + 1e-3), v_hm) *
+                   gl_Position.w;
+}
+)GLSL";
+
+// Shadow-pass fragment: depth only. A cut-out leaf card drops the texels the
+// colour pass would drop (same texture, same cutoff), so a crown casts the
+// shadow of its leaves, not of its card.
+const char *kShadowFS = R"GLSL(
+#version 330 core
+in vec2 v_uv;
+uniform sampler2D u_diffuse;
+uniform float u_cutout;
+uniform float u_cutoff;
+void main() {
+  if (u_cutout > 0.5 && texture(u_diffuse, v_uv).a < u_cutoff)
+    discard;
 }
 )GLSL";
 
@@ -282,6 +305,7 @@ layout(location = 3) in vec4 i_posyaw;  // base (NED), plain yaw: only trees are
 layout(location = 4) in vec4 i_misc;
 uniform mat4 u_vp;
 uniform vec3 u_eye;
+uniform float u_pass;    // 0: opaque billboards, 1: the far fade-out, alpha-blended
 uniform float u_k;
 uniform float u_cy;      // quad centre height, model units
 uniform float u_half;    // quad half size, model units
@@ -289,6 +313,7 @@ uniform float u_tile;    // first atlas tile of this variant
 out vec2 v_uv0;
 out vec2 v_uv1;
 out vec2 v_uvT;          // the top-down tile
+out float v_cx;         // the quad's own right coordinate, -1..1
 out float v_cy;         // the quad's own up coordinate, -1 (foot) .. 1 (tip)
 out vec2 v_tc;           // position in the top tile, -1..1 (outside the tile: nothing there)
 out float v_w;
@@ -297,6 +322,10 @@ out vec2 v_el;           // sin, cos of the camera elevation about the crown cen
 out float v_fade;
 out float v_tint;
 out vec3 v_world;
+flat out vec3 v_rgt;       // the quad's right, up and toward-the-eye axes (world)
+flat out vec3 v_upq;
+flat out vec3 v_dir;
+flat out float v_mir;      // -1 when the baked image is drawn mirrored
 // Per-instance look from the base position alone (no data to ship, same for
 // every chunking): x = mirror, y = width, z = lean azimuth, w = lean amount.
 vec4 instVary(vec2 p) {
@@ -347,6 +376,7 @@ void main() {
   v_top = smoothstep(@TOP_FROM@, @TOP_TO@, e);
   float cxe = vv.x * c.x;
   float cyv = (c.y + @DOWN@ * smoothstep(@DNA@, @DNB@, e) * cosE) / max(sqrt(sinE), 0.6); // the footprint lies below the crown's middle: a tall crown seen from above leans over it
+  v_cx = c.x;
   v_cy = c.y;
   v_tc = vec2(-hl.x * cxe - hl.y * cyv, hl.y * cxe - hl.x * cyv);
   v_uvT = tileUv(u_tile + @ATLAS_AZ@, 0.5 + 0.48 * v_tc);
@@ -354,7 +384,17 @@ void main() {
   v_fade = i_misc.z;
   v_tint = i_misc.y;
   v_world = w;
+  v_rgt = rgt3;
+  v_upq = upq;
+  v_dir = dir;
+  v_mir = vv.x;
   gl_Position = u_vp * vec4(w, 1.0);
+  // Each billboard is drawn in exactly one of the two passes: the far fade-out
+  // (fade below 1 past @FAR_BLEND@ m, where no LOD cross-fade happens) is
+  // blended, the rest is opaque. The other pass clips the quad.
+  float farFade = (length(w - u_eye) > @FAR_BLEND@ && i_misc.z < 0.999) ? 1.0 : 0.0;
+  if (farFade != u_pass)
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
 }
 )GLSL";
 
@@ -363,6 +403,7 @@ const char *kBillFSHead = R"GLSL(
 in vec2 v_uv0;
 in vec2 v_uv1;
 in vec2 v_uvT;
+in float v_cx;
 in float v_cy;
 in vec2 v_tc;
 in float v_w;
@@ -371,9 +412,15 @@ in vec2 v_el;
 in float v_fade;
 in float v_tint;
 in vec3 v_world;
+flat in vec3 v_rgt;
+flat in vec3 v_upq;
+flat in vec3 v_dir;
+flat in float v_mir;
 out vec4 o_color;
+uniform float u_pass;        // 1: blended far fade-out, alpha = v_fade
 uniform sampler2D u_atlas;   // display-referred colour, coverage in alpha
 uniform sampler2D u_atlasMask; // alpha: foliage share of the covered texels
+uniform float u_cone;         // 1 for a cone-shaped crown (the top tile stays inside its outline), 0 for a round one
 uniform float u_barkGain;     // per-species trunk brightness, measured against the mesh
 )GLSL";
 
@@ -401,9 +448,15 @@ void main() {
   vec3 rgbA = c0.rgb * c0.a * (1.0 - v_w) + c1.rgb * c1.a * v_w;
   float mfol = mix(m0.a, m1.a, v_w);
   float aoSum = mix(m0.g, m1.g, v_w);
+  // The mesh shader's lighting normal as the baking cameras saw it (right, up),
+  // averaged over the foliage texels of the mip level: the mean of the unit
+  // normals, so a far level's is shorter and its toward-camera part longer.
+  vec2 nxy = (vec2(mix(m0.r, m1.r, v_w), mix(m0.b, m1.b, v_w)) * 2.0 - 1.0) / max(mfol, 1e-3);
   vec3 rgb = rgbA / max(a, 1e-3);
   float fol = clamp(mfol / max(a, 1e-3), 0.0, 1.0);
   float barkAo = clamp(aoSum / max(a - mfol, 0.02), 0.0, 1.0);
+  vec2 topNxy = vec2(0.0);
+  float topW = 0.0;
   float cov = a >= 0.35 ? 1.0 : 0.0; // mip levels thin the coverage, so keep a bit more than half
   if (v_top > 0.0) { // flat per instance, so the fetches stay in uniform control flow
     float in_t = max(abs(v_tc.x), abs(v_tc.y)) <= 1.0 ? 1.0 : 0.0; // the rotated quad's corners
@@ -414,6 +467,15 @@ void main() {
     float grow = (exp(@GROW@ * tn) - 1.0) / (exp(@GROW@) - 1.0);
     float reach = @REACH@ * sqrt(grow) + @REST@ * smoothstep(@FULL@ - 0.1, 1.0, lin);
     float mT = 1.0 - smoothstep(reach - @SOFT@, reach, length(v_tc));
+    // A cone's outline narrows toward its tip, and from above the top tile is a disc
+    // as wide as the base: left alone, it makes a ball with the spire sticking out of
+    // it. For a cone the tile only counts inside the side view's outline (half-width
+    // against the quad's own up axis), so the union stays a cone.
+    float hw = @CONE_W@ * clamp((@CONE_TIP@ - v_cy) / (@CONE_TIP@ - @CONE_BASE@), 0.0, 1.0);
+    // Straight down the top tile is the whole crown (a disc), and the cone would cut
+    // it to a wedge: the clip fades out with the elevation, gone by @CONE_F1_DEG@ degrees.
+    float coneW = u_cone * (1.0 - smoothstep(@CONE_F0@, @CONE_F1@, v_el.x));
+    mT *= mix(1.0, 1.0 - smoothstep(hw - @CONE_SOFT@, hw, abs(v_cx)), coneW);
     // The side tiles stay inside the disc (so the top tile's holes show the crown
     // behind them instead of the sky) and fade out as the elevation climbs.
     float keep = 1.0 - smoothstep(@KEEP0@, @KEEP1@, lin);
@@ -432,23 +494,46 @@ void main() {
     vec3 rgbT = ct.rgb;
     float folT = clamp(mt.a / max(ct.a, 1e-3), 0.0, 1.0);
     float aoT = clamp(mt.g / max(ct.a - mt.a, 0.02), 0.0, 1.0);
+    vec2 nxyT = (vec2(mt.r, mt.b) * 2.0 - 1.0) / max(mt.a, 1e-3);
     rgb = mix(rgb, rgbT, wT);
     fol = mix(fol, folT, wT);
     barkAo = mix(barkAo, aoT, wT);
+    topNxy = nxyT;
+    topW = wT;
   }
   if (cov < 0.5) discard;
   float b = bayer4(gl_FragCoord.xy);
-  bool keep = v_fade > 3.5 ? 2.0 * (v_fade - 4.0) > b : (v_fade > 1.5 ? 2.0 * (v_fade - 2.0) - 1.0 < b : v_fade > b);
+  // The far fade-out is a real blend (a screen door at one pixel per cell reads as
+  // a checkerboard on the tree line); the LOD cross-fades keep the dither.
+  bool keep = u_pass > 0.5 || (v_fade > 3.5 ? 2.0 * (v_fade - 4.0) > b : (v_fade > 1.5 ? 2.0 * (v_fade - 2.0) - 1.0 < b : v_fade > b));
   if (!keep) discard;
   vec3 toFrag = v_world - u_campos;
   float dist = length(toFrag);
   vec3 sun = normalize(u_sundir);
-  // A crown has no single normal: lean the upward one toward the viewer, in 3D
-  // (the horizontal lean shrinks and the upward part grows as the camera climbs).
   vec2 hz = toFrag.xy / max(length(toFrag.xy), 1e-3);
-  vec3 N = normalize(vec3(-hz * 0.45 * v_el.y, -(0.85 + 0.45 * v_el.x)));
-  // Same foliage terms as the mesh shader (ambient floor, light through leaves).
-  vec3 L = ambientLit(N) * 1.5 + sunLightColor() * (wrapDiffuse(N, sun) * 0.95 + 0.25);
+  // The crown's lighting normal is the one the mesh shader would use, baked per
+  // texel (so mesh and impostor agree at any sun by construction): the baked
+  // (right, up) rebuilt on the horizon basis of the heading (the side tiles are
+  // baked level, and a surface normal does not turn with the camera) with the
+  // toward-camera part from its length, or straight up from the top tile (whose horizontal part has no frame
+  // here). The mirror flips the baked right.
+  float lenS = min(length(nxy), 1.0), lenT = min(length(topNxy), 1.0);
+  vec2 hd = normalize(v_dir.xy);
+  vec3 tw = normalize(vec3(hd, abs(v_dir.z) / max(length(v_dir.xy), 1e-3)));
+  vec3 Ns = v_rgt * (nxy.x * v_mir) + vec3(0.0, 0.0, -nxy.y) + tw * sqrt(max(1.0 - lenS * lenS, 0.0));
+  if (v_mir > 0.0) {
+    vec3 upv = vec3(0.0, 0.0, -1.0);
+    float cu = dot(Ns, upv);
+    float ku = 0.45 * cu + sqrt(0.2025 * cu * cu + 0.1);
+    vec3 Nmu = (ku * Ns - 0.45 * upv) / 0.55;
+    Ns = normalize(0.55 * -Nmu + 0.45 * upv);
+  }
+  vec3 Nt = vec3(0.0, 0.0, -sqrt(max(1.0 - lenT * lenT, 0.0)));
+  vec3 Nf = normalize(mix(Ns, Nt, (v_mir > 0.0 ? 0.75 : 0.0) * topW) + 1e-4 * vec3(0.0, 0.0, -1.0));
+  // The mesh's terms (ambient floor, sun with light through the leaves; the card
+  // normal faces the eye, so the sun behind the crown shines through).
+  float thru = clamp(dot(v_dir, sun) * v_mir, 0.0, 1.0);
+  vec3 L = ambientLit(Nf) * 1.5 + sunLightColor() * (wrapDiffuse(Nf, sun) * 0.95 + thru * 0.45);
   // Bark is lit like the mesh trunk (no crown rounding, no light through leaves):
   // the mean over the visible half of a vertical cylinder, with the mesh's warm
   // bark grade and lighting weights. Foliage keeps the crown terms above.
@@ -464,7 +549,7 @@ void main() {
   vec3 barkTint = tintMul(v_tint);
   vec3 barkLit = rgb * barkTint * vec3(1.0, 0.90, 0.78) * Lb * u_barkGain;
   vec3 lit = mix(barkLit, rgb * foliageTint(v_tint) * L, fol);
-  o_color = vec4(applyAerialPerspective(lit, toFrag, dist), 1.0);
+  o_color = vec4(applyAerialPerspective(lit, toFrag, dist), u_pass > 0.5 ? v_fade : 1.0);
 }
 )GLSL";
 
@@ -472,19 +557,29 @@ void main() {
 const char *kBakeVS = R"GLSL(
 #version 330 core
 layout(location = 0) in vec3 a_pos;
+layout(location = 1) in vec3 a_nrm;
 layout(location = 2) in vec2 a_uv;
 uniform mat4 u_mvp;
 out vec2 v_uv;
-void main() { v_uv = a_uv; gl_Position = u_mvp * vec4(a_pos, 1.0); }
+out vec3 v_nrm;
+out vec3 v_pos;
+void main() { v_uv = a_uv; v_nrm = a_nrm; v_pos = a_pos; gl_Position = u_mvp * vec4(a_pos, 1.0); }
 )GLSL";
 
 const char *kBakeFS = R"GLSL(
 #version 330 core
 in vec2 v_uv;
+in vec3 v_nrm;
+in vec3 v_pos;
 layout(location = 0) out vec4 o_color;
-layout(location = 1) out vec4 o_mask; // alpha 1 on foliage (cut-out) texels, 0 on bark
+// alpha 1 on foliage (cut-out) texels, 0 on bark; green: bark occlusion; red and
+// blue: on foliage the lighting normal the mesh shader uses, as the baking camera
+// sees it (right, up), 0.5 = zero (see kBillFSMain)
+layout(location = 1) out vec4 o_mask;
 uniform sampler2D u_diffuse;
 uniform sampler2D u_arm;
+uniform sampler2D u_normal;
+uniform mat3 u_viewRot;
 uniform float u_cutout;
 uniform float u_cutoff;
 uniform vec3 u_albedoMul; // colour multiplier (identity for trees)
@@ -496,11 +591,65 @@ void main() {
   vec4 d = texture(u_diffuse, v_uv);
   if (u_cutout > 0.5 && d.a < u_cutoff) discard;
   float ao = texture(u_arm, v_uv).r;
+  // The mesh shader's foliage normal: the (two-sided) surface normal bent by the
+  // normal map, then leaned toward the sky (model up is +y here).
+  vec3 N = normalize(v_nrm);
+  if (gl_FrontFacing) N = -N;
+  vec3 dp1 = dFdx(v_pos), dp2 = dFdy(v_pos);
+  vec2 duv1 = dFdx(v_uv), duv2 = dFdy(v_uv);
+  vec3 dp2perp = cross(dp2, N), dp1perp = cross(N, dp1);
+  vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+  vec3 B = -(dp2perp * duv1.y + dp1perp * duv2.y);
+  float invmax = inversesqrt(max(max(dot(T, T), dot(B, B)), 1e-20));
+  vec3 nm = texture(u_normal, v_uv).xyz * 2.0 - 1.0;
+  vec3 Nm = normalize(mat3(T * invmax, B * invmax, N) * nm);
+  Nm = normalize(mix(N, Nm, 0.85));
+  vec3 Nv = u_viewRot * normalize(mix(Nm, vec3(0.0, 1.0, 0.0), 0.45));
   // Foliage bakes its occlusion into the albedo; bark keeps its albedo plain and
   // stores the occlusion in the mask's green for the billboard's trunk lighting.
   bool fol = u_cutout > 0.5;
   o_color = vec4(srgbEnc(d.rgb) * u_albedoMul * (fol ? mix(0.55, 1.0, ao) : 1.0), 1.0);
-  o_mask = vec4(0.0, fol ? 0.0 : ao, 0.0, fol ? 1.0 : 0.0);
+  o_mask = vec4(fol ? 0.5 + 0.5 * Nv.x : 0.5, fol ? 0.0 : ao, fol ? 0.5 + 0.5 * Nv.y : 0.5, fol ? 1.0 : 0.0);
+}
+)GLSL";
+
+// Contact blobs (see VegContactBlob): a 16-sided disc fan per instance, x y the
+// unit-disc offset, drawn as a multiply.
+const char *kBlobVS = R"GLSL(
+#version 330 core
+layout(location = 0) in vec2 a_disc;
+layout(location = 1) in vec4 i_pos;   // base (NED), radius
+layout(location = 2) in float i_dark;
+uniform mat4 u_vp;
+uniform vec3 u_eye;
+uniform vec3 u_shape; // lift, fade start, fade end
+uniform float u_nudge; // depth bias toward the eye [m]
+out float v_rho;
+out float v_dark;
+void main() {
+  float rho = length(a_disc);
+  vec3 p = vec3(i_pos.xy + a_disc * i_pos.w,
+                i_pos.z - u_shape.x);
+  // Screen position from p, depth from a point u_nudge closer to the eye: the
+  // terrain's slope and its triangles' deviation from the surface then cannot
+  // bury the disc, and it still loses to a trunk or rock standing in front of it.
+  vec4 c = u_vp * vec4(p, 1.0);
+  vec4 cn = u_vp * vec4(p + normalize(u_eye - p) * u_nudge, 1.0);
+  gl_Position = vec4(c.xy, cn.z / cn.w * c.w, c.w);
+  v_rho = rho;
+  v_dark = i_dark * (1.0 - smoothstep(u_shape.y, u_shape.z, distance(p, u_eye)));
+}
+)GLSL";
+
+const char *kBlobFS = R"GLSL(
+#version 330 core
+in float v_rho;
+in float v_dark;
+uniform float u_core;
+out vec4 o_color;
+void main() {
+  float a = v_dark * (1.0 - smoothstep(u_core, 1.0, v_rho));
+  o_color = vec4(vec3(1.0 - a), 1.0);
 }
 )GLSL";
 
@@ -589,6 +738,13 @@ static QByteArray billboardFragmentMain() {
   src.replace("@OUT0@", QByteArray::number(double(kVegTopOut0), 'f', 3));
   src.replace("@OUT1@", QByteArray::number(double(kVegTopOut1), 'f', 3));
   src.replace("@KEEP0@", QByteArray::number(double(kVegTopKeep0), 'f', 3));
+  src.replace("@CONE_W@", QByteArray::number(double(kVegConeHalfWidth), 'f', 3));
+  src.replace("@CONE_TIP@", QByteArray::number(double(kVegConeTip), 'f', 3));
+  src.replace("@CONE_BASE@", QByteArray::number(double(kVegConeBase), 'f', 3));
+  src.replace("@CONE_F0@", QByteArray::number(double(std::sin(kVegConeFadeFromDeg * kPi / 180.0f)), 'f', 5));
+  src.replace("@CONE_F1@", QByteArray::number(double(std::sin(kVegConeFadeToDeg * kPi / 180.0f)), 'f', 5));
+  src.replace("@CONE_F1_DEG@", QByteArray::number(double(kVegConeFadeToDeg), 'f', 0));
+  src.replace("@CONE_SOFT@", QByteArray::number(double(kVegConeSoft), 'f', 3));
   src.replace("@SPY0@", QByteArray::number(double(kVegTopSpireY0), 'f', 3));
   src.replace("@SPY1@", QByteArray::number(double(kVegTopSpireY1), 'f', 3));
   src.replace("@SPO0@", QByteArray::number(double(kVegTopSpireOut0), 'f', 3));
@@ -601,6 +757,7 @@ QByteArray vegBillboardVertexSource() {
   QByteArray src(kBillVS);
   src.replace("@ATLAS_TILES@", QByteArray::number(double(kAtlasTiles), 'f', 1));
   src.replace("@ATLAS_AZ@", QByteArray::number(double(kAtlasAzimuths), 'f', 1));
+  src.replace("@FAR_BLEND@", QByteArray::number(double(kFarBlendM), 'f', 1));
   src.replace("@TOP_FROM@", QByteArray::number(double(kVegTopFromDeg * kPi / 180.0f), 'f', 5));
   src.replace("@DNA@", QByteArray::number(double(kVegTopDownFromDeg * kPi / 180.0f), 'f', 5));
   src.replace("@DNB@", QByteArray::number(double(kVegTopDownToDeg * kPi / 180.0f), 'f', 5));
@@ -705,6 +862,7 @@ void VegetationRenderer::setTreesEnabled(bool on) {
   if (on == treesOn_)
     return;
   treesOn_ = on;
+  ++casterVer_;
   for (auto &kv : chunks_) // re-resolve with / without the trees
     kv.second.resolved = false;
 }
@@ -742,6 +900,7 @@ void VegetationRenderer::setChunk(qint64 key, std::vector<procgen::VegInstance> 
       return ok;
     });
   }
+  ++casterVer_;
   Chunk &c = chunks_[key];
   c.src = std::move(inst);
   c.recs.clear();
@@ -760,8 +919,14 @@ void VegetationRenderer::setChunk(qint64 key, std::vector<procgen::VegInstance> 
   c.zHi = hi + 3.0f;
 }
 
-void VegetationRenderer::removeChunk(qint64 key) { chunks_.erase(key); }
-void VegetationRenderer::clearChunks() { chunks_.clear(); }
+void VegetationRenderer::removeChunk(qint64 key) {
+  chunks_.erase(key);
+  ++casterVer_;
+}
+void VegetationRenderer::clearChunks() {
+  chunks_.clear();
+  ++casterVer_;
+}
 
 std::vector<procgen::VegExclusion>
 vegExclusionsFor(const std::vector<QVector3D> &pads,
@@ -794,8 +959,10 @@ void VegetationRenderer::exclude(const std::vector<procgen::VegExclusion> &ex) {
                                  return false;
                                }),
                 c.src.end());
-    if (c.src.size() != before)
+    if (c.src.size() != before) {
       c.resolved = false;
+      ++casterVer_;
+    }
   }
 }
 
@@ -891,6 +1058,10 @@ bool VegetationRenderer::buildPrograms(const VegGlsl &g) {
   const bool billOk = linkProgram(
       *progBillboard_, "vegetation billboard", vegBillboardVertexSource(),
       QByteArray(kBillFSHead) + g.atmosphere + g.lighting + kCommonGLSL + billboardFragmentMain());
+  progShadow_ = std::make_unique<QOpenGLShaderProgram>();
+  if (!linkProgram(*progShadow_, "vegetation shadow", QByteArray(kVS) + kCommonGLSL + kVSMain,
+                   kShadowFS))
+    progShadow_.reset(); // no casters; the colour pass is unaffected
   progBake_ = std::make_unique<QOpenGLShaderProgram>();
   const bool bakeOk = linkProgram(*progBake_, "vegetation bake", kBakeVS, kBakeFS);
   if (!billOk || !bakeOk) {
@@ -973,6 +1144,7 @@ bool VegetationRenderer::initGL(const VegGlsl &glsl) {
     glGetFloatv(0x84FF /* GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT */, &maxAniso_);
   atlasTried_ = false; // the impostor atlas is built when trees are first drawn
   glReady_ = true;
+  ++casterVer_;
   return true;
 }
 
@@ -986,7 +1158,20 @@ void VegetationRenderer::freeSpeciesTextures(SpeciesGpu &s) {
   s.mats.clear();
 }
 
+void VegetationRenderer::releaseBlobGL() {
+  if (blobVao_)
+    glDeleteVertexArrays(1, &blobVao_);
+  if (blobDisc_)
+    glDeleteBuffers(1, &blobDisc_);
+  if (blobInst_)
+    glDeleteBuffers(1, &blobInst_);
+  blobVao_ = blobDisc_ = blobInst_ = 0;
+  progBlob_.reset();
+  blobGlTried_ = false;
+}
+
 void VegetationRenderer::releaseGL() {
+  releaseBlobGL(); // the blobs live apart from the vegetation GL (see drawDroneBlob)
   if (!glReady_)
     return;
   glReady_ = false;
@@ -1035,12 +1220,15 @@ void VegetationRenderer::releaseGL() {
   atlasOk_ = false;
   atlasTried_ = false;
   prog_.reset();
+  progShadow_.reset();
   progBillboard_.reset();
   progBake_.reset();
+  ++casterVer_;
 }
 
 int VegetationRenderer::liveObjects() const {
-  int n = (prog_ ? 1 : 0) + (progBillboard_ ? 1 : 0) + (progBake_ ? 1 : 0);
+  int n = (prog_ ? 1 : 0) + (progShadow_ ? 1 : 0) + (progBillboard_ ? 1 : 0) + (progBake_ ? 1 : 0) + (progBlob_ ? 1 : 0);
+  n += (blobVao_ ? 1 : 0) + (blobDisc_ ? 1 : 0) + (blobInst_ ? 1 : 0);
   n += (atlasFbo_ ? 1 : 0) + (atlasDepth_ ? 1 : 0) + (atlasTex_ ? 1 : 0) + (atlasMask_ ? 1 : 0);
   for (const SpeciesGpu &s : sp_)
     for (const Mat &m : s.mats)
@@ -1161,6 +1349,7 @@ void VegetationRenderer::uploadSpecies(int si) {
   }
   glBindTexture(GL_TEXTURE_2D, 0);
   s.state = SpState::Ready;
+  ++casterVer_; // its trees can cast now
 }
 
 void VegetationRenderer::ensureMesh(VariantGpu &v, int lod) {
@@ -1261,6 +1450,7 @@ void VegetationRenderer::bakeImpostors(VariantGpu &v) {
   progBake_->bind();
   progBake_->setUniformValue("u_diffuse", 2);
   progBake_->setUniformValue("u_arm", 4);
+  progBake_->setUniformValue("u_normal", 3);
   const float H = v.billH, D = 4.0f * H + 2.0f;
   QMatrix4x4 proj;
   proj.ortho(-H, H, -H, H, 0.1f, 2.0f * D);
@@ -1272,6 +1462,10 @@ void VegetationRenderer::bakeImpostors(VariantGpu &v) {
     glScissor(tx, ty, kTilePx, kTilePx);
     glClearColor(0.30f, 0.36f, 0.24f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    // The mask's red and blue are a normal's x and y, 0.5 for none; its green is
+    // bark occlusion, which keeps the clear colour above.
+    const GLfloat maskClear[4] = {0.5f, 0.36f, 0.5f, 0.0f};
+    glClearBufferfv(GL_COLOR, 1, maskClear);
     QMatrix4x4 view;
     if (a < kAtlasAzimuths) {
       const float al = 2.0f * kPi * float(a) / float(kAtlasAzimuths);
@@ -1285,12 +1479,15 @@ void VegetationRenderer::bakeImpostors(VariantGpu &v) {
                   QVector3D(0, 0, -1));
     }
     progBake_->setUniformValue(loc_.bakeMvp, proj * view);
+    progBake_->setUniformValue("u_viewRot", view.normalMatrix());
     for (const VegSubmesh &sm : m.submeshes) {
       const Mat &mat = sg.mats[size_t(sm.material)];
       const VegMaterial &vm =
           assets_.species[size_t(v.species)].materials[size_t(sm.material)];
       glActiveTexture(GL_TEXTURE2);
       glBindTexture(GL_TEXTURE_2D, mat.tex[0]);
+      glActiveTexture(GL_TEXTURE3);
+      glBindTexture(GL_TEXTURE_2D, mat.tex[1]);
       glActiveTexture(GL_TEXTURE4);
       glBindTexture(GL_TEXTURE_2D, mat.tex[2]);
       progBake_->setUniformValue("u_cutout", vm.cutout() ? 1.0f : 0.0f);
@@ -1341,6 +1538,7 @@ void VegetationRenderer::setCommonUniforms(QOpenGLShaderProgram &p, const VegFra
   p.setUniformValue("u_time", f.time);
   p.setUniformValue("u_drone", f.dronePos);
   p.setUniformValue("u_droner", f.droneRadius);
+  p.setUniformValue("u_dronemap", f.droneInMap ? 1.0f : 0.0f);
   if (&p == prog_.get()) { // only the lit program receives shadows
     if (csmLocs_.vp < 0)
       csmLocs_.resolve(&p);
@@ -1388,8 +1586,21 @@ void VegetationRenderer::drawBucket(VariantGpu &v, int lod,
   }
 }
 
-void VegetationRenderer::drawImpostors(VariantGpu &v, const std::vector<float> &data,
-                                       const VegFrame &) {
+// The per-variant uniforms of the billboard program.
+void VegetationRenderer::setImpostorUniforms(const VariantGpu &v) {
+  progBillboard_->setUniformValue(loc_.cy, v.centreY);
+  progBillboard_->setUniformValue(loc_.half, v.billH);
+  progBillboard_->setUniformValue(loc_.tile, float(v.tile));
+  progBillboard_->setUniformValue("u_k", v.k);
+  progBillboard_->setUniformValue("u_barkGain", kTable[v.info].barkGain);
+  progBillboard_->setUniformValue("u_cone", kTable[v.info].cone);
+}
+
+// Opaque pass of one variant's billboards. True when some of them are in the far
+// fade-out (see kFarBlendM): drawImpostorsFar draws those, after every variant's
+// opaque pass, so no variant's opaque billboard can overpaint another's faded one.
+bool VegetationRenderer::drawImpostors(VariantGpu &v, const std::vector<float> &data,
+                                       const VegFrame &f) {
   const GLsizei n = GLsizei(data.size() / 8);
   if (!v.billVao) {
     glGenVertexArrays(1, &v.billVao);
@@ -1408,13 +1619,11 @@ void VegetationRenderer::drawImpostors(VariantGpu &v, const std::vector<float> &
   glBindBuffer(GL_ARRAY_BUFFER, v.inst[3]);
   glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(data.size() * sizeof(float)), data.data(),
                GL_STREAM_DRAW);
-  progBillboard_->setUniformValue(loc_.cy, v.centreY);
-  progBillboard_->setUniformValue(loc_.half, v.billH);
-  progBillboard_->setUniformValue(loc_.tile, float(v.tile));
-  progBillboard_->setUniformValue("u_k", v.k);
-  progBillboard_->setUniformValue("u_barkGain", kTable[v.info].barkGain);
+  setImpostorUniforms(v);
+  progBillboard_->setUniformValue("u_pass", 0.0f);
   glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, n);
   ++stats_.drawCalls;
+  stats_.impostorPasses += 'o';
   stats_.impostors += int(n);
   stats_.instancesDrawn += int(n);
   stats_.triangles += 2LL * n;
@@ -1423,6 +1632,232 @@ void VegetationRenderer::drawImpostors(VariantGpu &v, const std::vector<float> &
     if (kind >= 0)
       stats_.treeImpostors[kind] += int(n);
   }
+  // Mirrors the vertex shader's test for the blended pass.
+  const QVector3D eye = f.camEye;
+  for (size_t i = 0; i + 7 < data.size(); i += 8) {
+    const float dx = data[i] - eye.x(), dy = data[i + 1] - eye.y(), dz = data[i + 2] - eye.z();
+    if (data[i + 6] < 0.999f && dx * dx + dy * dy + dz * dz > kFarBlendM * kFarBlendM)
+      return true;
+  }
+  return false;
+}
+
+// The far fade-out of the variants listed (their buffers still hold this frame's
+// instances): blended, depth-tested, no depth write, the state set once. The
+// billboards of this pass are 480 m and more away, so their order among
+// themselves does not show.
+void VegetationRenderer::drawImpostorsFar(const std::vector<size_t> &variants) {
+  if (variants.empty())
+    return;
+  glEnable(GL_BLEND);
+  glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
+  glDepthMask(GL_FALSE);
+  progBillboard_->setUniformValue("u_pass", 1.0f);
+  for (size_t vi : variants) {
+    const VariantGpu &v = var_[vi];
+    glBindVertexArray(v.billVao);
+    setImpostorUniforms(v);
+    glDrawArraysInstanced(GL_TRIANGLE_STRIP, 0, 4, GLsizei(buckets_[vi * 4 + 3].size() / 8));
+    ++stats_.drawCalls;
+    stats_.impostorPasses += 'f';
+  }
+  glDepthMask(GL_TRUE);
+  glDisable(GL_BLEND);
+  progBillboard_->setUniformValue("u_pass", 0.0f);
+}
+
+// The blob program and its buffers, built on first use. They need only a GL
+// context, not the vegetation assets, so the drone's blob can be drawn with
+// vegetation off or unloaded.
+bool VegetationRenderer::ensureBlobGl() {
+  if (progBlob_)
+    return true;
+  if (blobGlTried_)
+    return false;
+  blobGlTried_ = true;
+  initializeOpenGLFunctions();
+  progBlob_ = std::make_unique<QOpenGLShaderProgram>();
+  if (!linkProgram(*progBlob_, "vegetation blob", kBlobVS, kBlobFS))
+    progBlob_.reset(); // no blobs; everything else still draws
+  return progBlob_ != nullptr;
+}
+
+// The drone's blob: on the ground under it while it is low, on its own path
+// (not the vegetation's assets or flags: the height cue stays with vegetation
+// off). The sim widget calls it every frame.
+void VegetationRenderer::drawDroneBlob(const VegFrame &f) {
+  using B = VegContactBlob;
+  droneBlobDrawn_ = false;
+  if (!f.droneGroundKnown || f.droneRadius <= 0.0f || !ensureBlobGl())
+    return;
+  const float h = f.droneGroundZ - f.dronePos.z(); // NED: above ground is negative z
+  if (h <= 0.0f || h >= B::kDroneMaxHeightM)
+    return;
+  const float one[5] = {f.dronePos.x(), f.dronePos.y(), f.droneGroundZ,
+                        f.droneRadius * (1.0f + h * B::kDroneSpread),
+                        B::kDroneDarkness / (1.0f + h / B::kDroneHalfHeightM)};
+  drawBlobInstances(f, one, 1);
+  glBindVertexArray(0);
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+  droneBlobDrawn_ = true;
+}
+
+// This frame's trees and rocks (collected by draw()): one instanced draw of
+// the 16-sided disc fan, after everything that writes depth.
+void VegetationRenderer::drawBlobs(const VegFrame &f) {
+  const int n = int(blobData_.size() / 5);
+  if (n > 0 && progBlob_)
+    drawBlobInstances(f, blobData_.data(), n);
+}
+
+void VegetationRenderer::drawBlobInstances(const VegFrame &f, const float *data, int n) {
+  using B = VegContactBlob;
+  constexpr int kSides = 16;
+  if (!blobVao_) {
+    float disc[(kSides + 2) * 2] = {0.0f, 0.0f};
+    for (size_t i = 0; i <= size_t(kSides); ++i) {
+      const float a = 6.2831853f * float(i) / float(kSides);
+      disc[(i + 1) * 2] = std::cos(a);
+      disc[(i + 1) * 2 + 1] = std::sin(a);
+    }
+    glGenVertexArrays(1, &blobVao_);
+    glGenBuffers(1, &blobDisc_);
+    glGenBuffers(1, &blobInst_);
+    glBindVertexArray(blobVao_);
+    glBindBuffer(GL_ARRAY_BUFFER, blobDisc_);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(disc), disc, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
+    glBindBuffer(GL_ARRAY_BUFFER, blobInst_);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 5 * sizeof(float), nullptr);
+    glVertexAttribDivisor(1, 1);
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, 5 * sizeof(float),
+                          reinterpret_cast<void *>(4 * sizeof(float)));
+    glVertexAttribDivisor(2, 1);
+  }
+  glBindVertexArray(blobVao_);
+  glBindBuffer(GL_ARRAY_BUFFER, blobInst_);
+  glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(size_t(n) * 5 * sizeof(float)), data,
+               GL_STREAM_DRAW);
+  progBlob_->bind();
+  progBlob_->setUniformValue("u_vp", f.proj * f.view);
+  progBlob_->setUniformValue("u_eye", f.camEye);
+  progBlob_->setUniformValue("u_shape", QVector3D(B::kLiftM, B::kFadeStartM, B::kFadeEndM));
+  progBlob_->setUniformValue("u_core", B::kCoreFraction);
+  progBlob_->setUniformValue("u_nudge", B::kDepthNudgeM);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_DST_COLOR, GL_ZERO); // multiply
+  glDisable(GL_CULL_FACE);
+  glDepthMask(GL_FALSE);
+  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+  glDrawArraysInstanced(GL_TRIANGLE_FAN, 0, kSides + 2, n);
+  glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+  glDepthMask(GL_TRUE);
+  glDisable(GL_BLEND);
+  progBlob_->release();
+  ++stats_.drawCalls;
+}
+
+int VegetationRenderer::drawShadowCasters(const QMatrix4x4 &lightVP, int cascade, float push) {
+  const int ci = std::clamp(cascade, 0, 2);
+  casterStats_.instances[ci] = 0;
+  casterStats_.triangles[ci] = 0;
+  casterStats_.drawCalls[ci] = 0;
+  ++casterStats_.passes;
+  if (!glReady_ || !progShadow_ || !assetsReady_)
+    return 0;
+  // Size of one metre in the window's clip units, sideways.
+  const QVector4D r0 = lightVP.row(0), r1 = lightVP.row(1);
+  const float sx = QVector3D(r0.x(), r0.y(), r0.z()).length();
+  const float sy = QVector3D(r1.x(), r1.y(), r1.z()).length();
+  casterBuckets_.resize(var_.size());
+  for (std::vector<float> &b : casterBuckets_)
+    b.clear();
+  for (auto &kv : chunks_) {
+    Chunk &c = kv.second;
+    // The chunk's box against the window (sideways only: depth is clamped).
+    int out[4] = {0, 0, 0, 0};
+    for (int k = 0; k < 8; ++k) {
+      const QVector3D q = lightVP.map(QVector3D((k & 1) ? c.cx + c.half : c.cx - c.half,
+                                                (k & 2) ? c.cy + c.half : c.cy - c.half,
+                                                (k & 4) ? c.zHi : c.zLo));
+      out[0] += q.x() < -1.0f;
+      out[1] += q.x() > 1.0f;
+      out[2] += q.y() < -1.0f;
+      out[3] += q.y() > 1.0f;
+    }
+    if (out[0] == 8 || out[1] == 8 || out[2] == 8 || out[3] == 8)
+      continue;
+    if (!c.resolved)
+      resolve(c);
+    for (const Rec &r : c.recs) {
+      const VegSpeciesInfo &info = kTable[r.info];
+      if (info.cat != procgen::kVegTree && info.cat != procgen::kVegRock)
+        continue;
+      const VariantGpu &v = var_[r.variant];
+      if (sp_[size_t(v.species)].state != SpState::Ready)
+        continue; // not uploaded yet: the colour pass starts it, casterVer_ moves on
+      const float sc = v.k * r.scale;
+      const QVector3D q = lightVP.map(QVector3D(r.x, r.y, r.z - v.centreY * sc));
+      const float rad = v.radius * sc + 0.5f;
+      if (std::fabs(q.x()) - rad * sx > 1.0f || std::fabs(q.y()) - rad * sy > 1.0f)
+        continue;
+      std::vector<float> &b = casterBuckets_[r.variant];
+      b.insert(b.end(), {r.x, r.y, r.z, r.yaw, r.scale, r.tint, 1.0f, r.paint});
+    }
+  }
+  const GLboolean cull = glIsEnabled(GL_CULL_FACE);
+  glDisable(GL_CULL_FACE); // leaf cards are two-sided
+  progShadow_->bind();
+  progShadow_->setUniformValue("u_vp", lightVP);
+  progShadow_->setUniformValue("u_push", push);
+  progShadow_->setUniformValue("u_pushRamp", QVector2D(kVegCasterRampM0, kVegCasterRampM1));
+  progShadow_->setUniformValue("u_time", 0.0f);
+  progShadow_->setUniformValue("u_diffuse", 2);
+  glActiveTexture(GL_TEXTURE2);
+  int drawn = 0;
+  for (size_t vi = 0; vi < var_.size(); ++vi) {
+    const std::vector<float> &data = casterBuckets_[vi];
+    if (data.empty())
+      continue;
+    VariantGpu &v = var_[vi];
+    constexpr int lod = kVegCasterLod;
+    ensureMesh(v, lod);
+    const GLsizei n = GLsizei(data.size() / 8);
+    const VegMesh &m =
+        assets_.species[size_t(v.species)].variants[size_t(v.variant)].lods[lod];
+    glBindVertexArray(v.vao[lod]);
+    glBindBuffer(GL_ARRAY_BUFFER, v.inst[lod]);
+    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(data.size() * sizeof(float)), data.data(),
+                 GL_STREAM_DRAW);
+    progShadow_->setUniformValue("u_k", v.k);
+    progShadow_->setUniformValue("u_height", v.height);
+    progShadow_->setUniformValue("u_sway", kTable[v.info].sway);
+    const SpeciesGpu &sg = sp_[size_t(v.species)];
+    const VegSpeciesAssets &sa = assets_.species[size_t(v.species)];
+    for (const VegSubmesh &sm : m.submeshes) {
+      const VegMaterial &vm = sa.materials[size_t(sm.material)];
+      glBindTexture(GL_TEXTURE_2D, sg.mats[size_t(sm.material)].tex[0]);
+      progShadow_->setUniformValue("u_cutout", vm.cutout() ? 1.0f : 0.0f);
+      progShadow_->setUniformValue("u_cutoff", vm.alphaCutoff);
+      glDrawElementsInstanced(GL_TRIANGLES, GLsizei(sm.indexCount), GL_UNSIGNED_INT,
+                              reinterpret_cast<void *>(uintptr_t(sm.firstIndex) * 4), n);
+      ++casterStats_.drawCalls[ci];
+      casterStats_.triangles[ci] += (long long)(sm.indexCount / 3) * n;
+    }
+    drawn += int(n);
+  }
+  casterStats_.instances[ci] = drawn;
+  progShadow_->release();
+  glBindVertexArray(0);
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+  glBindTexture(GL_TEXTURE_2D, 0);
+  glActiveTexture(GL_TEXTURE0);
+  if (cull)
+    glEnable(GL_CULL_FACE);
+  return drawn;
 }
 
 void VegetationRenderer::draw(const VegFrame &f) {
@@ -1436,6 +1871,7 @@ void VegetationRenderer::draw(const VegFrame &f) {
       assetsFailed_ = true;
     } else {
       assetsReady_ = true;
+      ++casterVer_;
       sp_.clear();
       sp_.resize(assets_.species.size());
       var_.clear();
@@ -1511,6 +1947,8 @@ void VegetationRenderer::draw(const VegFrame &f) {
   const QVector3D eye = f.camEye;
   for (std::vector<float> &b : buckets_)
     b.clear();
+  blobData_.clear();
+  ensureBlobGl();
   float farthest = 0.0f;
   for (const VegSpeciesInfo &s : kTable)
     farthest = std::max(farthest, s.maxDist);
@@ -1556,6 +1994,23 @@ void VegetationRenderer::draw(const VegFrame &f) {
       if (!vis)
         continue;
       const float d = std::sqrt(d2);
+      if (progBlob_ && d < VegContactBlob::kFadeEndM &&
+          blobData_.size() < size_t(VegContactBlob::kMaxInstances) * 5) {
+        float rad = 0.0f, dark = 0.0f;
+        if (info.cat == procgen::kVegTree) { // table rows 0.. are the tree kinds
+          rad = procgen::kVegTreeKinds[r.info].trunkRadiusM * r.scale *
+                VegContactBlob::kTrunkRadiusMult;
+          dark = VegContactBlob::kTreeDarkness;
+        } else if (info.cat == procgen::kVegRock) {
+          rad = 0.5f * procgen::kVegRockSpanM * r.scale * VegContactBlob::kRockRadiusMult;
+          dark = VegContactBlob::kRockDarkness;
+        }
+        if (dark > 0.0f) {
+          blobData_.insert(blobData_.end(),
+                           {r.x, r.y, r.z - kSinkM, std::max(rad, VegContactBlob::kMinRadiusM), dark});
+          ++stats_.blobs;
+        }
+      }
       const bool billReady = atlasOk_ && v.baked;
       VegLodChoice ch = vegChooseLod(info, d, billReady);
       if (forcedLod_ >= 0 && d < info.maxDist) { // tests: one LOD at every distance
@@ -1641,11 +2096,14 @@ void VegetationRenderer::draw(const VegFrame &f) {
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, atlasMask_);
     progBillboard_->setUniformValue("u_atlasMask", 3);
+    std::vector<size_t> farVariants;
     for (size_t vi = 0; vi < var_.size(); ++vi)
-      if (!buckets_[vi * 4 + 3].empty())
-        drawImpostors(var_[vi], buckets_[vi * 4 + 3], f);
+      if (!buckets_[vi * 4 + 3].empty() && drawImpostors(var_[vi], buckets_[vi * 4 + 3], f))
+        farVariants.push_back(vi);
+    drawImpostorsFar(farVariants);
     progBillboard_->release();
   }
+  drawBlobs(f);
   glBindVertexArray(0);
   glBindBuffer(GL_ARRAY_BUFFER, 0);
   for (int u = 4; u >= 1; --u) {

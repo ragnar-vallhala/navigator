@@ -176,6 +176,12 @@ ChunkMeshData toChunkMeshData(qint64 key, const ProcMesh &m) {
     out.normals.emplace_back(m.normals[i].x, m.normals[i].y, m.normals[i].z);
     out.colors.emplace_back(m.colors[i].x, m.colors[i].y, m.colors[i].z);
   }
+  for (std::size_t i = 0; i < m.splitColors.size(); ++i)
+    out.splitColors.emplace_back(m.splitColors[i].x, m.splitColors[i].y, m.splitColors[i].z);
+  for (std::size_t i = 0; i < m.edge.size(); ++i)
+    out.edge.emplace_back(m.edge[i].x, m.edge[i].y, m.edge[i].z);
+  for (std::size_t i = 0; i < m.edgeColors.size(); ++i)
+    out.edgeColors.emplace_back(m.edgeColors[i].x, m.edgeColors[i].y, m.edgeColors[i].z);
   return out;
 }
 

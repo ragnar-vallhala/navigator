@@ -1,5 +1,7 @@
 #include "TerrainTextures.h"
 
+#include "procgen/EdgeTrack.h"
+
 #include <QImage>
 #include <QOpenGLContext>
 #include <QOpenGLExtraFunctions>
@@ -118,7 +120,11 @@ void terrainMaterial(vec3 vcol, vec2 p, float dist, inout vec3 base, inout vec3 
   // the photo's brightness detail, relative to the photo's own mean so the
   // overall level stays the cover's. Rock and dirt show their own colour.
   float m0 = max(tmLuma(textureLod(u_t0, vec2(0.5), 10.0).rgb), 0.02);
-  float detail = clamp(tmLuma(a0) / m0, 0.35, 1.9);
+  // own_k never reaches 1 (0.85 rock, 0.55 dirt), so the grass term is still
+  // blended in at rockW or dirtW = 1. When useG skipped the photo (a0 = 0) its
+  // detail must be neutral, not clamp(0) = 0.35: that drew the track dark
+  // wherever the cover crossed dirtW = 0.999 (hard-edged slivers, High only).
+  float detail = useG ? clamp(tmLuma(a0) / m0, 0.35, 1.9) : 1.0;
   vec3 cover = mix(vec3(tmLuma(vcol)), vcol, 0.8);
   vec3 grass = cover * detail;
   float lvl = clamp(tmLuma(vcol) / 0.38, 0.55, 1.5);
@@ -157,6 +163,13 @@ QByteArray terrainMaterialGLSL() {
       .replace(QStringLiteral("%3"), f(kRockNoise))
       .replace(QStringLiteral("%2"), f(kRockSlope1))
       .replace(QStringLiteral("%1"), f(kRockSlope0));
+  // The parcel-border track weight, from the constants of procgen/EdgeTrack.h
+  // (the C++ rule is edgeTrackWeight() there).
+  s += QStringLiteral("\nfloat edgeTrackWeight(vec2 trk) { // x signed, y unsigned distance [m]\n"
+                     "  if (trk.y >= %1) return 0.0;\n"
+                     "  return %4 * (1.0 - smoothstep(%2, %3, abs(trk.x)));\n}\n")
+           .arg(f(procgen::kEdgeValidMax), f(procgen::kEdgeTrackD0), f(procgen::kEdgeTrackD1),
+                f(procgen::kEdgeTrackMax));
   return s.toLatin1();
 }
 
