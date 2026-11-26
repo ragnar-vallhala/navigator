@@ -161,6 +161,7 @@ private slots:
   void nothingIsEditableUntilReady();
   void aValidEditIsSentAndTheVehiclesValueShownBesideIt();
   void badEntriesNeverLeaveTheEditor();
+  void smallValuesAreShownInPlainNotationAndTypedBackInAnyLocale();
   void saveAllAppearsForUnsavedLiveValues();
   void aGroupIsCommittedAndDiscardIsGreyedWithAReason();
   void aLockedGroupIsNotEditableWhileArmed();
@@ -213,6 +214,39 @@ void TstParamsPanel::badEntriesNeverLeaveTheEditor() {
     p.submitEdit(idx, QString::fromLatin1(t));
   r.run(200);
   QCOMPARE(r.fc.sets, before);
+}
+
+void TstParamsPanel::smallValuesAreShownInPlainNotationAndTypedBackInAnyLocale() {
+  const QLocale keep = QLocale();
+  QLocale::setDefault(QLocale(QLocale::German, QLocale::Germany)); // comma decimals
+  {
+    Rig r;
+    ParamsPanel p(&r.svc);
+    r.up();
+    r.fc.holdAcks = true;
+    const int idx = r.svc.catalog().byId(QStringLiteral("A_LIVE"))->index;
+    p.submitEdit(idx, QStringLiteral("0.00005"));
+    QTest::qWait(10);
+    QTreeWidgetItem *it = rowOf(p, "A_LIVE");
+    QCOMPARE(it->text(1), QStringLiteral("0.00005")); // not 5e-05, no comma
+    // The editor takes what the cell shows, and "0.003", in this locale.
+    auto *d = p.findChild<ParamValueDelegate *>();
+    QVERIFY(d);
+    auto *tree = p.findChild<QTreeWidget *>(QStringLiteral("paramsTree"));
+    QStyleOptionViewItem opt;
+    QWidget *w = d->createEditor(&p, opt, tree->indexFromItem(it, 1));
+    auto *ed = qobject_cast<QLineEdit *>(w);
+    QVERIFY(ed);
+    for (const char *t : {"0.00005", "0.003", "10"}) {
+      ed->setText(QString::fromLatin1(t));
+      QVERIFY2(ed->hasAcceptableInput(), t);
+    }
+    ed->setText(QStringLiteral("10.5"));
+    QVERIFY(!ed->hasAcceptableInput());
+    delete w;
+    r.fc.holdAcks = false;
+  }
+  QLocale::setDefault(keep);
 }
 
 void TstParamsPanel::saveAllAppearsForUnsavedLiveValues() {

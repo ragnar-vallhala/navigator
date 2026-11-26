@@ -199,6 +199,7 @@ private:
   int m_crcTries = 0;
   // Listing.
   bool m_listing = false;
+  bool m_loggedBackGen = false; // the backwards-generation line is logged once per offer of parameters
   bool m_relistOwed = false; // someone else changed values while a write of ours was pending
   bool m_initialList = false;
   QVector<bool> m_seen;

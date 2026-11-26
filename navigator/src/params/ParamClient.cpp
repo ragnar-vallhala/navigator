@@ -99,6 +99,7 @@ void Client::onCapabilities(quint32 caps, qint64 nowMs) {
     if (m_state != State::NoCaps) {
       failAllPending(Outcome::Unknown, QStringLiteral("outcome unknown; the vehicle no longer offers parameters"));
       m_state = State::NoCaps;
+      m_loggedBackGen = false;
       changed();
     }
     return;
@@ -211,10 +212,15 @@ void Client::onParamValue(const ParamCodec::ValueMsg &m, qint64 nowMs) {
   // been applied.
   if (m_state == State::Ready && !m_listing && m_haveGeneration &&
       qint32(m.generation - m_generation) < 0) {
-    log(QStringLiteral("parameters: the vehicle's generation went back (%1 -> %2): "
-                       "it restarted, the table is read again")
-            .arg(m_generation)
-            .arg(m.generation));
+    // Over UDP a reordered frame can look the same, so say it once, not on
+    // every occurrence (the re-read is harmless either way).
+    if (!m_loggedBackGen) {
+      m_loggedBackGen = true;
+      log(QStringLiteral("parameters: the vehicle's generation went back (%1 -> %2): "
+                         "it restarted, the table is read again")
+              .arg(m_generation)
+              .arg(m.generation));
+    }
     failAllPending(Outcome::Unknown,
                    QStringLiteral("outcome unknown; the vehicle restarted"));
     start(nowMs);
