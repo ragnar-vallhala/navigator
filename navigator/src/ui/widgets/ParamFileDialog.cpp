@@ -63,6 +63,13 @@ ParamFileDialog::ParamFileDialog(const Catalog &cat, const ParamFile::Loaded &fi
     top->addWidget(l);
   }
 
+  m_staleLabel = new QLabel(this);
+  m_staleLabel->setObjectName(QStringLiteral("paramsFileStale"));
+  m_staleLabel->setWordWrap(true);
+  m_staleLabel->setStyleSheet(QStringLiteral("QLabel { font-weight: bold; }"));
+  m_staleLabel->setVisible(false);
+  top->addWidget(m_staleLabel);
+
   m_table = new QTableWidget(int(diff.size()), kColumns, this);
   m_table->setObjectName(QStringLiteral("paramsFileTable"));
   m_table->setHorizontalHeaderLabels({tr("Parameter"), tr("Group"), tr("Vehicle"), tr("File")});
@@ -130,6 +137,16 @@ QVector<ParamApplier::Item> ParamFileDialog::ticked() const {
 
 bool ParamFileDialog::applyEnabled() const {
   return !m_hasProblems && m_refuseWhy.isEmpty() && !ticked().isEmpty();
+}
+
+void ParamFileDialog::markStale(const QString &why) {
+  if (m_stale)
+    return;
+  m_stale = true;
+  m_refuseWhy = why;
+  m_staleLabel->setText(tr("Apply is off: %1. Close this and load the file again.").arg(why));
+  m_staleLabel->setVisible(true);
+  updateApply();
 }
 
 void ParamFileDialog::updateApply() {

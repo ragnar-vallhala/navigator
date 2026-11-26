@@ -312,6 +312,11 @@ QString ParamsPanel::badgesFor(const Entry &e, bool *editable) const {
 void ParamsPanel::refreshNow() {
   if (!m_built || m_builtCount != m_svc->catalog().count())
     build();
+  if (m_dialog) {
+    const QString stale = whyStale();
+    if (!stale.isEmpty())
+      static_cast<ParamFileDialog *>(m_dialog.data())->markStale(stale);
+  }
   const Client &c = m_svc->client();
   m_banner->setText(c.stateText());
   const Client::State st = c.state();
@@ -495,6 +500,18 @@ bool ParamsPanel::saveFile(const QString &path) {
   return true;
 }
 
+QString ParamsPanel::whyStale() const {
+  const auto now = vehicleValues();
+  for (const QString &id : m_snapshotIds) {
+    const auto a = m_snapshot.constFind(id);
+    const auto b = now.constFind(id);
+    const bool ha = a != m_snapshot.constEnd(), hb = b != now.constEnd();
+    if (ha != hb || (ha && (a->v != b->v || a->flags != b->flags)))
+      return tr("%1 changed on the vehicle after the file was compared").arg(id);
+  }
+  return QString();
+}
+
 QString ParamsPanel::whyNotApply(const ParamFile::Loaded &f) const {
   if (!f.ok())
     return tr("the file has problems");
@@ -519,14 +536,20 @@ void ParamsPanel::loadFile(const QString &path) {
   }
   if (m_dialog)
     m_dialog->deleteLater();
+  m_snapshot = vehicleValues();
+  m_snapshotIds.clear();
+  for (const ParamFile::Row &r : f.rows)
+    m_snapshotIds << r.id;
   auto *dlg = new ParamFileDialog(m_svc->catalog(), f,
-                                  ParamFile::diff(f, m_svc->catalog(), vehicleValues()),
+                                  ParamFile::diff(f, m_svc->catalog(), m_snapshot),
                                   whyNotApply(f), this);
   dlg->setAttribute(Qt::WA_DeleteOnClose);
   connect(dlg, &ParamFileDialog::applyRequested, this,
           [this, f](const QVector<ParamApplier::Item> &items) {
             // The state may have moved while the dialog was open: ask again.
             QString why = whyNotApply(f);
+            if (why.isEmpty())
+              why = whyStale();
             if (why.isEmpty())
               m_applier->apply(items, &why);
             if (!why.isEmpty())

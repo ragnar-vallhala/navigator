@@ -43,6 +43,10 @@ public:
   // The rows ticked now, with the file's values.
   QVector<ParamApplier::Item> ticked() const;
   bool applyEnabled() const;
+  // The vehicle's values moved after the diff was made: the Vehicle column is a
+  // snapshot, so Apply goes off, with this reason, and the dialog says so.
+  void markStale(const QString &why);
+  bool stale() const { return m_stale; }
 
 signals:
   void applyRequested(const QVector<params::ParamApplier::Item> &items);
@@ -52,6 +56,8 @@ private:
 
   QString m_refuseWhy;
   bool m_hasProblems = false;
+  bool m_stale = false;
+  QLabel *m_staleLabel = nullptr;
   QTableWidget *m_table = nullptr;
   QLabel *m_count = nullptr;
   QDialogButtonBox *m_buttons = nullptr;
