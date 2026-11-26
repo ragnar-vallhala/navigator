@@ -21,12 +21,13 @@ from vayu_headless.transport import vsim
 
 
 def test_struct_sizes_match_proto():
-    # vsim_hdr_t == 16, pose body == 140 at proto v5 (vsim_proto.h
+    # vsim_hdr_t == 16, pose body == 148 at proto v6 (vsim_proto.h
     # static_asserts); 128 is the oldest layout parse_pose still decodes.
     assert vsim.HDR.size == 16
-    assert vsim.POSE.size == 140
+    assert vsim.POSE.size == 148
+    assert vsim.POSE_V5.size == 140
     assert vsim.POSE_V3.size == 128
-    assert vsim.VERSION == 5
+    assert vsim.VERSION == 6
 
 
 def test_ctl_frame_shape():
@@ -105,7 +106,7 @@ def test_parse_pose_partial_frame_kept():
     assert len(buf) == 20             # incomplete frame retained for next read
 
 
-def _pose_body(crash_flags=None, peak=None, with_v4=True):
+def _pose_body(crash_flags=None, peak=None, with_v4=True, ctl=None):
     base = struct.pack(
         "<II3f4f3f3f4f4f3fffffff",
         0, 0, 1.0, 2.0, -3.0, 1.0, 0.0, 0.0, 0.0, 0.1, 0.2, 0.3,
@@ -115,17 +116,28 @@ def _pose_body(crash_flags=None, peak=None, with_v4=True):
         base += struct.pack("<f", 1.0)          # air_density_ratio
     if crash_flags is not None:
         base += struct.pack("<If", crash_flags, peak)
+    if ctl is not None:
+        base += struct.pack("<II", *ctl)        # ctl_caps, ctl_unknown
     return base
 
 
 def test_parse_pose_reads_the_crash_tail():
-    body = _pose_body(vsim.POSE_CRASHED, 9.5)
+    body = _pose_body(vsim.POSE_CRASHED, 9.5, ctl=(0x5, 3))
     assert len(body) == vsim.POSE.size
     truth = vsim.parse_pose(bytearray(vsim.vhdr(vsim.FRAME_POSE, len(body)) + body))
     assert truth["crashed"] is True
     assert truth["crash_flags"] == vsim.POSE_CRASHED
     assert truth["peak_impact"] == pytest.approx(9.5)
+    assert (truth["ctl_caps"], truth["ctl_unknown"]) == (0x5, 3)
     assert truth["pos"] == pytest.approx((1.0, 2.0, -3.0))   # the prefix still decodes
+
+
+def test_parse_pose_v5_sim_has_no_ctl_tail():
+    body = _pose_body(vsim.POSE_CRASHED, 9.5)       # 140 B: no ctl_caps yet
+    assert len(body) == vsim.POSE_V5.size
+    truth = vsim.parse_pose(bytearray(vsim.vhdr(vsim.FRAME_POSE, len(body)) + body))
+    assert truth["crashed"] is True
+    assert (truth["ctl_caps"], truth["ctl_unknown"]) == (0, 0)
 
 
 def test_parse_pose_hard_contact_without_crash():
@@ -149,7 +161,7 @@ def test_parse_pose_older_sim_has_no_crash_tail(with_v4):
 def test_parse_pose_newer_sim_longer_tail_is_ignored():
     # Append-only: a later version adds fields after ours; the known prefix
     # (including the crash fields) must still decode.
-    body = _pose_body(vsim.POSE_CRASHED, 12.0) + struct.pack("<II", 7, 8)
+    body = _pose_body(vsim.POSE_CRASHED, 12.0, ctl=(1, 2)) + struct.pack("<II", 7, 8)
     truth = vsim.parse_pose(bytearray(vsim.vhdr(vsim.FRAME_POSE, len(body)) + body))
     assert truth["crashed"] is True and truth["peak_impact"] == pytest.approx(12.0)
 
