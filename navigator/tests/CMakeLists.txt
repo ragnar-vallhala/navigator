@@ -96,6 +96,16 @@ target_include_directories(tst_command_codec PRIVATE ${SRC}/protocol ${SRC}/core
 # PUBLIC SYSTEM include carries navlink_msgs.h).
 target_link_libraries(tst_command_codec PRIVATE navlink_codec)
 
+# ---- Parameter service: catalog, codec and client against a fake FC -------
+navigator_test(tst_param_client
+    tst_param_client.cpp
+    ${SRC}/params/ParamCatalog.cpp
+    ${SRC}/params/ParamCodec.cpp
+    ${SRC}/params/ParamClient.cpp)
+target_include_directories(tst_param_client PRIVATE ${SRC}/params ${SRC}/protocol)
+target_compile_definitions(tst_param_client PRIVATE NAVLINK_GEN_DIR="${NAVLINK_GEN}")
+target_link_libraries(tst_param_client PRIVATE navlink_codec)
+
 # ---- AT-1: autotune gains -> CMD_SET_PID mapping --------------------------
 navigator_test(tst_autotune_gains
     tst_autotune_gains.cpp)
