@@ -90,11 +90,13 @@ QByteArray encodeSetGyroNotch(bool enabled, float q, float fminHz, float fmaxHz,
   return frame(buf, n);
 }
 
-QByteArray encodeNotchAutoband(quint8 devId) {
+QByteArray encodeNotchAutoband(quint8 devId, quint8 *reqSeq) {
   navlink_cmd_notch_autoband_t m{};
   m.target_sys = devId;
   m.target_comp = 1;
   m.req_seq = nextSeq();
+  if (reqSeq)
+    *reqSeq = m.req_seq; // the ack names it
   uint8_t buf[NAVLINK_MAX_FRAME];
   size_t n = navlink_cmd_notch_autoband_encode(buf, &m, m.req_seq, 0xFF, 1);
   return frame(buf, n);
