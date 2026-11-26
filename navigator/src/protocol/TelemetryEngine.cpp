@@ -39,6 +39,7 @@ TelemetryEngine::TelemetryEngine(QObject *parent)
   qRegisterMetaType<CalibrationUpdate>("CalibrationUpdate");
   qRegisterMetaType<PerfReport>("PerfReport");
   qRegisterMetaType<FaultEvent>("FaultEvent");
+  qRegisterMetaType<params::ParamCodec::ValueMsg>("params::ParamCodec::ValueMsg");
 
   m_elapsed.start();
 

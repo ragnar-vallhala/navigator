@@ -17,6 +17,7 @@
 #pragma once
 
 #include "ParamCatalog.h"
+#include "ParamValueMsg.h"
 
 #include <QByteArray>
 #include <QString>
@@ -30,17 +31,6 @@ extern "C" {
 // endian, zero padded (never a float bit-cast).
 namespace params {
 namespace ParamCodec {
-
-// What a PARAM_VALUE says, decoded.
-struct ValueMsg {
-  QString id;
-  quint16 index = 0;
-  quint16 count = 0;
-  quint32 generation = 0;
-  quint8 type = 0; // wire type number
-  quint8 raw[8] = {};
-  quint8 flags = 0; // ValueFlag bits
-};
 
 // The value as a double; false for a type this client does not know.
 bool valueOf(const ValueMsg &m, double &out);

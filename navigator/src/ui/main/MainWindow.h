@@ -60,6 +60,9 @@
 #include "SimulatorWidget.h"
 #endif
 
+namespace params {
+class ParamService;
+}
 class QToolBar;
 class DockShell;
 class QAction;
@@ -303,6 +306,7 @@ private:
 
   // ---- State ----
   bool m_armed = false;
+  params::ParamService *m_params = nullptr; // the vehicle parameter service
   // Link caches (the transports live on the worker thread; the GUI must not read
   // them directly). Updated from the engine's forwarded signals / at connect.
   bool m_serialOpen = false;

@@ -74,6 +74,12 @@ DroneProtocol::DroneProtocol(QObject *parent) : QObject(parent) {
       emit statusReceived(QString::fromLatin1(kStateNames[navState]));
     emit heartbeatReceived(ts, dev);
   };
+  m_v2Router.onHeartbeatCaps = [this](uint8_t navState, uint32_t caps) {
+    emit capabilitiesReceived(navState, caps);
+  };
+  m_v2Router.onParamValue = [this](const params::ParamCodec::ValueMsg &m) {
+    emit paramValueReceived(m);
+  };
   m_v2Router.onLog = [this](const QString &line) { emit logReceived(line); };
   m_v2Router.onFault = [this](const FaultEvent &f) { emit faultReceived(f); };
   m_v2Router.onCalibration = [this](const CalibrationUpdate &u) {

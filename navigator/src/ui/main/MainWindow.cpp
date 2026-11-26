@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 #include "MainWindow.h"
+#include "ParamService.h"
 #include "DockPanelIds.h"
 #include "DockShell.h"
 #include "WindowFit.h"
@@ -234,6 +235,23 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
           });
   connect(proto, &DroneProtocol::heartbeatReceived, this,
           &MainWindow::onHeartbeatReceived);
+  // The vehicle parameter service: fed by the worker-thread parser through
+  // queued connections, it ticks and sends on the GUI thread. Frames go out
+  // only on a commandable link (never in replay).
+  m_params = new params::ParamService(this);
+  m_params->loadCatalog();
+  m_params->setSendFrame([this](const QByteArray &f) {
+    if (m_source.txAllowed())
+      sendToFc(f);
+  });
+  connect(m_params, &params::ParamService::logLine, this,
+          &MainWindow::onLogReceived);
+  connect(proto, &DroneProtocol::capabilitiesReceived, m_params,
+          &params::ParamService::onHeartbeat);
+  connect(proto, &DroneProtocol::paramValueReceived, m_params,
+          &params::ParamService::onParamValue);
+  connect(proto, &DroneProtocol::commandAckReceived, m_params,
+          &params::ParamService::onCommandAck);
   connect(proto, &DroneProtocol::timeSyncResponse, this,
           &MainWindow::onTimeSyncResponse);
   connect(proto, &DroneProtocol::timeSyncRequested, this,
@@ -1798,6 +1816,8 @@ void MainWindow::onHeartbeatReceived(uint64_t timestamp, uint8_t deviceId) {
 // connectionStateChanged) and starts it on entering the Sim state.
 void MainWindow::startTimeSync() {
   m_syncLocked = false;
+  if (m_params)
+    m_params->onSynced(false);
 #ifdef NAVIGATOR_HAS_SITL
   if (m_simulatorWidget)
     m_simulatorWidget->setTimeSynced(false);
@@ -1810,6 +1830,8 @@ void MainWindow::startTimeSync() {
 void MainWindow::stopTimeSync() {
   m_syncTimer->stop();
   m_syncLocked = false;
+  if (m_params)
+    m_params->linkDown();
 #ifdef NAVIGATOR_HAS_SITL
   if (m_simulatorWidget)
     m_simulatorWidget->setTimeSynced(false);
@@ -1881,6 +1903,8 @@ void MainWindow::onTimeSyncResponse(quint8 seq, quint64 t1, quint64 t2,
   const bool relax = locked && m_tsEst.synced();
   if (m_syncLocked != relax) {
     m_syncLocked = relax;
+    if (m_params)
+      m_params->onSynced(relax); // the sync edge starts (or ends) the table read
 #ifdef NAVIGATOR_HAS_SITL
     if (m_simulatorWidget)
       m_simulatorWidget->setTimeSynced(relax);

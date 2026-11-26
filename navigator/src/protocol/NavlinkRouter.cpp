@@ -21,6 +21,7 @@
 #include <QDateTime>        // t4 capture for TIME_SYNC
 #include <QtGlobal>
 #include <chrono>
+#include <cstring>
 #include <map>
 #include <utility>
 #include <vector>
@@ -245,6 +246,24 @@ void thunkHeartbeat(void *ctx, const navlink_frame_hdr_t *hdr,
   auto *r = static_cast<NavlinkRouter *>(ctx);
   if (r->onHeartbeat)
     r->onHeartbeat(m->nav_state, m->timestamp, hdr->sysid);
+  if (r->onHeartbeatCaps)
+    r->onHeartbeatCaps(m->nav_state, m->capabilities);
+}
+
+void thunkParamValue(void *ctx, const navlink_frame_hdr_t *,
+                     const navlink_param_value_t *m) {
+  auto *r = static_cast<NavlinkRouter *>(ctx);
+  if (!r->onParamValue)
+    return;
+  params::ParamCodec::ValueMsg v;
+  v.id = QString::fromLatin1(m->param_id, int(qstrnlen(m->param_id, 16)));
+  v.index = m->index;
+  v.count = m->count;
+  v.generation = m->generation;
+  v.type = m->type;
+  std::memcpy(v.raw, m->value, 8);
+  v.flags = m->flags;
+  r->onParamValue(v);
 }
 
 void thunkSystemHealth(void *ctx, const navlink_frame_hdr_t *,
@@ -629,6 +648,7 @@ NavlinkRouter::NavlinkRouter() : d_(new Impl) {
   d_->handlers.on_hsl_status = thunkHslStatus;
   d_->handlers.on_flight_mode = thunkFlightMode;
   d_->handlers.on_heartbeat = thunkHeartbeat;
+  d_->handlers.on_param_value = thunkParamValue;
   d_->handlers.on_system_health = thunkSystemHealth;
   d_->handlers.on_statustext = thunkStatustext;
   d_->handlers.on_fault_status = thunkFaultStatus;
