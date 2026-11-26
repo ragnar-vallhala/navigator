@@ -129,7 +129,13 @@ struct ColliderBuildKey {
   float x = 0.0f, y = 0.0f; // drone (x, y) at the build
   bool trees = true;
   bool rocks = false;
-  std::uint64_t world = 0; // caller's hash of seed / palette / world revision
+  // What the set was built from, as exact fields (a packed hash of these can
+  // collide and leave a stale set): world seed and palette, the stream
+  // generation, and the revision of the loaded chunk set.
+  std::uint32_t seed = 0;
+  std::uint32_t palette = 0;
+  std::uint32_t streamGen = 0;
+  std::uint32_t rev = 0;
 };
 
 // True when the window must be rebuilt: nothing built yet, the Trees/rocks flag

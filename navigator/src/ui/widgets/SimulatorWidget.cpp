@@ -2042,8 +2042,10 @@ void SimulatorWidget::updateTreeColliders(bool force) {
   now.trees = trees;
   now.rocks = false;
   const auto &sc = m_chunkStreamer.config();
-  now.world = (quint64(sc.field.seed) << 32) ^ (quint64(quint32(m_streamGen)) << 16) ^
-              quint64(m_colliderRev) ^ (quint64(sc.field.palette) << 48);
+  now.seed = quint32(sc.field.seed);
+  now.palette = quint32(sc.field.palette);
+  now.streamGen = quint32(m_streamGen);
+  now.rev = m_colliderRev;
   // With Trees off nothing depends on where the drone is: no resend on a move.
   now.x = trees ? m_lastDronePos.x() : 0.0f;
   now.y = trees ? m_lastDronePos.y() : 0.0f;

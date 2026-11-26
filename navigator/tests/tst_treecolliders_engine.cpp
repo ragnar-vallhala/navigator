@@ -36,8 +36,8 @@
 // would show.
 //
 // Needs the engine module (VAYU_SITL_MODULE) and an SDK with the ENV messages;
-// without either the test skips and says why (CI builds against the pinned
-// SDK, which has none).
+// without either the test skips and says why (an SDK older than v0.3.0 has no
+// ENV messages; the pinned v0.3.0 has them, so CI runs the flights).
 
 #include "SimWorker.h"
 #include "SitlModule.h"
@@ -158,7 +158,7 @@ private slots:
 
   void capSendsExactly4096NearestAndLogsTheDrop() {
     if (!vsim::SimWorker::envCollidersAvailable())
-      QSKIP("SDK has no ENV messages (the pinned v0.2.1): tree colliders are off");
+      QSKIP("SDK has no ENV messages: tree colliders are off");
     // 5000 distinct trunks 1.0 .. 148.5 m from the drone, all inside the window.
     std::vector<VegCollider> in;
     for (int i = 0; i < 5000; ++i)
@@ -195,7 +195,7 @@ private slots:
   void trunkIsSolidBesideIsFreeAndClearedIsGone() {
     testenv::isolateVfs();
     if (!vsim::SimWorker::envCollidersAvailable())
-      QSKIP("SDK has no ENV messages (the pinned v0.2.1): tree colliders are off");
+      QSKIP("SDK has no ENV messages: tree colliders are off");
     if (!SitlModule::instance().available())
       QSKIP(qPrintable("no SITL engine module: " + SitlModule::instance().error()));
     const vayu_sitl_api_t *api = SitlModule::instance().api();

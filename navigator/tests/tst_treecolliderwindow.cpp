@@ -335,6 +335,29 @@ private slots:
     QCOMPARE(t.size(), trunks);
   }
 
+  // The key once packed these into one XOR word, where (streamGen 1, rev 0) and
+  // (streamGen 0, rev 0x10000) were the same word and a changed world kept its
+  // stale collider set. Exact fields tell them apart.
+  void worldKeyFieldsDoNotAlias() {
+    ColliderBuildKey a;
+    a.valid = true;
+    a.streamGen = 1;
+    a.rev = 0;
+    ColliderBuildKey b = a;
+    b.streamGen = 0;
+    b.rev = 0x10000u;
+    QVERIFY(colliderWindowNeedsRebuild(a, b));
+    QVERIFY(colliderWindowNeedsRebuild(b, a));
+    // seed 1 / palette 0 against seed 0 / palette 1<<..: also distinct.
+    ColliderBuildKey c = a;
+    c.seed = 5;
+    c.palette = 0;
+    ColliderBuildKey d = c;
+    d.seed = 0;
+    d.palette = 5;
+    QVERIFY(colliderWindowNeedsRebuild(c, d));
+  }
+
   void rebuildPolicy() {
     ColliderBuildKey last;
     ColliderBuildKey now;
@@ -365,8 +388,18 @@ private slots:
     m = now;
     m.rocks = !m.rocks;
     QVERIFY(colliderWindowNeedsRebuild(last, m));
+    // Every world field alone is a reason to rebuild.
     m = now;
-    m.world = 99;
+    m.seed += 1;
+    QVERIFY(colliderWindowNeedsRebuild(last, m));
+    m = now;
+    m.palette += 1;
+    QVERIFY(colliderWindowNeedsRebuild(last, m));
+    m = now;
+    m.streamGen += 1;
+    QVERIFY(colliderWindowNeedsRebuild(last, m));
+    m = now;
+    m.rev += 1;
     QVERIFY(colliderWindowNeedsRebuild(last, m));
     // A non-finite position is not a reason to keep a stale window.
     m = now;

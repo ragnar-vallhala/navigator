@@ -504,7 +504,7 @@ endif()
 # ---- Tree colliders against the real engine (SITL builds only) --------------
 # The ENV frames SimWorker sends make a trunk solid, leave a line beside it free
 # and go away on a clear. Skips, saying why, without the engine module or on an
-# SDK that has no ENV messages (the pinned one).
+# SDK that has no ENV messages (older than v0.3.0; the pinned one has them).
 if(NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_abi.h")
   navigator_test(tst_treecolliders_engine
       tst_treecolliders_engine.cpp

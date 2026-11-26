@@ -133,7 +133,9 @@ bool colliderWindowNeedsRebuild(const ColliderBuildKey &last,
                                 const ColliderBuildKey &now) {
   if (!last.valid)
     return true;
-  if (last.trees != now.trees || last.rocks != now.rocks || last.world != now.world)
+  if (last.trees != now.trees || last.rocks != now.rocks || last.seed != now.seed ||
+      last.palette != now.palette || last.streamGen != now.streamGen ||
+      last.rev != now.rev)
     return true;
   const float dx = now.x - last.x, dy = now.y - last.y;
   if (!std::isfinite(dx) || !std::isfinite(dy))

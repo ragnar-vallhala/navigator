@@ -25,6 +25,8 @@
 
 #include <cerrno>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -232,6 +234,34 @@ void SimWorker::sendObstacles(const QVector<Obstacle> &obs) {
   }
   emit logLine(QString("rtos engine: %1 obstacles pushed").arg(obs.size()));
 }
+
+#if VAYU_SITL_ABI_VERSION >= 5 && defined(VSIM_ENV_CAP)
+// The local ENV constants and wire sizes (TreeColliderWindow.h/.cpp) against the
+// SDK's own, wherever the SDK has them: a change on the engine side stops this
+// build instead of silently sending frames the engine drops.
+static_assert(vsim::procgen::kEnvBegin == std::uint32_t(VSIM_CTL_ENV_BEGIN),
+              "ENV_BEGIN subtype differs from the SDK's");
+static_assert(vsim::procgen::kEnvAdd == std::uint32_t(VSIM_CTL_ENV_ADD),
+              "ENV_ADD subtype differs from the SDK's");
+static_assert(vsim::procgen::kEnvCommit == std::uint32_t(VSIM_CTL_ENV_COMMIT),
+              "ENV_COMMIT subtype differs from the SDK's");
+static_assert(vsim::procgen::kEnvClear == std::uint32_t(VSIM_CTL_ENV_CLEAR),
+              "ENV_CLEAR subtype differs from the SDK's");
+static_assert(vsim::procgen::kEnvAddMax == VSIM_ENV_ADD_MAX,
+              "cylinders per ENV_ADD differ from the SDK's");
+static_assert(vsim::procgen::kEnvCap == VSIM_ENV_CAP,
+              "ENV cap differs from the SDK's");
+static_assert(sizeof(vsim_env_cyl_t) == 5 * sizeof(float) &&
+                  offsetof(vsim_env_cyl_t, z) == 2 * sizeof(float) &&
+                  offsetof(vsim_env_cyl_t, radius) == 3 * sizeof(float) &&
+                  offsetof(vsim_env_cyl_t, height) == 4 * sizeof(float),
+              "vsim_env_cyl_t is not x, y, z, radius, height as floats");
+static_assert(sizeof(std::uint32_t) + vsim::procgen::kEnvAddMax * sizeof(vsim_env_cyl_t) ==
+                  sizeof(vsim_ctl_env_add_t),
+              "ENV_ADD wire size (4 + 20 n, n up to 12) differs from the SDK's");
+static_assert(sizeof(float) == sizeof(vsim_ctl_env_commit_t),
+              "ENV_COMMIT body is not one float");
+#endif
 
 bool SimWorker::envCollidersAvailable() {
 #if VAYU_SITL_ABI_VERSION >= 5 && defined(VSIM_ENV_CAP)
