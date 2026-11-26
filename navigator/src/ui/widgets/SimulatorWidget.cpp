@@ -1130,7 +1130,13 @@ void SimulatorWidget::onStreamTick() {
     const QVector3D here = dronePos();
     const bool arrived = std::hypot(here.x() - m_streamHint->x(),
                                     here.y() - m_streamHint->y()) < 30.0;
-    if (arrived || !m_sim || m_streamHintAge.elapsed() > 15000) {
+    // A deferred spawn reset keeps its hint until the reset is sent: the
+    // collision it waits for can take far longer than the 15 s cap on a slow
+    // machine, and without the hint the window falls back to where the vehicle
+    // still is.
+    const bool expired =
+        m_streamHintAge.elapsed() > 15000 && !m_spawnResetPending;
+    if (arrived || !m_sim || expired) {
       m_streamHint.reset();
     } else {
       c = QVector3D(static_cast<float>(m_streamHint->x()),
@@ -1700,10 +1706,19 @@ void SimulatorWidget::placeVehicleOnWorld() {
     // Running: what Reset does, held until the new collision is in the engine
     // (the same hold Start uses), so the body is never placed over ground the
     // engine does not have yet.
-    if (spawnResetWaitsForCollision())
+    if (spawnResetWaitsForCollision()) {
       m_spawnResetPending = true;
-    else
+      // The reset puts the vehicle on the home pad once the collision is in, so
+      // stream THERE meanwhile. Without the hint the window and the collision
+      // are built around where the vehicle still is (far off after a long
+      // flight), thrown away at the reset, and built again at the pad.
+      if (m_chunkStreamer.active() && m_terrainHeightAt) {
+        m_streamHint = QPointF(m_homePad.x(), m_homePad.y());
+        m_streamHintAge.start();
+      }
+    } else {
       sendSpawnReset();
+    }
     return;
   }
   // Stopped: nothing is simulated, so park the vehicle the 3D view draws (and
