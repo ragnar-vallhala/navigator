@@ -124,7 +124,10 @@ navigator_test(tst_params_panel
     ${SRC}/params/ParamCodec.cpp
     ${SRC}/params/ParamClient.cpp
     ${SRC}/params/ParamService.cpp
+    ${SRC}/params/ParamApplier.cpp
+    ${SRC}/params/ParamFile.cpp
     ${SRC}/ui/widgets/ParamsPanel.cpp
+    ${SRC}/ui/widgets/ParamFileDialog.cpp
     ${SRC}/protocol/NavlinkRouter.cpp)
 target_include_directories(tst_params_panel PRIVATE ${SRC}/params ${SRC}/protocol ${SRC}/ui/widgets)
 target_link_libraries(tst_params_panel PRIVATE navlink_codec)

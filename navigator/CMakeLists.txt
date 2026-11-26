@@ -89,6 +89,7 @@ set(GCS_SOURCES
     src/params/ParamApplier.cpp
     src/params/ParamFile.cpp
     src/ui/widgets/ParamsPanel.cpp
+    src/ui/widgets/ParamFileDialog.cpp
     src/ui/widgets/AttitudeWidget.cpp
     src/ui/widgets/HorizonHud.cpp
     src/ui/widgets/ImuPanel.cpp
@@ -164,6 +165,7 @@ set(GCS_HEADERS
     src/params/ParamService.h
     src/params/ParamApplier.h
     src/ui/widgets/ParamsPanel.h
+    src/ui/widgets/ParamFileDialog.h
     src/protocol/ParamValueMsg.h
     src/ui/widgets/AttitudeWidget.h
     src/ui/widgets/GlPaintHost.h
