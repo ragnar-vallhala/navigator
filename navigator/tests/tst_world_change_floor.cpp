@@ -55,6 +55,7 @@
 #include <QtTest>
 
 #include <cmath>
+#include <cstring>
 #include <functional>
 
 // Test seam: SimulatorWidget befriends this class so the test can reach the
@@ -962,6 +963,47 @@ private slots:
   // the pad. Streamed where the vehicle still is, it is built, thrown away at
   // the reset and built again (the first forest world after a long flight took
   // 31 s instead of 12 s on a starved runner).
+  // The barometer error set in the World tab reaches the engine: sent when the
+  // sim starts (so it survives a restart) and again on Apply while it runs. The
+  // sink sees what the GUI asked for; whether the engine's reading changes is
+  // not asserted here.
+  void theBarometerErrorIsSentAtStartAndOnApply() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    if (!SitlModule::instance().available())
+      QSKIP("no engine module (set VAYU_SITL_MODULE)");
+    std::vector<vsim_ctl_baro_err_t> got;
+    vsim::SimWorker::setCtlSinkForTest(
+        [&](uint32_t t, const void *p, size_t n) {
+          if (t == VSIM_CTL_SET_BARO_ERR && n == sizeof(vsim_ctl_baro_err_t)) {
+            vsim_ctl_baro_err_t b{};
+            std::memcpy(&b, p, sizeof b);
+            got.push_back(b);
+          }
+        });
+    const auto reset = qScopeGuard(
+        [] { vsim::SimWorker::setCtlSinkForTest(nullptr); });
+    vsim::BaroErrConfig c;
+    c.noisePa = 4.0f;
+    c.lagMs = 150.0f;
+    a_->editor()->setBaroConfig(c);
+    a_->start();
+    QVERIFY(a_->running());
+    // Sent once the engine is online, with the rest of the config, not inside
+    // start() itself.
+    QVERIFY2(waitFor([&] { return !got.empty(); }, 30000),
+             "the sim came up without sending the configured barometer error");
+    QCOMPARE(got.back().noise_pa, 4.0f);
+    QCOMPARE(got.back().lag_ms, 150.0f);
+    const size_t before = got.size();
+    c.noisePa = 9.0f;
+    a_->editor()->setBaroConfig(c);
+    QVERIFY(QMetaObject::invokeMethod(a_->editor(), "onApplyBaro"));
+    QCOMPARE(got.size(), before + 1);
+    QCOMPARE(got.back().noise_pa, 9.0f);
+    a_->editor()->setBaroConfig(vsim::BaroErrConfig{}); // leave it off
+  }
+
   void aWorldChangeStreamsAtThePadNotWhereTheVehicleWas() {
     if (!gl_)
       QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");

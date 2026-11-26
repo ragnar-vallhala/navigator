@@ -56,6 +56,19 @@ void SimulatorWidget::buildWorldPage(ui::MinWidthScrollArea *scroll) {
                               .arg(w.turbSigma)
                         : tr("wind disabled"));
   });
+  // Barometer error: its own staged Apply -> push + persist.
+  connect(m_worldEditor, &WorldEditorWidget::baroApplied, this, [this] {
+    const vsim::BaroErrConfig b = m_worldEditor->baroConfig();
+    if (m_sim)
+      m_sim->sendBaroErr(b);
+    persistBaro(b);
+    appendLog("world", tr("barometer error applied (noise %1 Pa, drift %2 "
+                          "Pa/√s, lag %3 ms, rate %4 Hz)")
+                           .arg(b.noisePa)
+                           .arg(b.walkPaPerSqrtS)
+                           .arg(b.lagMs)
+                           .arg(b.rateHz));
+  });
   // Obstacles are visual (phase 1): live-update the 3D view + persist on any
   // add/remove/edit, no Apply needed.
   connect(m_worldEditor, &WorldEditorWidget::obstaclesChanged, this, [this] {
