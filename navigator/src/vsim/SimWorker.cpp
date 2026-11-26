@@ -631,6 +631,8 @@ void SimWorker::emitFromFrame(const void *bytes) {
   snap.batt_soc = frame->batt_soc;
   snap.crash_flags = frame->crash_flags;
   snap.peak_impact = frame->peak_impact;
+  snap.ctl_caps = frame->ctl_caps;
+  snap.ctl_unknown = frame->ctl_unknown;
   {
     std::lock_guard<std::mutex> lk(snap_mtx_);
     last_snap_ = snap;

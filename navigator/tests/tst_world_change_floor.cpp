@@ -1004,6 +1004,72 @@ private slots:
     a_->editor()->setBaroConfig(vsim::BaroErrConfig{}); // leave it off
   }
 
+  // The GPS receiver set in the World tab reaches the engine: sent when the sim
+  // starts (so it survives a restart) and again on Apply. A receiver fault is
+  // sent when asked and only then (it is an event, not a setting).
+  void theGpsReceiverIsSentAtStartAndOnApplyAndTheFaultOnRequest() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    if (!SitlModule::instance().available())
+      QSKIP("no engine module (set VAYU_SITL_MODULE)");
+    std::vector<vsim_ctl_gps_t> gps;
+    std::vector<vsim_ctl_gps_glitch_t> glitch;
+    vsim::SimWorker::setCtlSinkForTest(
+        [&](uint32_t t, const void *p, size_t n) {
+          if (t == VSIM_CTL_SET_GPS && n == sizeof(vsim_ctl_gps_t)) {
+            vsim_ctl_gps_t b{};
+            std::memcpy(&b, p, sizeof b);
+            gps.push_back(b);
+          } else if (t == VSIM_CTL_SET_GPS_GLITCH &&
+                     n == sizeof(vsim_ctl_gps_glitch_t)) {
+            vsim_ctl_gps_glitch_t b{};
+            std::memcpy(&b, p, sizeof b);
+            glitch.push_back(b);
+          }
+        });
+    const auto reset = qScopeGuard(
+        [] { vsim::SimWorker::setCtlSinkForTest(nullptr); });
+    vsim::GpsConfig c;
+    c.enabled = true;
+    c.rateHz = 5.0f;
+    c.lagMs = 120.0f;
+    c.sats = 9;
+    a_->editor()->setGpsConfig(c);
+    a_->start();
+    QVERIFY(a_->running());
+    QVERIFY2(waitFor([&] { return !gps.empty(); }, 30000),
+             "the sim came up without sending the configured GPS receiver");
+    QCOMPARE(gps.back().enable, 1);
+    QCOMPARE(gps.back().rate_hz, 5.0f);
+    QCOMPARE(gps.back().lag_ms, 120.0f);
+    QCOMPARE(gps.back().sats, 9u);
+    QVERIFY(glitch.empty()); // a fault is never sent on its own
+    const size_t before = gps.size();
+    c.rateHz = 10.0f;
+    a_->editor()->setGpsConfig(c);
+    QVERIFY(QMetaObject::invokeMethod(a_->editor(), "onApplyGps"));
+    QCOMPARE(gps.size(), before + 1);
+    QCOMPARE(gps.back().rate_hz, 10.0f);
+    QVERIFY(glitch.empty());
+    // The fault goes out when asked, as one body, and its end as mode None.
+    vsim::GpsGlitchConfig f;
+    f.mode = vsim::GpsGlitchMode::Offset;
+    f.offsetN = 30.0f;
+    f.durationS = 20.0f;
+    a_->editor()->setGpsGlitchConfig(f);
+    QVERIFY(QMetaObject::invokeMethod(a_->editor(), "onSendGpsGlitch",
+                                      Q_ARG(bool, false)));
+    QCOMPARE(glitch.size(), size_t(1));
+    QCOMPARE(glitch.back().mode, 1);
+    QCOMPARE(glitch.back().offset_ned[0], 30.0f);
+    QCOMPARE(glitch.back().duration_s, 20.0f);
+    QVERIFY(QMetaObject::invokeMethod(a_->editor(), "onSendGpsGlitch",
+                                      Q_ARG(bool, true)));
+    QCOMPARE(glitch.size(), size_t(2));
+    QCOMPARE(glitch.back().mode, 0);
+    a_->editor()->setGpsConfig(vsim::GpsConfig{}); // leave it off
+  }
+
   void aWorldChangeStreamsAtThePadNotWhereTheVehicleWas() {
     if (!gl_)
       QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");

@@ -24,8 +24,10 @@
 #include "ui/widgets/WorldEditorWidget.h"
 #include "vsim/ProceduralWorld.h"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QLabel>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QSpinBox>
@@ -277,6 +279,102 @@ private slots:
     QCOMPARE(we.baroLag_->value(), 200.0);
     QVERIFY(!we.baroApplyBtn_->isEnabled()); // a restore is not an edit
     QCOMPARE(spy.count(), 0);                // and sends nothing by itself
+  }
+
+  // The GPS section: its controls stop at the engine's limits (the numbers
+  // tst_sitl_engine proves SimWorker accepts at the top and refuses beyond),
+  // Apply is staged, and a restore is not an edit.
+  void gpsSectionStagesAndAppliesWithinTheEnginesLimits() {
+    WorldEditorWidget we;
+    QCOMPARE(we.gpsRate_->minimum(), 1.0);
+    QCOMPARE(we.gpsRate_->maximum(), 50.0);
+    QCOMPARE(we.gpsPosNoise_->maximum(), 50.0);
+    QCOMPARE(we.gpsVelNoise_->maximum(), 5.0);
+    QCOMPARE(we.gpsLag_->maximum(), 1000.0);
+    QCOMPARE(we.gpsSats_->minimum(), 4.0);
+    QCOMPARE(we.gpsSats_->maximum(), 32.0);
+    QVERIFY(!we.gpsApplyBtn_->isEnabled()); // clean at start
+    QSignalSpy spy(&we, &WorldEditorWidget::gpsApplied);
+    we.gpsEnable_->setChecked(true);
+    we.gpsRate_->setValue(5.0);
+    we.gpsPosNoise_->setValue(1.5);
+    we.gpsVelNoise_->setValue(0.2);
+    we.gpsLag_->setValue(120.0);
+    we.gpsSats_->setValue(9.0);
+    QVERIFY(we.gpsApplyBtn_->isEnabled());
+    QCOMPARE(spy.count(), 0); // staged: nothing sent yet
+    we.gpsApplyBtn_->click();
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(!we.gpsApplyBtn_->isEnabled());
+    const vsim::GpsConfig c = we.gpsConfig();
+    QVERIFY(c.enabled);
+    QCOMPARE(c.rateHz, 5.0f);
+    QCOMPARE(c.posNoiseM, 1.5f);
+    QCOMPARE(c.velNoiseMps, 0.2f);
+    QCOMPARE(c.lagMs, 120.0f);
+    QCOMPARE(c.sats, 9);
+    // Out of range is clamped by the control, never carried through.
+    we.gpsRate_->setValue(9999.0);
+    we.gpsApplyBtn_->click();
+    QCOMPARE(we.gpsConfig().rateHz, 50.0f);
+    // Even the checkbox alone is an edit.
+    we.gpsEnable_->setChecked(false);
+    QVERIFY(we.gpsApplyBtn_->isEnabled());
+  }
+
+  void setGpsConfigSyncsWidgetsAndStaysClean() {
+    WorldEditorWidget we;
+    vsim::GpsConfig c;
+    c.enabled = true;
+    c.rateHz = 8.0f;
+    c.sats = 14;
+    QSignalSpy spy(&we, &WorldEditorWidget::gpsApplied);
+    we.setGpsConfig(c);
+    QVERIFY(we.gpsEnable_->isChecked());
+    QCOMPARE(we.gpsRate_->value(), 8.0);
+    QCOMPARE(we.gpsSats_->value(), 14.0);
+    QVERIFY(!we.gpsApplyBtn_->isEnabled()); // a restore is not an edit
+    QCOMPARE(spy.count(), 0);               // and sends nothing by itself
+  }
+
+  // The receiver fault is an event: each button asks once, nothing is staged,
+  // and ending it asks for mode None.
+  void gpsFaultIsRequestedAtOnceAndEndsWithModeNone() {
+    WorldEditorWidget we;
+    QSignalSpy spy(&we, &WorldEditorWidget::gpsGlitchRequested);
+    QCOMPARE(we.glitchN_->maximum(), 100000.0);
+    QCOMPARE(we.glitchN_->minimum(), -100000.0);
+    QCOMPARE(we.glitchDur_->maximum(), 3600.0);
+    we.glitchN_->setValue(30.0);
+    we.glitchE_->setValue(-40.0);
+    we.glitchDur_->setValue(20.0);
+    QCOMPARE(spy.count(), 0); // editing does not send
+    we.glitchSendBtn_->click();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(we.gpsGlitchConfig().mode, vsim::GpsGlitchMode::Offset);
+    QCOMPARE(we.gpsGlitchConfig().offsetN, 30.0f);
+    QCOMPARE(we.gpsGlitchConfig().offsetE, -40.0f);
+    QCOMPARE(we.gpsGlitchConfig().durationS, 20.0f);
+    we.glitchMode_->setCurrentIndex(we.glitchMode_->findData(
+        static_cast<int>(vsim::GpsGlitchMode::Dropout)));
+    QVERIFY(!we.glitchN_->isEnabled()); // an offset means nothing for a dropout
+    we.glitchSendBtn_->click();
+    QCOMPARE(we.gpsGlitchConfig().mode, vsim::GpsGlitchMode::Dropout);
+    we.glitchClearBtn_->click();
+    QCOMPARE(spy.count(), 3);
+    QCOMPARE(we.gpsGlitchConfig().mode, vsim::GpsGlitchMode::None);
+  }
+
+  void theIgnoredMessageCountShowsOnlyWhenNonZero() {
+    WorldEditorWidget we;
+    // The label's own state: the section holding it starts collapsed, so what
+    // is on screen depends on that too.
+    QVERIFY(we.engineIgnored_->isHidden());
+    we.setEngineIgnoredCount(3);
+    QVERIFY(!we.engineIgnored_->isHidden());
+    QVERIFY(we.engineIgnored_->text().contains("3"));
+    we.setEngineIgnoredCount(0);
+    QVERIFY(we.engineIgnored_->isHidden());
   }
 
   void setConfigRestoresWidgets() {

@@ -297,6 +297,7 @@ void WorldEditorWidget::buildUi() {
   // -- Wind & turbulence (its own staged Apply, mockup World tab) --
   buildWindSection(root);
   buildBaroSection(root);
+  buildGpsSection(root);
 
   // -- Apply / Save / Load --
   {
@@ -674,6 +675,208 @@ void WorldEditorWidget::onApplyBaro() {
 void WorldEditorWidget::setBaroConfig(const vsim::BaroErrConfig &b) {
   baro_ = b;
   syncBaroToUi();
+}
+
+void WorldEditorWidget::buildGpsSection(QVBoxLayout *root) {
+  auto *sec = new CollapsibleSection(tr("GPS receiver"), this,
+                                     /*expanded=*/false);
+  auto *body = new QWidget();
+  auto *col = new QVBoxLayout(body);
+  auto *form = new QFormLayout();
+  // The ranges are the engine's own limits (it drops a message outside them), so
+  // the controls cannot produce a value the sim would refuse.
+  gpsEnable_ = new QCheckBox(tr("Model a GPS receiver"), body);
+  gpsEnable_->setChecked(gps_.enabled);
+  gpsEnable_->setToolTip(
+      tr("Off: the engine reports no GPS and the firmware sees no fix."));
+  gpsRate_ = spin(1.0, 50.0, 0, 1.0, gps_.rateHz, QStringLiteral(" Hz"));
+  gpsPosNoise_ =
+      spin(0.0, 50.0, 2, 0.1, gps_.posNoiseM, QStringLiteral(" m"));
+  gpsVelNoise_ =
+      spin(0.0, 5.0, 2, 0.05, gps_.velNoiseMps, QStringLiteral(" m/s"));
+  gpsLag_ = spin(0.0, 1000.0, 0, 10.0, gps_.lagMs, QStringLiteral(" ms"));
+  gpsSats_ = spin(4.0, 32.0, 0, 1.0, gps_.sats);
+  gpsRate_->setToolTip(tr("Fix rate: a new report this many times a second."));
+  gpsPosNoise_->setToolTip(tr("Position noise per report, 1 sigma."));
+  gpsVelNoise_->setToolTip(tr("Velocity noise per report, 1 sigma."));
+  gpsLag_->setToolTip(
+      tr("How old a report is when it arrives (the receiver's latency)."));
+  gpsSats_->setToolTip(tr("Satellites in use that the receiver reports."));
+  form->addRow(gpsEnable_);
+  form->addRow(tr("Fix rate:"), gpsRate_);
+  form->addRow(tr("Position noise:"), gpsPosNoise_);
+  form->addRow(tr("Velocity noise:"), gpsVelNoise_);
+  form->addRow(tr("Latency:"), gpsLag_);
+  form->addRow(tr("Satellites:"), gpsSats_);
+  col->addLayout(form);
+  {
+    auto *row = new QHBoxLayout();
+    row->addStretch();
+    gpsApplyBtn_ = new ui::SuccessButton(tr("Apply to Sim"), body);
+    gpsApplyBtn_->setToolTip(
+        tr("Push the GPS receiver model to the simulator. A new setting also "
+           "ends any receiver fault."));
+    gpsApplyBtn_->setEnabled(false); // enabled when a value changes (dirty)
+    row->addWidget(gpsApplyBtn_);
+    col->addLayout(row);
+    connect(gpsApplyBtn_, &QPushButton::clicked, this,
+            &WorldEditorWidget::onApplyGps);
+  }
+  for (QDoubleSpinBox *s :
+       {gpsRate_, gpsPosNoise_, gpsVelNoise_, gpsLag_, gpsSats_})
+    connect(s, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+            [this](double) {
+              if (!gpsSyncing_ && gpsApplyBtn_)
+                gpsApplyBtn_->setEnabled(true);
+            });
+  connect(gpsEnable_, &QCheckBox::toggled, this, [this](bool) {
+    if (!gpsSyncing_ && gpsApplyBtn_)
+      gpsApplyBtn_->setEnabled(true);
+  });
+
+  // The receiver fault: an event, sent at once. It only has an effect while the
+  // model above is on and applied.
+  auto *fault = new QFormLayout();
+  glitchMode_ = new QComboBox(body);
+  glitchMode_->addItem(tr("Position jump"), static_cast<int>(vsim::GpsGlitchMode::Offset));
+  glitchMode_->addItem(tr("Loss of fix"), static_cast<int>(vsim::GpsGlitchMode::Dropout));
+  glitchMode_->addItem(tr("Frozen position"), static_cast<int>(vsim::GpsGlitchMode::Freeze));
+  glitchN_ = spin(-100000.0, 100000.0, 1, 1.0, 0.0, QStringLiteral(" m"));
+  glitchE_ = spin(-100000.0, 100000.0, 1, 1.0, 0.0, QStringLiteral(" m"));
+  glitchD_ = spin(-100000.0, 100000.0, 1, 1.0, 0.0, QStringLiteral(" m"));
+  glitchDur_ = spin(0.0, 3600.0, 1, 1.0, 10.0, QStringLiteral(" s"));
+  glitchDur_->setSpecialValueText(tr("until cleared"));
+  glitchMode_->setToolTip(
+      tr("Position jump: the reported position moves by the offset and stays. "
+         "Loss of fix: no reports. Frozen position: reports repeat the last "
+         "good one."));
+  glitchDur_->setToolTip(tr("Simulated seconds the fault lasts."));
+  fault->addRow(tr("Fault:"), glitchMode_);
+  fault->addRow(tr("Offset north:"), glitchN_);
+  fault->addRow(tr("Offset east:"), glitchE_);
+  fault->addRow(tr("Offset down:"), glitchD_);
+  fault->addRow(tr("Duration:"), glitchDur_);
+  col->addLayout(fault);
+  {
+    auto *row = new QHBoxLayout();
+    row->addStretch();
+    glitchClearBtn_ = new QPushButton(tr("End fault"), body);
+    glitchSendBtn_ = new ui::SuccessButton(tr("Send fault"), body);
+    glitchSendBtn_->setToolTip(tr("Start the fault now."));
+    glitchClearBtn_->setToolTip(tr("End the receiver fault now."));
+    row->addWidget(glitchClearBtn_);
+    row->addWidget(glitchSendBtn_);
+    col->addLayout(row);
+    connect(glitchSendBtn_, &QPushButton::clicked, this,
+            [this] { onSendGpsGlitch(false); });
+    connect(glitchClearBtn_, &QPushButton::clicked, this,
+            [this] { onSendGpsGlitch(true); });
+  }
+  // The offset only means something for a position jump.
+  auto offsetsOnlyForJump = [this] {
+    const bool jump = glitchMode_->currentData().toInt() ==
+                      static_cast<int>(vsim::GpsGlitchMode::Offset);
+    for (QDoubleSpinBox *s : {glitchN_, glitchE_, glitchD_})
+      s->setEnabled(jump);
+  };
+  connect(glitchMode_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+          [offsetsOnlyForJump](int) { offsetsOnlyForJump(); });
+  offsetsOnlyForJump();
+
+  engineIgnored_ = new QLabel(body);
+  engineIgnored_->setWordWrap(true);
+  engineIgnored_->setStyleSheet(
+      QString("color:%1; font-size:11px;").arg(Theme::hex(Theme::kTextMuted)));
+  engineIgnored_->hide();
+  col->addWidget(engineIgnored_);
+
+  sec->setContentWidget(body);
+  root->addWidget(sec);
+}
+
+void WorldEditorWidget::syncGpsToUi() {
+  gpsSyncing_ = true;
+  if (gpsEnable_)
+    gpsEnable_->setChecked(gps_.enabled);
+  if (gpsRate_)
+    gpsRate_->setValue(gps_.rateHz);
+  if (gpsPosNoise_)
+    gpsPosNoise_->setValue(gps_.posNoiseM);
+  if (gpsVelNoise_)
+    gpsVelNoise_->setValue(gps_.velNoiseMps);
+  if (gpsLag_)
+    gpsLag_->setValue(gps_.lagMs);
+  if (gpsSats_)
+    gpsSats_->setValue(gps_.sats);
+  gpsSyncing_ = false;
+  if (gpsApplyBtn_)
+    gpsApplyBtn_->setEnabled(false); // freshly synced = clean
+}
+
+void WorldEditorWidget::syncUiToGps() {
+  gps_.enabled = gpsEnable_->isChecked();
+  gps_.rateHz = static_cast<float>(gpsRate_->value());
+  gps_.posNoiseM = static_cast<float>(gpsPosNoise_->value());
+  gps_.velNoiseMps = static_cast<float>(gpsVelNoise_->value());
+  gps_.lagMs = static_cast<float>(gpsLag_->value());
+  gps_.sats = static_cast<int>(gpsSats_->value());
+}
+
+void WorldEditorWidget::syncUiToGlitch() {
+  glitch_.mode = static_cast<vsim::GpsGlitchMode>(glitchMode_->currentData().toInt());
+  glitch_.offsetN = static_cast<float>(glitchN_->value());
+  glitch_.offsetE = static_cast<float>(glitchE_->value());
+  glitch_.offsetD = static_cast<float>(glitchD_->value());
+  glitch_.durationS = static_cast<float>(glitchDur_->value());
+}
+
+void WorldEditorWidget::onApplyGps() {
+  syncUiToGps();
+  if (gpsApplyBtn_)
+    gpsApplyBtn_->setEnabled(false); // clean until next edit
+  emit gpsApplied();
+}
+
+void WorldEditorWidget::onSendGpsGlitch(bool clear) {
+  if (clear) {
+    glitch_ = vsim::GpsGlitchConfig{}; // mode None ends the fault
+  } else {
+    syncUiToGlitch();
+  }
+  emit gpsGlitchRequested();
+}
+
+void WorldEditorWidget::setGpsConfig(const vsim::GpsConfig &g) {
+  gps_ = g;
+  syncGpsToUi();
+}
+
+void WorldEditorWidget::setGpsGlitchConfig(const vsim::GpsGlitchConfig &f) {
+  glitch_ = f;
+  if (!glitchMode_)
+    return;
+  // None is not a form choice (End fault is its button): show a jump.
+  const int idx = glitchMode_->findData(static_cast<int>(f.mode));
+  glitchMode_->setCurrentIndex(idx >= 0 ? idx : 0);
+  glitchN_->setValue(f.offsetN);
+  glitchE_->setValue(f.offsetE);
+  glitchD_->setValue(f.offsetD);
+  glitchDur_->setValue(f.durationS);
+}
+
+void WorldEditorWidget::setEngineIgnoredCount(uint32_t n) {
+  if (!engineIgnored_ || n == ignoredShown_)
+    return;
+  ignoredShown_ = n;
+  if (n == 0) {
+    engineIgnored_->hide();
+    return;
+  }
+  engineIgnored_->setText(
+      tr("The engine ignored %n control message(s) it does not recognise. "
+         "Its module may be older than the SDK this build expects.",
+         nullptr, static_cast<int>(n)));
+  engineIgnored_->show();
 }
 
 QString WorldEditorWidget::serializeProcedural(const vsim::WorldConfig &w) {
