@@ -151,6 +151,14 @@ target_include_directories(tst_gyro_notch_widget PRIVATE ${SRC}/params ${SRC}/pr
 target_link_libraries(tst_gyro_notch_widget PRIVATE navlink_codec)
 target_sources(tst_gyro_notch_widget PRIVATE ${PARAMS_CATALOG_QRC})
 
+navigator_test(tst_param_file
+    tst_param_file.cpp
+    ${SRC}/params/ParamCatalog.cpp
+    ${SRC}/params/ParamFile.cpp)
+target_include_directories(tst_param_file PRIVATE ${SRC}/params ${SRC}/protocol)
+target_compile_definitions(tst_param_file PRIVATE NAVLINK_GEN_DIR="${NAVLINK_GEN}")
+target_link_libraries(tst_param_file PRIVATE navlink_codec)
+
 navigator_test(tst_param_applier
     tst_param_applier.cpp
     ${SRC}/params/ParamCatalog.cpp
