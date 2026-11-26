@@ -235,7 +235,7 @@ private slots:
   void panelIdsAreTheAgreedOnes() {
     const QStringList want = {"view3d", "imu",         "logs",       "rc",
                               "packets", "calibration", "motors",    "control_loop",
-                              "gyro_notch", "perf",     "sim",       "settings"};
+                              "gyro_notch", "params", "perf",    "sim",       "settings"};
     QCOMPARE(allIds(), want);
     QCOMPARE(QSet<QString>(want.begin(), want.end()).size(), want.size());
     for (const auto &p : DockShell::panelInfos())
@@ -545,7 +545,7 @@ private slots:
     const QStringList want = {
         "&Flight: " + QStringList{t("view3d"), t("rc"), t("motors")}.join(", "),
         "&Sensors: " + t("imu"),
-        "&Tuning: " + QStringList{t("calibration"), t("control_loop"), t("gyro_notch")}.join(", "),
+        "&Tuning: " + QStringList{t("calibration"), t("control_loop"), t("gyro_notch"), t("params")}.join(", "),
         "&Debug: " + QStringList{t("logs"), t("packets"), t("perf")}.join(", "),
         "S&imulation: " + t("sim"),
         "&App: " + t("settings"),

@@ -160,6 +160,7 @@ private slots:
   void armedFollowsNavStateAndUnknownCountsAsArmed();
   void theSecureLinkCapabilityIsNotPassedOn();
   void aSilentVehicleThatReturnsIsReadFromScratch();
+  void aQuickRebootIsSeenInTheNavState();
   void linkDownStopsEverything();
 };
 
@@ -276,6 +277,28 @@ void TstParamService::aSilentVehicleThatReturnsIsReadFromScratch() {
   r.heartbeat(2, 8);
   r.run(300);
   QCOMPARE(r.fc.listRequests, 2);
+}
+
+void TstParamService::aQuickRebootIsSeenInTheNavState() {
+  Rig r;
+  r.up(2); // STANDBY
+  QCOMPARE(r.fc.listRequests, 1);
+  // Back to INIT with no heartbeat gap at all: it restarted.
+  r.heartbeat(1, 8);
+  r.run(400);
+  QCOMPARE(r.fc.listRequests, 2);
+  QCOMPARE(r.svc.client().state(), Client::State::Ready);
+  // INIT at the start (never past it) is just the start, and so is
+  // UNINITIALIZED followed by INIT.
+  Rig q;
+  q.heartbeat(0, 8);
+  q.run(50);
+  q.svc.onSynced(true);
+  q.run(300);
+  q.heartbeat(1, 8);
+  q.run(300);
+  QCOMPARE(q.fc.listRequests, 1);
+  QCOMPARE(q.svc.client().state(), Client::State::Ready);
 }
 
 void TstParamService::linkDownStopsEverything() {

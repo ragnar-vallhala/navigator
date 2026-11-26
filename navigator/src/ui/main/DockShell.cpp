@@ -54,6 +54,7 @@ const std::vector<DockShell::PanelInfo> &DockShell::panelInfos() {
       {dockpanel::kMotors, QObject::tr("Motors"), "flight"},
       {dockpanel::kControlLoop, QObject::tr("Control loop"), "tuning"},
       {dockpanel::kGyroNotch, QObject::tr("Gyro notch"), "tuning"},
+      {dockpanel::kParams, QObject::tr("Parameters"), "tuning"},
       {dockpanel::kPerf, QObject::tr("Kernel perf"), "debug"},
       {dockpanel::kSim, QObject::tr("Simulator"), "simulation"},
       {dockpanel::kSettings, QObject::tr("Settings"), "app"},
