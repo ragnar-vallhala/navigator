@@ -294,12 +294,12 @@ bool SimWorker::gpsGlitchBody(const GpsGlitchConfig &c,
   if (mode != 0) {
     if (!(c.durationS >= 0.0f && c.durationS <= 3600.0f))
       return bad("duration_s (0 to 3600 s)");
-    // Checked in double so the squares cannot overflow a float; a NaN or an
-    // infinity fails the comparison.
-    const double n = c.offsetN, e = c.offsetE, d = c.offsetD;
-    const double len2 = n * n + e * e + d * d;
-    if (!(len2 <= 100000.0 * 100000.0))
-      return bad("offset (length within 100000 m)");
+    // The engine checks each axis, |offset_ned[i]| <= 100000 m (vsim_inproc.cpp);
+    // a NaN or an infinity fails the comparison.
+    const float lim = 100000.0f;
+    if (!(std::fabs(c.offsetN) <= lim && std::fabs(c.offsetE) <= lim &&
+          std::fabs(c.offsetD) <= lim))
+      return bad("offset (each axis within 100000 m)");
     b.mode = mode;
     b.offset_ned[0] = c.offsetN;
     b.offset_ned[1] = c.offsetE;

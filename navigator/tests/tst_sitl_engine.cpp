@@ -270,6 +270,18 @@ void TstSitlEngine::gpsGlitchBodyAcceptsTheEnginesRangeAndRefusesTheRest() {
     QVERIFY(vsim::SimWorker::gpsGlitchBody(x, b));
     QCOMPARE(b.mode, static_cast<int>(m));
   }
+  // The engine checks each axis, so a vector longer than 100000 m is accepted
+  // while every axis is within it.
+  {
+    vsim::GpsGlitchConfig x;
+    x.mode = GpsGlitchMode::Offset;
+    x.durationS = 10.0f;
+    x.offsetN = 60000.0f;
+    x.offsetE = 60000.0f;
+    x.offsetD = -100000.0f;
+    QVERIFY(vsim::SimWorker::gpsGlitchBody(x, b));
+    QCOMPARE(b.offset_ned[1], 60000.0f);
+  }
   // None clears: all-zero body, and the other fields are not looked at.
   vsim::GpsGlitchConfig none;
   none.offsetN = std::numeric_limits<float>::quiet_NaN();
@@ -293,8 +305,6 @@ void TstSitlEngine::gpsGlitchBodyAcceptsTheEnginesRangeAndRefusesTheRest() {
   with([](vsim::GpsGlitchConfig &x) { x.offsetN = 100000.1f; });
   with([](vsim::GpsGlitchConfig &x) { x.offsetE = -100001.0f; });
   with([](vsim::GpsGlitchConfig &x) { x.offsetD = 100001.0f; });
-  // Each axis is in range but the vector is not: refused (the stricter reading).
-  with([](vsim::GpsGlitchConfig &x) { x.offsetN = 80000.0f; x.offsetE = 80000.0f; });
   with([&](vsim::GpsGlitchConfig &x) { x.offsetN = nan; });
   with([&](vsim::GpsGlitchConfig &x) { x.offsetD = inf; });
   with([](vsim::GpsGlitchConfig &x) { x.mode = static_cast<GpsGlitchMode>(4); });

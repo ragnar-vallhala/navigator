@@ -237,9 +237,8 @@ public:
                       QString *why = nullptr);
 
   // Same for the receiver fault (VSIM_CTL_SET_GPS_GLITCH). Mode None clears the
-  // glitch and ignores the other fields. For Offset mode the vector length is
-  // held to 100000 m: the header says "offset finite within 100000 m" without
-  // saying per axis or total, so this takes the stricter reading.
+  // glitch and ignores the other fields. For Offset mode each axis is held to
+  // 100000 m, which is exactly what the engine checks.
   static bool gpsGlitchBody(const GpsGlitchConfig &c,
                             vsim_ctl_gps_glitch_t &out,
                             QString *why = nullptr);
