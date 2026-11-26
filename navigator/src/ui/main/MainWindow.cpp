@@ -15,9 +15,11 @@
  * limitations under the License.
  */
 #include "MainWindow.h"
-#include "ParamApplier.h"
 #include "ParamService.h"
+#ifdef NAVIGATOR_HAS_SITL
+#include "ParamApplier.h"
 #include "../widgets/AutotuneParamMap.h"
+#endif
 #include "ParamsPanel.h"
 #include "DockPanelIds.h"
 #include "DockShell.h"
@@ -249,6 +251,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   });
   connect(m_params, &params::ParamService::logLine, this,
           &MainWindow::onLogReceived);
+#ifdef NAVIGATOR_HAS_SITL
   // The tuning screens write through this; the toast follows its one result,
   // never the send.
   m_applier = new params::ParamApplier(m_params, this);
@@ -268,6 +271,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
               Notify::error(this, tr("Gains not applied: %1").arg(r.text));
             }
           });
+#endif
   connect(proto, &DroneProtocol::capabilitiesReceived, m_params,
           &params::ParamService::onHeartbeat);
   connect(proto, &DroneProtocol::paramValueReceived, m_params,
@@ -961,6 +965,7 @@ void MainWindow::exitReplay() {
     m_replayToolbar->setVisible(false);
 }
 
+#ifdef NAVIGATOR_HAS_SITL
 void MainWindow::applyPidGainsAsParams(const QVector<PidSetCmd> &cmds) {
   QVector<params::ParamApplier::Item> items;
   QString why;
@@ -972,6 +977,7 @@ void MainWindow::applyPidGainsAsParams(const QVector<PidSetCmd> &cmds) {
   }
   m_logPanel->appendLog(QStringLiteral("[GCS] Applying %1 gain(s) as parameters").arg(items.size()));
 }
+#endif
 
 void MainWindow::sendToFc(const QByteArray &pkt) {
   // Single tx choke point — only Fc/Sim are commandable; Replay/Idle/Autotune
