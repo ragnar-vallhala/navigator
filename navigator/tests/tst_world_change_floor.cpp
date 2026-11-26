@@ -1060,12 +1060,23 @@ private slots:
     QVERIFY(QMetaObject::invokeMethod(a_->editor(), "onSendGpsGlitch",
                                       Q_ARG(bool, false)));
     QCOMPARE(glitch.size(), size_t(1));
+    // A receiver change ends the fault in the engine; the log says so, once.
+    a_->clearLog();
+    QVERIFY(QMetaObject::invokeMethod(a_->editor(), "onApplyGps"));
+    QVERIFY(a_->logText().contains(
+        QStringLiteral("GPS fault ended by the receiver change")));
+    a_->clearLog();
+    QVERIFY(QMetaObject::invokeMethod(a_->editor(), "onApplyGps"));
+    QVERIFY(!a_->logText().contains(QStringLiteral("GPS fault ended")));
+    QVERIFY(QMetaObject::invokeMethod(a_->editor(), "onSendGpsGlitch",
+                                      Q_ARG(bool, false)));
+    QCOMPARE(glitch.size(), size_t(2));
     QCOMPARE(glitch.back().mode, 1);
     QCOMPARE(glitch.back().offset_ned[0], 30.0f);
     QCOMPARE(glitch.back().duration_s, 20.0f);
     QVERIFY(QMetaObject::invokeMethod(a_->editor(), "onSendGpsGlitch",
                                       Q_ARG(bool, true)));
-    QCOMPARE(glitch.size(), size_t(2));
+    QCOMPARE(glitch.size(), size_t(3));
     QCOMPARE(glitch.back().mode, 0);
     a_->editor()->setGpsConfig(vsim::GpsConfig{}); // leave it off
   }
