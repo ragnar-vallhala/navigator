@@ -16,6 +16,10 @@
  */
 #include "MainWindow.h"
 #include "ParamService.h"
+#ifdef NAVIGATOR_HAS_SITL
+#include "ParamApplier.h"
+#include "../widgets/AutotuneParamMap.h"
+#endif
 #include "ParamsPanel.h"
 #include "DockPanelIds.h"
 #include "DockShell.h"
@@ -247,6 +251,27 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   });
   connect(m_params, &params::ParamService::logLine, this,
           &MainWindow::onLogReceived);
+#ifdef NAVIGATOR_HAS_SITL
+  // The tuning screens write through this; the toast follows its one result,
+  // never the send.
+  m_applier = new params::ParamApplier(m_params, this);
+  connect(m_applier, &params::ParamApplier::finished, this,
+          [this](const params::ParamApplier::Result &r) {
+            const bool sim = m_source.state() == SourceState::Sim;
+            m_logPanel->appendLog(QStringLiteral("[GCS] Gains: %1").arg(r.text));
+            if (r.ok) {
+              Notify::ok(this, sim ? tr("Applied gains to sim")
+                                   : tr("Applied gains to firmware"));
+              if (m_simulatorWidget)
+                m_simulatorWidget->notifyPidGainsSent();
+            } else if (r.unknown) {
+              Notify::warn(this, tr("Lost the link while applying gains: the "
+                                    "vehicle may or may not have taken them"));
+            } else {
+              Notify::error(this, tr("Gains not applied: %1").arg(r.text));
+            }
+          });
+#endif
   connect(proto, &DroneProtocol::capabilitiesReceived, m_params,
           &params::ParamService::onHeartbeat);
   connect(proto, &DroneProtocol::paramValueReceived, m_params,
@@ -417,6 +442,22 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             // after an autotune run), apply there.
             const SourceState st = m_source.state();
             if (st == SourceState::Fc || st == SourceState::Sim) {
+              // A vehicle that offers PARAMS takes the gains as parameters (one
+              // commit, one result); one that does not takes the old command.
+              switch (autotune_params::routeFor(m_params->client().state())) {
+              case autotune_params::Route::Params:
+                applyPidGainsAsParams(cmds);
+                return;
+              case autotune_params::Route::NotReady:
+                m_logPanel->appendLog(
+                    "[GCS] Apply gains ignored — the vehicle's parameters are "
+                    "not loaded");
+                Notify::warn(this, tr("The vehicle's parameters are not loaded "
+                                      "yet — try again in a moment"));
+                return;
+              case autotune_params::Route::Legacy:
+                break;
+              }
               const uint32_t now =
                   static_cast<uint32_t>(QDateTime::currentMSecsSinceEpoch());
               for (const PidSetCmd &c : cmds)
@@ -923,6 +964,20 @@ void MainWindow::exitReplay() {
   if (m_replayToolbar)
     m_replayToolbar->setVisible(false);
 }
+
+#ifdef NAVIGATOR_HAS_SITL
+void MainWindow::applyPidGainsAsParams(const QVector<PidSetCmd> &cmds) {
+  QVector<params::ParamApplier::Item> items;
+  QString why;
+  if (!autotune_params::pidCmdsToItems(cmds, m_params->catalog(), items, &why) ||
+      !m_applier->apply(items, &why)) {
+    m_logPanel->appendLog(QStringLiteral("[GCS] Gains not applied: %1").arg(why));
+    Notify::warn(this, tr("Gains not applied: %1").arg(why));
+    return;
+  }
+  m_logPanel->appendLog(QStringLiteral("[GCS] Applying %1 gain(s) as parameters").arg(items.size()));
+}
+#endif
 
 void MainWindow::sendToFc(const QByteArray &pkt) {
   // Single tx choke point — only Fc/Sim are commandable; Replay/Idle/Autotune

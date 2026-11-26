@@ -62,6 +62,7 @@
 
 namespace params {
 class ParamService;
+class ParamApplier;
 }
 class QToolBar;
 class DockShell;
@@ -184,6 +185,10 @@ private:
   // Send a command frame to the FC over whichever transport is connected
   // (UDP bridge or serial). Used by every ARM/PID/calibrate/time-sync path.
   void sendToFc(const QByteArray &pkt);
+#ifdef NAVIGATOR_HAS_SITL
+  // The autotuner's Apply as parameters (staged, committed, reported once).
+  void applyPidGainsAsParams(const QVector<PidSetCmd> &cmds);
+#endif
 
   // ---- Toolbar / status bar (extracted in Phase-1 1a) ----
   MainToolbar *m_toolbar = nullptr;
@@ -307,6 +312,9 @@ private:
   // ---- State ----
   bool m_armed = false;
   params::ParamService *m_params = nullptr; // the vehicle parameter service
+#ifdef NAVIGATOR_HAS_SITL
+  params::ParamApplier *m_applier = nullptr; // the autotune Apply writes through it
+#endif
   // Link caches (the transports live on the worker thread; the GUI must not read
   // them directly). Updated from the engine's forwarded signals / at connect.
   bool m_serialOpen = false;

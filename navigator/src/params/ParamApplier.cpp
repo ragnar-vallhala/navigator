@@ -25,6 +25,11 @@ ParamApplier::ParamApplier(ParamService *svc, QObject *parent) : QObject(parent)
   connect(m_svc, &ParamService::changed, this, &ParamApplier::onChanged);
 }
 
+ParamApplier::~ParamApplier() {
+  if (m_phase != Phase::Idle)
+    m_svc->lockFor(QString());
+}
+
 QString ParamApplier::groupName(int g) const {
   const Group *grp = m_svc->catalog().group(g);
   return grp ? grp->name : QString::number(g);
@@ -196,7 +201,7 @@ void ParamApplier::process() {
           finish(true, false, QString());
           return;
         }
-        m_toDiscard = m_groups;
+        m_toDiscard = {0}; // nothing was made live: one discard of everything staged
         fail(QStringLiteral("the commit was not accepted: %1").arg(e.text));
       } else {
         const int g = m_groups.value(m_commitIdx);
@@ -216,10 +221,14 @@ void ParamApplier::process() {
       if (e.op != Client::Op::Discard)
         break;
       if (!m_toDiscard.isEmpty()) {
-        GroupResult &r = entry(m_toDiscard.takeFirst());
-        r.state = ok ? GroupResult::Discarded : GroupResult::NotSent;
-        r.text = ok ? QStringLiteral("not applied, discarded; the vehicle keeps its values")
-                    : QStringLiteral("not applied, and the discard failed: %1").arg(e.text);
+        const int dg = m_toDiscard.takeFirst();
+        const QVector<int> gs = dg == 0 ? m_groups : QVector<int>{dg}; // 0: all of them
+        for (int g : gs) {
+          GroupResult &r = entry(g);
+          r.state = ok ? GroupResult::Discarded : GroupResult::NotSent;
+          r.text = ok ? QStringLiteral("not applied, discarded; the vehicle keeps its values")
+                      : QStringLiteral("not applied, and the discard failed: %1").arg(e.text);
+        }
       }
       discardNext();
       break;
@@ -231,14 +240,15 @@ void ParamApplier::process() {
 
 void ParamApplier::startCommit() {
   m_phase = Phase::Committing;
-  if (m_groups.isEmpty()) { // only live values: applied at once, nothing to commit
+  if (m_groups.isEmpty() && !(m_groupZero && m_liveCount > 0)) {
+    // only live values and per-group commits: applied at once, nothing to commit
     finish(true, false, QString());
     return;
   }
   if (m_groupZero) {
     QString why;
     if (!m_svc->commit(0, &why, true)) {
-      m_toDiscard = m_groups;
+      m_toDiscard = {0};
       fail(QStringLiteral("the commit was not sent (%1)").arg(why));
     }
     return;
@@ -263,7 +273,7 @@ void ParamApplier::startDiscard() {
   if (m_phase != Phase::Discarding) {
     m_phase = Phase::Discarding;
     if (m_toDiscard.isEmpty()) // a failure while setting: everything touched is staged
-      m_toDiscard = m_groups;
+      m_toDiscard = m_groupZero ? QVector<int>{0} : m_groups;
   }
   discardNext();
 }
@@ -273,9 +283,12 @@ void ParamApplier::discardNext() {
     QString why;
     if (m_svc->discard(m_toDiscard.first(), &why, true))
       return; // the answer arrives as an event
-    GroupResult &r = entry(m_toDiscard.takeFirst()); // nothing staged to discard
-    r.state = GroupResult::NotSent;
-    r.text = QStringLiteral("not applied (%1)").arg(why);
+    const int dg = m_toDiscard.takeFirst(); // nothing staged to discard
+    for (int g : (dg == 0 ? m_groups : QVector<int>{dg})) {
+      GroupResult &r = entry(g);
+      r.state = GroupResult::NotSent;
+      r.text = QStringLiteral("not applied (%1)").arg(why);
+    }
   }
   finish(false, false, m_failure);
 }
@@ -296,7 +309,8 @@ void ParamApplier::finish(bool ok, bool unknown, const QString &text) {
   if (ok) {
     r.text = QStringLiteral("applied %1 value(s)").arg(m_count);
     if (m_liveCount)
-      r.text += QStringLiteral(", %1 of them live and not yet saved").arg(m_liveCount);
+      r.text += m_groupZero ? QStringLiteral(", %1 of them live and saved").arg(m_liveCount)
+                            : QStringLiteral(", %1 of them live and not saved").arg(m_liveCount);
   } else {
     r.text = text.isEmpty() ? m_failure : text;
     QStringList lines;

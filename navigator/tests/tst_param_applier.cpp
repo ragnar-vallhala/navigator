@@ -156,6 +156,9 @@ class TstParamApplier : public QObject {
 private slots:
   void everyGroupIsStagedCommittedAndReportedOnce();
   void oneGroupZeroCommitByDefault();
+  void liveValuesAreSavedByTheGroupZeroCommit();
+  void aFailedGroupZeroCommitIsOneDiscard();
+  void destroyingItMidApplyUnlocksTheService();
   void staleStagedValuesMakeItRefuse();
   void oneBadValueSendsNothing();
   void armedRefusesBeforeAnythingIsSent();
@@ -206,6 +209,53 @@ void TstParamApplier::oneGroupZeroCommitByDefault() {
   QCOMPARE(done.r.size(), 1);
   QVERIFY2(done.r[0].ok, qPrintable(done.r[0].text));
   QCOMPARE(r.fc.commits, 1);
+}
+
+void TstParamApplier::liveValuesAreSavedByTheGroupZeroCommit() {
+  Rig r;
+  r.up();
+  APPLIER(r, ap, done);
+  QVERIFY(ap.apply({{"A_LIVE", 2}})); // only a live value
+  r.run(1500);
+  QCOMPARE(done.r.size(), 1);
+  QVERIFY2(done.r[0].ok, qPrintable(done.r[0].text));
+  QCOMPARE(r.fc.commits, 1); // commit 0 saves it
+  QVERIFY(done.r[0].text.contains(QLatin1String("live and saved")));
+  r.fc.commits = 0;
+  APPLIER(r, ap2, done2);
+  ap2.setGroupZeroCommit(false); // per group: nothing to commit, and it says so
+  QVERIFY(ap2.apply({{"A_LIVE", 3}}));
+  r.run(800);
+  QCOMPARE(done2.r.size(), 1);
+  QCOMPARE(r.fc.commits, 0);
+  QVERIFY(done2.r[0].text.contains(QLatin1String("not saved")));
+}
+
+void TstParamApplier::aFailedGroupZeroCommitIsOneDiscard() {
+  Rig r;
+  r.up();
+  APPLIER(r, ap, done);
+  r.fc.saveFails = true;
+  QVERIFY(ap.apply({{"G1_X", 4}, {"L2_Z", 6}}));
+  r.run(3000);
+  QCOMPARE(done.r.size(), 1);
+  QVERIFY(!done.r[0].ok);
+  QCOMPARE(r.fc.discards, 1); // one discard of group 0, not one per group
+  QCOMPARE(done.r[0].groups.size(), 2);
+  for (const auto &g : done.r[0].groups)
+    QCOMPARE(g.state, ParamApplier::GroupResult::Discarded);
+}
+
+void TstParamApplier::destroyingItMidApplyUnlocksTheService() {
+  Rig r;
+  r.up();
+  r.fc.holdAcks = true;
+  {
+    ParamApplier ap(&r.svc);
+    QVERIFY(ap.apply({{"G1_X", 4}}));
+    QVERIFY(r.svc.locked());
+  }
+  QVERIFY(!r.svc.locked());
 }
 
 void TstParamApplier::staleStagedValuesMakeItRefuse() {

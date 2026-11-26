@@ -42,8 +42,9 @@ namespace params {
 //    the result then lists every group and never claims more.
 //  - Values staged earlier (by the panel) that this would also commit make it
 //    refuse: commit or discard them first.
-//  - Values of group 0 apply at once and are not committed here (they are
-//    reported as applied, unsaved).
+//  - Values of group 0 apply at once. With the group-0 commit (the default) they
+//    are saved with it, even when they are all there is; with per-group commits
+//    they are not committed here and the result says "not saved".
 class ParamApplier : public QObject {
   Q_OBJECT
 public:
@@ -65,6 +66,7 @@ public:
   static constexpr int kWindow = 4; // sets in flight at once
 
   explicit ParamApplier(ParamService *svc, QObject *parent = nullptr);
+  ~ParamApplier() override; // never leaves the service locked
 
   void setGroupZeroCommit(bool on) { m_groupZero = on; }
   bool groupZeroCommit() const { return m_groupZero; }
