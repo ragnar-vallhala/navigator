@@ -31,6 +31,10 @@
 #include <mutex>
 #include <vector>
 
+namespace vsim::procgen {
+struct ColliderWindow;
+}
+
 namespace vsim {
 
 // Snapshot of "what the renderer needs to draw the drone". Decoded from
@@ -159,6 +163,35 @@ public:
   // (VSIM_CTL_CLEAR_OBSTACLES / VSIM_CTL_ADD_OBSTACLE).
   void sendObstacles(const QVector<Obstacle> &obs);
 
+  // Replace the engine's environment-cylinder set (trunks) with `w`: ENV_BEGIN,
+  // every ENV_ADD (12 per frame) and ENV_COMMIT run as ONE queued op between
+  // two steps, so the engine never holds a half-built set. An empty window is
+  // ENV_CLEAR. A window that was cut at the engine's cap (w.dropped > 0) is
+  // logged with the count. The user obstacles of sendObstacles are separate
+  // and untouched. Without ENV support in the SDK this was built against
+  // (envCollidersAvailable()) it logs a warning once and sends nothing.
+  void sendTreeColliders(const procgen::ColliderWindow &w);
+
+  // Test seam: while set, every window handed to sendTreeColliders is also
+  // given to `sink` (empty cylinders = a clear), before the SDK gate, so a test
+  // sees what the GUI asked to send on an SDK without ENV too. GUI thread only.
+  static void setTreeColliderSinkForTest(
+      std::function<void(const procgen::ColliderWindow &)> sink);
+
+  // True when this build can send the environment cylinders: the SDK headers
+  // it compiled against carry the generic ctl entry (ABI >= 5) and the ENV
+  // messages (VSIM_ENV_CAP). The module is loaded for exactly that ABI
+  // (SitlModule), so a loaded module has the entry. The engine offers no query
+  // for ENV itself, so this is a compile-time fact about the headers.
+  static bool envCollidersAvailable();
+
+  // The ctl sequences sendTreeColliders queues, run on the engine's thread.
+  // Return false (and send nothing) when envCollidersAvailable() is false.
+  static bool applyEnvSet(const vayu_sitl_api_t *api,
+                          const std::vector<std::vector<uint8_t>> &adds,
+                          const std::vector<uint8_t> &commit);
+  static bool applyEnvClear(const vayu_sitl_api_t *api);
+
   // Set sim loop rates (VSIM_CTL_SET_RATES). imuHz = firmware loop rate;
   // physicsHz/imuHz RK4 substeps run per sample; poseHz = render rate.
   void sendRates(int imuHz, int physicsHz, int poseHz);
@@ -203,6 +236,7 @@ private:
   QString vsim_bin_; // retained, unused (engine is in-process)
   vayu_sitl_telemetry_fn telemetry_cb_ = nullptr;
   void *telemetry_user_ = nullptr;
+  bool env_unsupported_logged_ = false;
   bool attach_only_ = false; // read an existing pose FIFO, don't run engine
   QString attach_pose_path_; // pose FIFO to attach to in attach-only mode
 

@@ -795,6 +795,7 @@ void SimulatorWidget::updateHud(const vsim::SimSnapshot &s) {
   if (crashed && !m_crashLogged)
     appendLog("sim", vsim::crash::bannerText(s.crash_flags, s.peak_impact));
   m_crashLogged = crashed;
+  updateTreeColliders(false);
   if (m_hud)
     m_hud->setSnapshot(s);
   if (m_horizon) {
@@ -963,6 +964,8 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
     ++m_streamGen;
     m_chunkQueue->reset(m_streamGen);
     m_chunkCache.clear();
+    m_chunkColliders.clear();
+    ++m_colliderRev;
     m_floraCache.clear();
     m_floraShown.clear();
     m_floraInflight.clear();
@@ -1145,6 +1148,8 @@ void SimulatorWidget::onStreamTick() {
       m_downRenderer->removeChunkFlora(key);
     }
     m_chunkCache.erase(key);
+    if (m_chunkColliders.erase(key))
+      ++m_colliderRev;
     m_floraCache.erase(key);
     m_floraShown.erase(key);
     m_floraInflight.erase(key);
@@ -1286,6 +1291,8 @@ void SimulatorWidget::releaseStreamedWorld() {
   if (m_downRenderer)
     m_downRenderer->setTerrainField(nullptr);
   m_chunkCache.clear();
+  m_chunkColliders.clear();
+  ++m_colliderRev;
   m_floraCache.clear();
   m_floraShown.clear();
   m_floraInflight.clear();
@@ -1331,6 +1338,8 @@ void SimulatorWidget::onChunkMeshed(qint64 key, const BuiltChunk &built) {
     const float vx = (vsim::ChunkStreamer::cxOf(key) + 0.5f) * cm;
     const float vy = (vsim::ChunkStreamer::cyOf(key) + 0.5f) * cm;
     m_renderer->setChunkVegetation(key, built.veg, vx, vy, cm * 0.5f);
+    m_chunkColliders[key] = vsim::procgen::vegetationColliders(built.veg);
+    ++m_colliderRev;
     if (m_downRenderer)
       m_downRenderer->setChunkVegetation(key, built.veg, vx, vy, cm * 0.5f);
   }
@@ -2020,6 +2029,44 @@ void SimulatorWidget::applyVegetationTrees() {
   for (vsim::SimRendererWidget *r : {m_renderer, m_downRenderer})
     if (r)
       r->setVegetationTreesEnabled(on);
+  updateTreeColliders(false); // off sends the clear, on rebuilds the window
+}
+
+void SimulatorWidget::updateTreeColliders(bool force) {
+  if (!m_sim || !m_renderer)
+    return;
+  using namespace vsim::procgen;
+  // Trunks collide only while they are drawn: the Trees switch and the
+  // vegetation switch (without it no chunk has instances).
+  const bool trees =
+      m_renderer->vegetationTreesEnabled() && m_renderer->vegetationEnabled();
+  ColliderBuildKey now;
+  now.valid = true;
+  now.trees = trees;
+  now.rocks = false;
+  const auto &sc = m_chunkStreamer.config();
+  now.seed = quint32(sc.field.seed);
+  now.palette = quint32(sc.field.palette);
+  now.streamGen = quint32(m_streamGen);
+  now.rev = m_colliderRev;
+  // With Trees off nothing depends on where the drone is: no resend on a move.
+  now.x = trees ? m_lastDronePos.x() : 0.0f;
+  now.y = trees ? m_lastDronePos.y() : 0.0f;
+  if (!force && !colliderWindowNeedsRebuild(m_colliderBuilt, now))
+    return;
+  ColliderWindow w;
+  if (trees) {
+    std::vector<VegCollider> all;
+    for (const auto &kv : m_chunkColliders)
+      all.insert(all.end(), kv.second.begin(), kv.second.end());
+    ColliderOptions o;
+    o.trees = true;
+    const float speed = std::hypot(m_lastDroneVel.x(), m_lastDroneVel.y());
+    w = treeColliderWindow(all, PgVec3{m_lastDronePos.x(), m_lastDronePos.y(), m_lastDronePos.z()},
+                           speed, o);
+  }
+  m_sim->sendTreeColliders(w);
+  m_colliderBuilt = now;
 }
 
 void SimulatorWidget::applySurveyGrid() {
@@ -2425,6 +2472,7 @@ void SimulatorWidget::startInAppSim() {
     m_sim->sendGeometry(cfg); // in-process physics motor layout
     m_sim->sendWorld(m_worldEditor->config());
     m_sim->sendObstacles(m_worldEditor->config().obstacles);
+    updateTreeColliders(true); // trunks of the loaded chunks, or a clear
     m_sim->sendWind(m_worldEditor->windConfig()); // restore wind across restart
     pushNoise();  // apply the configured sensor models (σ / enable)
     pushFaults(); // re-assert any latched faults across the restart

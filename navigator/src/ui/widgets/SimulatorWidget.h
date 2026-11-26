@@ -27,6 +27,7 @@
 #include "vsim/ChunkWorkQueue.h"
 #include "vsim/procgen/Flora.h"
 #include "vsim/procgen/Vegetation.h"
+#include "vsim/procgen/TreeColliderWindow.h"
 #include "vsim/RcBridge.h"
 #include "vsim/FlightEventLog.h"
 #include "GeometryEditorWidget.h"
@@ -316,6 +317,11 @@ private:
   void applyWaterQuality();   // persisted/env water quality → the 3D views
   void applyVegetationTrees(); // persisted/env trees on/off → the 3D views
   void applySurveyGrid();      // persisted survey grid on/off → the 3D views
+  // The trunks near the drone as the engine's environment cylinders. Cheap to
+  // call per pose: it rebuilds and sends only when colliderWindowNeedsRebuild
+  // says so (drone moved a quarter of the margin, Trees flag or world change),
+  // or `force`. No-op while the engine is not running; Trees off sends a clear.
+  void updateTreeColliders(bool force);
   // Load the configured world mesh (baking up-axis/scale into NED) and push
   // it to the renderer; empty path clears it. When the sim is running, also
   // builds the collision BVH and ships it to the daemon (sendWorldMeshToSim).
@@ -527,6 +533,12 @@ private:
   void drainChunkResults(); // finished chunks -> renderer (GUI thread)
   void startChunkRunners(); // wake pulling workers while work is queued
   void releaseStreamedWorld(); // stop streaming, drop chunks, flora, caches
+  // Trunk colliders of the streamed chunks (same keys as m_chunkCache), the
+  // revision that changes whenever that set does, and what the engine holds.
+  std::unordered_map<qint64, std::vector<vsim::procgen::VegCollider>>
+      m_chunkColliders;
+  quint32 m_colliderRev = 0;
+  vsim::procgen::ColliderBuildKey m_colliderBuilt;
   bool m_collisionPending = false; // a crossing asked for a collision rebuild
   int m_colCx = 0, m_colCy = 0;    // cell that collision should cover
   // Async collision ship: generation counter shared with the worker (bumped by

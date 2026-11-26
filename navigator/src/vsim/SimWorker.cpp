@@ -17,6 +17,7 @@
 #include "SimWorker.h"
 
 #include "CrashStatus.h"
+#include "procgen/TreeColliderWindow.h"
 #include "SitlModule.h" // runtime-loaded SITL engine (boot/run_step/get_pose/config)
 #include "vsim_proto.h"
 
@@ -24,6 +25,8 @@
 
 #include <cerrno>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -36,6 +39,7 @@ namespace {
 // pointer read, and it keeps the enqueue sites free of loader plumbing.
 // Only ever dereferenced on paths runEngine() has already gated on
 // SitlModule::available().
+std::function<void(const vsim::procgen::ColliderWindow &)> g_treeSink; // test seam
 inline const vayu_sitl_api_t *sitl() { return SitlModule::instance().api(); }
 } // namespace
 
@@ -229,6 +233,112 @@ void SimWorker::sendObstacles(const QVector<Obstacle> &obs) {
     enqueue([b] { sitl()->add_obstacle(&b); });
   }
   emit logLine(QString("rtos engine: %1 obstacles pushed").arg(obs.size()));
+}
+
+#if VAYU_SITL_ABI_VERSION >= 5 && defined(VSIM_ENV_CAP)
+// The local ENV constants and wire sizes (TreeColliderWindow.h/.cpp) against the
+// SDK's own, wherever the SDK has them: a change on the engine side stops this
+// build instead of silently sending frames the engine drops.
+static_assert(vsim::procgen::kEnvBegin == std::uint32_t(VSIM_CTL_ENV_BEGIN),
+              "ENV_BEGIN subtype differs from the SDK's");
+static_assert(vsim::procgen::kEnvAdd == std::uint32_t(VSIM_CTL_ENV_ADD),
+              "ENV_ADD subtype differs from the SDK's");
+static_assert(vsim::procgen::kEnvCommit == std::uint32_t(VSIM_CTL_ENV_COMMIT),
+              "ENV_COMMIT subtype differs from the SDK's");
+static_assert(vsim::procgen::kEnvClear == std::uint32_t(VSIM_CTL_ENV_CLEAR),
+              "ENV_CLEAR subtype differs from the SDK's");
+static_assert(vsim::procgen::kEnvAddMax == VSIM_ENV_ADD_MAX,
+              "cylinders per ENV_ADD differ from the SDK's");
+static_assert(vsim::procgen::kEnvCap == VSIM_ENV_CAP,
+              "ENV cap differs from the SDK's");
+static_assert(sizeof(vsim_env_cyl_t) == 5 * sizeof(float) &&
+                  offsetof(vsim_env_cyl_t, z) == 2 * sizeof(float) &&
+                  offsetof(vsim_env_cyl_t, radius) == 3 * sizeof(float) &&
+                  offsetof(vsim_env_cyl_t, height) == 4 * sizeof(float),
+              "vsim_env_cyl_t is not x, y, z, radius, height as floats");
+static_assert(sizeof(std::uint32_t) + vsim::procgen::kEnvAddMax * sizeof(vsim_env_cyl_t) ==
+                  sizeof(vsim_ctl_env_add_t),
+              "ENV_ADD wire size (4 + 20 n, n up to 12) differs from the SDK's");
+static_assert(sizeof(float) == sizeof(vsim_ctl_env_commit_t),
+              "ENV_COMMIT body is not one float");
+#endif
+
+bool SimWorker::envCollidersAvailable() {
+#if VAYU_SITL_ABI_VERSION >= 5 && defined(VSIM_ENV_CAP)
+  return true;
+#else
+  return false;
+#endif
+}
+
+bool SimWorker::applyEnvSet(const vayu_sitl_api_t *api,
+                            const std::vector<std::vector<uint8_t>> &adds,
+                            const std::vector<uint8_t> &commit) {
+#if VAYU_SITL_ABI_VERSION >= 5 && defined(VSIM_ENV_CAP)
+  if (!api || !api->ctl)
+    return false;
+  using namespace vsim::procgen;
+  api->ctl(kEnvBegin, nullptr, 0);
+  for (const auto &m : adds)
+    api->ctl(kEnvAdd, m.data(), m.size());
+  api->ctl(kEnvCommit, commit.data(), commit.size());
+  return true;
+#else
+  (void)api;
+  (void)adds;
+  (void)commit;
+  return false;
+#endif
+}
+
+bool SimWorker::applyEnvClear(const vayu_sitl_api_t *api) {
+#if VAYU_SITL_ABI_VERSION >= 5 && defined(VSIM_ENV_CAP)
+  if (!api || !api->ctl)
+    return false;
+  api->ctl(vsim::procgen::kEnvClear, nullptr, 0);
+  return true;
+#else
+  (void)api;
+  return false;
+#endif
+}
+
+void SimWorker::setTreeColliderSinkForTest(
+    std::function<void(const procgen::ColliderWindow &)> sink) {
+  g_treeSink = std::move(sink);
+}
+
+void SimWorker::sendTreeColliders(const procgen::ColliderWindow &w) {
+  if (g_treeSink)
+    g_treeSink(w);
+  if (!envCollidersAvailable()) {
+    if (!env_unsupported_logged_) {
+      env_unsupported_logged_ = true;
+      qWarning("tree colliders disabled: the engine SDK this Navigator was built "
+               "against has no environment cylinders (needs ABI >= 5 with ENV); "
+               "trees will not collide");
+      emit logLine("rtos engine: tree colliders disabled (SDK has no ENV support)");
+    }
+    return;
+  }
+  if (w.dropped > 0) {
+    qWarning("tree colliders: %zu trunks over the engine cap of %zu were left out "
+             "(the nearest %zu are sent)",
+             w.dropped, procgen::kEnvCap, w.cylinders.size());
+    emit logLine(QString("rtos engine: WARNING: %1 tree colliders over the cap of %2 "
+                         "left out (farthest first)")
+                     .arg(w.dropped)
+                     .arg(procgen::kEnvCap));
+  }
+  if (w.cylinders.empty()) {
+    enqueue([] { applyEnvClear(sitl()); });
+    return;
+  }
+  auto adds = procgen::encodeEnvAdds(w.cylinders);
+  auto commit = procgen::encodeEnvCommit();
+  enqueue([adds = std::move(adds), commit = std::move(commit)] {
+    applyEnvSet(sitl(), adds, commit);
+  });
 }
 
 void SimWorker::sendRates(int imuHz, int physicsHz, int poseHz) {

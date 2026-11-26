@@ -262,6 +262,7 @@ set(GCS_SITL_SOURCES
     src/vsim/procgen/WaterField.cpp
     src/vsim/procgen/GroundCover.cpp
     src/vsim/procgen/Vegetation.cpp
+    src/vsim/procgen/TreeColliderWindow.cpp
     src/vsim/VegetationRenderer.cpp
     src/vsim/WaterRenderer.cpp
     src/vsim/WaterRipples.cpp
