@@ -73,6 +73,9 @@ private slots:
   void resetBodyCarriesPoseAndSeed();
   void baroErrBodyAcceptsTheEnginesRangeAndRefusesTheRest();
   void sendBaroErrSendsExactlyOneBodyOrNothing();
+  void gpsBodyAcceptsTheEnginesRangeAndRefusesTheRest();
+  void gpsGlitchBodyAcceptsTheEnginesRangeAndRefusesTheRest();
+  void sendGpsAndGlitchSendExactlyOneBodyOrNothing();
   void seedResolution();
   void engineRunsWithRcFromTheBridge();
 };
@@ -159,6 +162,213 @@ void TstSitlEngine::sendBaroErrSendsExactlyOneBodyOrNothing() {
   c.noisePa = 501.0f;
   QVERIFY(!w.sendBaroErr(c));
   QCOMPARE(seen.size(), size_t(1));
+  vsim::SimWorker::setCtlSinkForTest(nullptr);
+}
+
+void TstSitlEngine::gpsBodyAcceptsTheEnginesRangeAndRefusesTheRest() {
+  vsim::GpsConfig c;
+  c.enabled = true;
+  c.rateHz = 5.0f;
+  c.posNoiseM = 1.5f;
+  c.velNoiseMps = 0.2f;
+  c.lagMs = 250.0f;
+  c.sats = 9;
+  vsim_ctl_gps_t b{};
+  QString why;
+  QVERIFY(vsim::SimWorker::gpsBody(c, b, &why));
+  QCOMPARE(b.enable, 1);
+  QCOMPARE(b.rate_hz, 5.0f);
+  QCOMPARE(b.pos_noise_m, 1.5f);
+  QCOMPARE(b.vel_noise_mps, 0.2f);
+  QCOMPARE(b.lag_ms, 250.0f);
+  QCOMPARE(b.sats, 9u);
+  // The default config is a valid receiver once enabled, and both ends of every
+  // limit are in range.
+  vsim::GpsConfig def;
+  def.enabled = true;
+  QVERIFY(vsim::SimWorker::gpsBody(def, b));
+  vsim::GpsConfig lo = def, hi = def;
+  lo.rateHz = 1.0f;
+  lo.sats = 4;
+  hi.rateHz = 50.0f;
+  hi.posNoiseM = 50.0f;
+  hi.velNoiseMps = 5.0f;
+  hi.lagMs = 1000.0f;
+  hi.sats = 32;
+  QVERIFY(vsim::SimWorker::gpsBody(lo, b));
+  QVERIFY(vsim::SimWorker::gpsBody(hi, b));
+  // Disabled is the engine's "off": an all-zero body, whatever the other fields
+  // hold, even values that would be refused if enabled.
+  vsim::GpsConfig off;
+  off.rateHz = 9999.0f;
+  off.sats = 1;
+  b.enable = 5;
+  QVERIFY(vsim::SimWorker::gpsBody(off, b));
+  QCOMPARE(b.enable, 0);
+  QCOMPARE(b.rate_hz, 0.0f);
+  QCOMPARE(b.sats, 0u);
+  // Just outside each limit, and a NaN in each float: refused, output untouched.
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const float inf = std::numeric_limits<float>::infinity();
+  std::vector<vsim::GpsConfig> bads;
+  auto with = [&](auto set) {
+    vsim::GpsConfig x = def;
+    set(x);
+    bads.push_back(x);
+  };
+  with([](vsim::GpsConfig &x) { x.rateHz = 0.9f; });
+  with([](vsim::GpsConfig &x) { x.rateHz = 50.1f; });
+  with([](vsim::GpsConfig &x) { x.rateHz = 0.0f; });
+  with([&](vsim::GpsConfig &x) { x.rateHz = nan; });
+  with([](vsim::GpsConfig &x) { x.posNoiseM = 50.1f; });
+  with([](vsim::GpsConfig &x) { x.posNoiseM = -0.1f; });
+  with([&](vsim::GpsConfig &x) { x.posNoiseM = nan; });
+  with([](vsim::GpsConfig &x) { x.velNoiseMps = 5.1f; });
+  with([](vsim::GpsConfig &x) { x.velNoiseMps = -0.1f; });
+  with([&](vsim::GpsConfig &x) { x.velNoiseMps = inf; });
+  with([](vsim::GpsConfig &x) { x.lagMs = 1000.1f; });
+  with([](vsim::GpsConfig &x) { x.lagMs = -1.0f; });
+  with([&](vsim::GpsConfig &x) { x.lagMs = nan; });
+  with([](vsim::GpsConfig &x) { x.sats = 3; });
+  with([](vsim::GpsConfig &x) { x.sats = 33; });
+  with([](vsim::GpsConfig &x) { x.sats = -1; });
+  vsim_ctl_gps_t keep{};
+  keep.sats = 7u;
+  for (const vsim::GpsConfig &bad : bads) {
+    vsim_ctl_gps_t o = keep;
+    why.clear();
+    QVERIFY(!vsim::SimWorker::gpsBody(bad, o, &why));
+    QVERIFY(!why.isEmpty());
+    QCOMPARE(o.sats, 7u);
+  }
+}
+
+void TstSitlEngine::gpsGlitchBodyAcceptsTheEnginesRangeAndRefusesTheRest() {
+  using vsim::GpsGlitchMode;
+  vsim::GpsGlitchConfig c;
+  c.mode = GpsGlitchMode::Offset;
+  c.offsetN = 30.0f;
+  c.offsetE = -40.0f;
+  c.offsetD = 5.0f;
+  c.durationS = 12.0f;
+  vsim_ctl_gps_glitch_t b{};
+  QString why;
+  QVERIFY(vsim::SimWorker::gpsGlitchBody(c, b, &why));
+  QCOMPARE(b.mode, 1);
+  QCOMPARE(b.offset_ned[0], 30.0f);
+  QCOMPARE(b.offset_ned[1], -40.0f);
+  QCOMPARE(b.offset_ned[2], 5.0f);
+  QCOMPARE(b.duration_s, 12.0f);
+  // Dropout and freeze carry no offset of their own; every mode is accepted and
+  // the limits themselves are in range.
+  for (GpsGlitchMode m :
+       {GpsGlitchMode::Dropout, GpsGlitchMode::Freeze, GpsGlitchMode::Offset}) {
+    vsim::GpsGlitchConfig x;
+    x.mode = m;
+    x.durationS = 3600.0f;
+    x.offsetN = 100000.0f;
+    QVERIFY(vsim::SimWorker::gpsGlitchBody(x, b));
+    QCOMPARE(b.mode, static_cast<int>(m));
+  }
+  // The engine checks each axis, so a vector longer than 100000 m is accepted
+  // while every axis is within it.
+  {
+    vsim::GpsGlitchConfig x;
+    x.mode = GpsGlitchMode::Offset;
+    x.durationS = 10.0f;
+    x.offsetN = 60000.0f;
+    x.offsetE = 60000.0f;
+    x.offsetD = -100000.0f;
+    QVERIFY(vsim::SimWorker::gpsGlitchBody(x, b));
+    QCOMPARE(b.offset_ned[1], 60000.0f);
+  }
+  // None clears: all-zero body, and the other fields are not looked at.
+  vsim::GpsGlitchConfig none;
+  none.offsetN = std::numeric_limits<float>::quiet_NaN();
+  none.durationS = 99999.0f;
+  b.mode = 3;
+  QVERIFY(vsim::SimWorker::gpsGlitchBody(none, b));
+  QCOMPARE(b.mode, 0);
+  QCOMPARE(b.duration_s, 0.0f);
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const float inf = std::numeric_limits<float>::infinity();
+  std::vector<vsim::GpsGlitchConfig> bads;
+  auto with = [&](auto set) {
+    vsim::GpsGlitchConfig x;
+    x.mode = GpsGlitchMode::Offset;
+    set(x);
+    bads.push_back(x);
+  };
+  with([](vsim::GpsGlitchConfig &x) { x.durationS = 3600.1f; });
+  with([](vsim::GpsGlitchConfig &x) { x.durationS = -1.0f; });
+  with([&](vsim::GpsGlitchConfig &x) { x.durationS = nan; });
+  with([](vsim::GpsGlitchConfig &x) { x.offsetN = 100000.1f; });
+  with([](vsim::GpsGlitchConfig &x) { x.offsetE = -100001.0f; });
+  with([](vsim::GpsGlitchConfig &x) { x.offsetD = 100001.0f; });
+  with([&](vsim::GpsGlitchConfig &x) { x.offsetN = nan; });
+  with([&](vsim::GpsGlitchConfig &x) { x.offsetD = inf; });
+  with([](vsim::GpsGlitchConfig &x) { x.mode = static_cast<GpsGlitchMode>(4); });
+  with([](vsim::GpsGlitchConfig &x) { x.mode = static_cast<GpsGlitchMode>(-1); });
+  vsim_ctl_gps_glitch_t keep{};
+  keep.mode = 2;
+  for (const vsim::GpsGlitchConfig &bad : bads) {
+    vsim_ctl_gps_glitch_t o = keep;
+    why.clear();
+    QVERIFY(!vsim::SimWorker::gpsGlitchBody(bad, o, &why));
+    QVERIFY(!why.isEmpty());
+    QCOMPARE(o.mode, 2);
+  }
+}
+
+void TstSitlEngine::sendGpsAndGlitchSendExactlyOneBodyOrNothing() {
+  struct Seen {
+    uint32_t subtype;
+    std::vector<unsigned char> body;
+  };
+  std::vector<Seen> seen;
+  vsim::SimWorker::setCtlSinkForTest(
+      [&](uint32_t t, const void *p, size_t n) {
+        const auto *b = static_cast<const unsigned char *>(p);
+        seen.push_back({t, std::vector<unsigned char>(b, b + n)});
+      });
+  vsim::SimWorker w;
+  vsim::GpsConfig c;
+  c.enabled = true;
+  c.rateHz = 4.0f;
+  c.lagMs = 300.0f;
+  QVERIFY(w.sendGps(c));
+  QCOMPARE(seen.size(), size_t(1));
+  QCOMPARE(seen[0].subtype, uint32_t(VSIM_CTL_SET_GPS));
+  QCOMPARE(seen[0].body.size(), sizeof(vsim_ctl_gps_t));
+  vsim_ctl_gps_t g{};
+  std::memcpy(&g, seen[0].body.data(), sizeof g);
+  QCOMPARE(g.enable, 1);
+  QCOMPARE(g.rate_hz, 4.0f);
+  QCOMPARE(g.lag_ms, 300.0f);
+  // A setting the engine would drop reaches nothing.
+  c.rateHz = 51.0f;
+  QVERIFY(!w.sendGps(c));
+  QCOMPARE(seen.size(), size_t(1));
+  // Turning it off still sends one (all-zero) body.
+  QVERIFY(w.sendGps(vsim::GpsConfig{}));
+  QCOMPARE(seen.size(), size_t(2));
+  std::memcpy(&g, seen[1].body.data(), sizeof g);
+  QCOMPARE(g.enable, 0);
+  // The glitch: one body, the right opcode, refused when out of range.
+  vsim::GpsGlitchConfig gl;
+  gl.mode = vsim::GpsGlitchMode::Dropout;
+  gl.durationS = 8.0f;
+  QVERIFY(w.sendGpsGlitch(gl));
+  QCOMPARE(seen.size(), size_t(3));
+  QCOMPARE(seen[2].subtype, uint32_t(VSIM_CTL_SET_GPS_GLITCH));
+  QCOMPARE(seen[2].body.size(), sizeof(vsim_ctl_gps_glitch_t));
+  vsim_ctl_gps_glitch_t gg{};
+  std::memcpy(&gg, seen[2].body.data(), sizeof gg);
+  QCOMPARE(gg.mode, 2);
+  QCOMPARE(gg.duration_s, 8.0f);
+  gl.durationS = 3601.0f;
+  QVERIFY(!w.sendGpsGlitch(gl));
+  QCOMPARE(seen.size(), size_t(3));
   vsim::SimWorker::setCtlSinkForTest(nullptr);
 }
 
