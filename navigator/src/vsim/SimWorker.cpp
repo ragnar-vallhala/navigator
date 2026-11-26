@@ -249,6 +249,105 @@ bool SimWorker::sendBaroErr(const BaroErrConfig &c) {
   return true;
 }
 
+bool SimWorker::gpsBody(const GpsConfig &c, vsim_ctl_gps_t &out, QString *why) {
+  auto bad = [&](const char *field) {
+    if (why)
+      *why = QString::fromLatin1(field);
+    return false;
+  };
+  vsim_ctl_gps_t b{};
+  if (c.enabled) {
+    // Same bounds as the engine (vsim_proto.h, VSIM_CTL_SET_GPS), written as "in
+    // range" so a NaN fails every test and is refused.
+    if (!(c.rateHz >= 1.0f && c.rateHz <= 50.0f))
+      return bad("rate_hz (1 to 50 Hz)");
+    if (!(c.posNoiseM >= 0.0f && c.posNoiseM <= 50.0f))
+      return bad("pos_noise_m (0 to 50 m)");
+    if (!(c.velNoiseMps >= 0.0f && c.velNoiseMps <= 5.0f))
+      return bad("vel_noise_mps (0 to 5 m/s)");
+    if (!(c.lagMs >= 0.0f && c.lagMs <= 1000.0f))
+      return bad("lag_ms (0 to 1000 ms)");
+    if (!(c.sats >= 4 && c.sats <= 32))
+      return bad("sats (4 to 32)");
+    b.enable = 1;
+    b.rate_hz = c.rateHz;
+    b.pos_noise_m = c.posNoiseM;
+    b.vel_noise_mps = c.velNoiseMps;
+    b.lag_ms = c.lagMs;
+    b.sats = static_cast<uint32_t>(c.sats);
+  }
+  out = b;
+  return true;
+}
+
+bool SimWorker::gpsGlitchBody(const GpsGlitchConfig &c,
+                              vsim_ctl_gps_glitch_t &out, QString *why) {
+  auto bad = [&](const char *field) {
+    if (why)
+      *why = QString::fromLatin1(field);
+    return false;
+  };
+  const int mode = static_cast<int>(c.mode);
+  if (mode < 0 || mode > 3)
+    return bad("mode (0 to 3)");
+  vsim_ctl_gps_glitch_t b{};
+  if (mode != 0) {
+    if (!(c.durationS >= 0.0f && c.durationS <= 3600.0f))
+      return bad("duration_s (0 to 3600 s)");
+    // Checked in double so the squares cannot overflow a float; a NaN or an
+    // infinity fails the comparison.
+    const double n = c.offsetN, e = c.offsetE, d = c.offsetD;
+    const double len2 = n * n + e * e + d * d;
+    if (!(len2 <= 100000.0 * 100000.0))
+      return bad("offset (length within 100000 m)");
+    b.mode = mode;
+    b.offset_ned[0] = c.offsetN;
+    b.offset_ned[1] = c.offsetE;
+    b.offset_ned[2] = c.offsetD;
+    b.duration_s = c.durationS;
+  }
+  out = b;
+  return true;
+}
+
+bool SimWorker::sendGps(const GpsConfig &c) {
+  vsim_ctl_gps_t body{};
+  QString why;
+  if (!gpsBody(c, body, &why)) {
+    emit logLine(QStringLiteral("rtos engine: GPS NOT sent: %1 out of range")
+                     .arg(why));
+    return false;
+  }
+  if (g_ctlSink)
+    g_ctlSink(VSIM_CTL_SET_GPS, &body, sizeof body);
+  enqueue([body] {
+    if (const vayu_sitl_api_t *api = sitl(); api && api->ctl)
+      api->ctl(VSIM_CTL_SET_GPS, &body, sizeof body);
+  });
+  emit logLine(c.enabled ? "rtos engine: GPS receiver pushed"
+                         : "rtos engine: GPS receiver off pushed");
+  return true;
+}
+
+bool SimWorker::sendGpsGlitch(const GpsGlitchConfig &c) {
+  vsim_ctl_gps_glitch_t body{};
+  QString why;
+  if (!gpsGlitchBody(c, body, &why)) {
+    emit logLine(
+        QStringLiteral("rtos engine: GPS glitch NOT sent: %1 out of range")
+            .arg(why));
+    return false;
+  }
+  if (g_ctlSink)
+    g_ctlSink(VSIM_CTL_SET_GPS_GLITCH, &body, sizeof body);
+  enqueue([body] {
+    if (const vayu_sitl_api_t *api = sitl(); api && api->ctl)
+      api->ctl(VSIM_CTL_SET_GPS_GLITCH, &body, sizeof body);
+  });
+  emit logLine("rtos engine: GPS glitch pushed");
+  return true;
+}
+
 void SimWorker::sendWorld(const WorldConfig &w) {
   vsim_ctl_world_t body{};
   body.gravity = w.gravity;

@@ -181,4 +181,33 @@ struct BaroErrConfig {
   float rateHz = 0.0f;          // output rate; 0 = every physics step, else 1..1000
 };
 
+// A modelled GNSS receiver (VSIM_CTL_SET_GPS). Off is the default: no receiver,
+// no fix. Enabled, the engine makes a fix rateHz times a second from the true
+// position and velocity, `lagMs` old, with white noise per axis. Rate and lag
+// are what an RTL or failsafe test needs to vary, so both are exposed.
+struct GpsConfig {
+  bool enabled = false;
+  float rateHz = 10.0f;      // fixes per second, 1..50
+  float posNoiseM = 0.0f;    // position noise per axis, 1 sigma [m], 0..50
+  float velNoiseMps = 0.0f;  // velocity noise per axis, 1 sigma [m/s], 0..5
+  float lagMs = 0.0f;        // age of the reported data [ms], 0..1000
+  int sats = 12;             // satellites reported, 4..32
+};
+
+// A fault in the modelled receiver (VSIM_CTL_SET_GPS_GLITCH). It acts only
+// while the receiver is enabled, and sending a new GpsConfig clears it.
+enum class GpsGlitchMode : int {
+  None = 0,     // clears any glitch
+  Offset = 1,   // the reported position jumps by the NED offset and stays
+  Dropout = 2,  // loss of fix: no new reports, fix type 0, no satellites
+  Freeze = 3,   // reports keep coming but repeat the last good position
+};
+struct GpsGlitchConfig {
+  GpsGlitchMode mode = GpsGlitchMode::None;
+  float offsetN = 0.0f;   // Offset mode: metres north
+  float offsetE = 0.0f;   // east
+  float offsetD = 0.0f;   // down; the vector length is limited to 100000 m
+  float durationS = 0.0f; // 0..3600 sim seconds; 0 holds until cleared or reset
+};
+
 } // namespace vsim

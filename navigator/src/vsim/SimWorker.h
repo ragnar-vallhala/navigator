@@ -227,8 +227,33 @@ public:
   // returned and the reason is logged. All zero is a valid "off".
   bool sendBaroErr(const BaroErrConfig &c);
 
+  // The engine's own limits for the modelled GPS receiver (VSIM_CTL_SET_GPS).
+  // With `enabled` set, a field outside them or non-finite makes the engine drop
+  // the whole message and only count a reject, so the check is made here before
+  // sending. Disabled is always valid and fills an all-zero body (the engine's
+  // "off"; the other fields are ignored). On failure `out` is left alone and,
+  // when `why` is given, says which field.
+  static bool gpsBody(const GpsConfig &c, vsim_ctl_gps_t &out,
+                      QString *why = nullptr);
+
+  // Same for the receiver fault (VSIM_CTL_SET_GPS_GLITCH). Mode None clears the
+  // glitch and ignores the other fields. For Offset mode the vector length is
+  // held to 100000 m: the header says "offset finite within 100000 m" without
+  // saying per axis or total, so this takes the stricter reading.
+  static bool gpsGlitchBody(const GpsGlitchConfig &c,
+                            vsim_ctl_gps_glitch_t &out,
+                            QString *why = nullptr);
+
+  // Send the receiver setting, queued between steps. A setting the engine would
+  // drop is refused: nothing is sent, false is returned and the reason is
+  // logged. A valid one also ends any glitch in progress (engine behaviour).
+  bool sendGps(const GpsConfig &c);
+
+  // Send a receiver fault. Same refusal rule as sendGps.
+  bool sendGpsGlitch(const GpsGlitchConfig &c);
+
   // Test seam: while set, every generic ctl message built by the send* calls
-  // that use it (sendBaroErr) is also given to `sink` (opcode and body bytes)
+  // that use it (sendBaroErr, sendGps, sendGpsGlitch) is also given to `sink` (opcode and body bytes)
   // before it is queued, so a test sees what the GUI asked for without an
   // engine. GUI thread only.
   static void setCtlSinkForTest(
