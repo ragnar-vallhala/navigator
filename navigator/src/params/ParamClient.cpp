@@ -34,6 +34,8 @@ QString Client::stateText() const {
   case State::NoCaps: return QStringLiteral("the vehicle does not offer parameters");
   case State::Unsynced: return QStringLiteral("waiting for the link to synchronise");
   case State::ReadingCrc: return QStringLiteral("checking the parameter table");
+  case State::NoAnswer:
+    return QStringLiteral("the vehicle did not answer the parameter table check; refresh to try again");
   case State::Listing: return QStringLiteral("reading parameters");
   case State::Ready: return QStringLiteral("ready");
   case State::Mismatch:
@@ -95,7 +97,7 @@ void Client::onCapabilities(quint32 caps, qint64 nowMs) {
   m_caps = caps;
   if (!(caps & kCapParams)) {
     if (m_state != State::NoCaps) {
-      failAllPending(Outcome::Rejected, QStringLiteral("the vehicle does not offer parameters"));
+      failAllPending(Outcome::Unknown, QStringLiteral("outcome unknown; the vehicle no longer offers parameters"));
       m_state = State::NoCaps;
       changed();
     }
@@ -123,7 +125,8 @@ void Client::onSynced(bool synced, qint64 nowMs) {
   }
   if (m_state == State::NoCaps)
     return;
-  failAllPending(Outcome::Rejected, QStringLiteral("the link lost synchronisation"));
+  failAllPending(Outcome::Unknown,
+                 QStringLiteral("outcome unknown; the values are read again on reconnect"));
   m_listing = false;
   m_state = State::Unsynced;
   changed();
@@ -142,6 +145,7 @@ void Client::start(qint64 nowMs) {
   m_seen = QVector<bool>(m_cat->count(), false);
   m_readTries.clear();
   m_listing = false;
+  m_relistOwed = false;
   m_haveGeneration = false;
   m_state = State::ReadingCrc;
   m_crcTries = 1;
@@ -219,8 +223,21 @@ void Client::onParamValue(const ParamCodec::ValueMsg &m, qint64 nowMs) {
     // A jump we caused (a write or commit of ours, or its settling) is expected.
     // Any other means someone else changed values: read the table again, but
     // never more often than kRelistGapMs.
-    if (m_pend.isEmpty() && nowMs >= m_settleUntil && nowMs - m_lastRelist >= kRelistGapMs)
+    if (m_pend.isEmpty() && nowMs >= m_settleUntil && nowMs - m_lastRelist >= kRelistGapMs) {
       startRelist(nowMs);
+    } else {
+      // Not now (a write is pending, we are settling, or one was just made):
+      // note it and read again from tick() when it is allowed. The echo of our
+      // own pending write carries the new generation and is not "someone else".
+      // A pending commit or discard bumps it too, so those are ours as well.
+      // Inside our own settle window with nothing pending the jump is the
+      // read-back of what we just did.
+      bool ours = m_pend.isEmpty() && nowMs < m_settleUntil;
+      for (const Pending &p : m_pend)
+        ours = ours || p.op != Op::Set || p.entry == m.index;
+      if (!ours)
+        m_relistOwed = true;
+    }
   }
   for (int i = 0; i < m_pend.size(); ++i) {
     Pending &p = m_pend[i];
@@ -259,6 +276,7 @@ void Client::finishSet(int i, qint64 now) {
 }
 
 void Client::startRelist(qint64 nowMs) {
+  m_relistOwed = false;
   m_lastRelist = nowMs;
   m_listing = true;
   m_initialList = false;
@@ -269,7 +287,9 @@ void Client::startRelist(qint64 nowMs) {
 }
 
 void Client::refresh(qint64 nowMs) {
-  if (m_state == State::Ready) {
+  if (m_state == State::NoAnswer) {
+    start(nowMs);
+  } else if (m_state == State::Ready) {
     startRelist(nowMs);
     changed();
   } else if (m_state == State::Incomplete) {
@@ -352,10 +372,16 @@ void Client::tick(qint64 nowMs) {
       ++m_crcTries;
       m_crcSentAt = nowMs;
       send(ParamCodec::encodeRequestReadById(QString::fromLatin1(Catalog::kCrcId), m_dev));
-    } else if (m_crcTries == kCrcTries) {
-      ++m_crcTries; // say it once
+    } else {
+      m_state = State::NoAnswer; // terminal: refresh() or the next sync edge retries
       log(QStringLiteral("parameters: no answer to the table CRC read"));
+      changed();
     }
+  }
+  if (m_relistOwed && m_state == State::Ready && !m_listing && m_pend.isEmpty() &&
+      nowMs >= m_settleUntil && nowMs - m_lastRelist >= kRelistGapMs) {
+    startRelist(nowMs);
+    changed();
   }
   listTick(nowMs);
   for (int i = 0; i < m_pend.size();) {

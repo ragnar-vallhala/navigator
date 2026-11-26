@@ -160,7 +160,7 @@ QByteArray encodeCommit(quint8 reqSeq, quint8 op, quint8 group, quint8 devId) {
   m.op = op;
   m.group = group;
   uint8_t buf[NAVLINK_MAX_FRAME];
-  return frame(buf, navlink_cmd_param_commit_encode(buf, &m, reqSeq, 0xFF, 1));
+  return frame(buf, navlink_cmd_param_commit_encode(buf, &m, TxSeq::next(), 0xFF, 1));
 }
 
 } // namespace ParamCodec

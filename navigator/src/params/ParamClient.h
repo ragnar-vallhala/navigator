@@ -52,13 +52,16 @@ public:
     NoCaps,     // the vehicle does not offer PARAMS (or none seen yet)
     Unsynced,   // waiting for the time-sync edge
     ReadingCrc, // asked for SYS_PTBL_CRC
+    NoAnswer,   // the CRC read got no answer; refresh() or the next sync edge retries
     Listing,    // reading the table
     Ready,      // table complete and equal to the catalog
     Mismatch,   // vehicle table differs from the catalog: read-only, raw
     Incomplete, // some values never arrived after the retries
   };
   enum class Op { Set, Commit, Discard };
-  enum class Outcome { Applied, Refused, Rejected, Failed, TimedOut };
+  // Unknown: the link or the capability went away with the request in flight, so
+  // the vehicle may or may not have applied it. The values are read again.
+  enum class Outcome { Applied, Refused, Rejected, Failed, TimedOut, Unknown };
 
   struct WriteEvent {
     Op op = Op::Set;
@@ -191,6 +194,7 @@ private:
   int m_crcTries = 0;
   // Listing.
   bool m_listing = false;
+  bool m_relistOwed = false; // someone else changed values while a write of ours was pending
   bool m_initialList = false;
   QVector<bool> m_seen;
   QHash<int, int> m_readTries;

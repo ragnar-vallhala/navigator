@@ -20,6 +20,7 @@
 #include "ParamCatalog.h"
 #include "ParamClient.h"
 #include "ParamCodec.h"
+#include "TxSeq.h"
 
 #include <cmath>
 #include <limits>
@@ -111,6 +112,7 @@ private slots:
   void droppedValuesAreAskedForAgain();
   void aValueThatNeverArrivesIsReportedNotHidden();
   void losingTheCapabilityOrSyncStopsEverything();
+  void aCrcReadWithoutAnswerEndsInAStateTheUiCanShow();
   // ---- client: writes
   void aLiveWriteIsConfirmedByTheEchoNotTheAck();
   void anAckWithoutAnEchoIsNotApplied();
@@ -129,6 +131,7 @@ private slots:
   void aDeniedCommitKeepsTheStagedValues();
   void anArmedLockIsCheckedBeforeCommit();
   void someoneElsesChangeTriggersOneRelist();
+  void aChangeByOthersDuringOurWriteIsReadAfterwards();
   void theRealCatalogEndToEnd();
 };
 
@@ -253,7 +256,7 @@ void TstParamClient::wireValuesRoundTripEveryType() {
 
 void TstParamClient::setAndCommitFramesDecode() {
   // Through the real parser: the bytes on the wire say what the client meant.
-  struct Got { QString id; quint8 type = 0, req = 0; double v = 0; quint8 op = 9, group = 9; int lists = 0, reads = 0; short ri = 0; QString rid; } g;
+  struct Got { QString id; quint8 type = 0, req = 0; double v = 0; quint8 op = 9, group = 9, seq = 0; int lists = 0, reads = 0; short ri = 0; QString rid; } g;
   auto decode = [&g](const QByteArray &f) {
     navlink_parser_t p;
     navlink_parser_init(&p);
@@ -270,8 +273,9 @@ void TstParamClient::setAndCommitFramesDecode() {
       ParamCodec::valueOf(vm, x->v);
       return navlink_ack_t{};
     };
-    h.on_cmd_param_commit = [](void *c, const navlink_frame_hdr_t *, const navlink_cmd_param_commit_t *m) {
+    h.on_cmd_param_commit = [](void *c, const navlink_frame_hdr_t *hd, const navlink_cmd_param_commit_t *m) {
       auto *x = static_cast<Got *>(c);
+      x->seq = hd->seq;
       x->req = m->req_seq;
       x->op = m->op;
       x->group = m->group;
@@ -293,7 +297,13 @@ void TstParamClient::setAndCommitFramesDecode() {
   QCOMPARE(g.type, quint8(9));
   QCOMPARE(g.req, quint8(7));
   QCOMPARE(float(g.v), 0.006f);
+  // The FRAME seq of a commit comes from the link's counter (TxSeq), not from
+  // the request id: the two are unrelated numbers.
+  TxSeq::setNext(200);
   decode(ParamCodec::encodeCommit(12, 1, 3));
+  QCOMPARE(g.seq, quint8(200));
+  decode(ParamCodec::encodeCommit(12, 1, 3));
+  QCOMPARE(g.seq, quint8(201));
   QCOMPARE(g.req, quint8(12));
   QCOMPARE(g.op, quint8(1));
   QCOMPARE(g.group, quint8(3));
@@ -419,7 +429,8 @@ void TstParamClient::losingTheCapabilityOrSyncStopsEverything() {
   r.cl.onSynced(false, r.now);
   QCOMPARE(r.cl.state(), Client::State::Unsynced);
   QCOMPARE(r.cl.pendingCount(), 0);
-  QCOMPARE(r.last().outcome, Client::Outcome::Rejected);
+  QCOMPARE(r.last().outcome, Client::Outcome::Unknown); // it may have been applied
+  QVERIFY(r.last().text.contains(QLatin1String("outcome unknown")));
   r.fc.flush(); // the late ack finds nothing pending
   QCOMPARE(r.cl.staleAcks(), 1);
   r.fc.holdAcks = false;
@@ -430,6 +441,36 @@ void TstParamClient::losingTheCapabilityOrSyncStopsEverything() {
   r.cl.onCapabilities(0, r.now);
   QCOMPARE(r.cl.state(), Client::State::NoCaps);
   QVERIFY(!r.cl.set(QStringLiteral("A_LIVE"), 3, r.now));
+}
+
+void TstParamClient::aCrcReadWithoutAnswerEndsInAStateTheUiCanShow() {
+  Rig r;
+  r.fc.dropAlways = {0}; // the CRC entry never answers
+  r.up();
+  r.step(Client::kCrcRetryMs * (Client::kCrcTries + 1) + 200);
+  QCOMPARE(r.cl.state(), Client::State::NoAnswer);
+  QVERIFY(r.cl.stateText().contains(QLatin1String("did not answer")));
+  QCOMPARE(r.fc.readIds.count(QStringLiteral("SYS_PTBL_CRC")), Client::kCrcTries); // bounded
+  QString why;
+  QVERIFY(!r.cl.set(QStringLiteral("A_LIVE"), 2, r.now, &why));
+  r.step(5000);
+  QCOMPARE(r.fc.readIds.count(QStringLiteral("SYS_PTBL_CRC")), Client::kCrcTries); // no spinning
+  // refresh() tries again; the vehicle answers this time.
+  r.fc.dropAlways.clear();
+  r.cl.refresh(r.now);
+  r.step(200);
+  QCOMPARE(r.cl.state(), Client::State::Ready);
+  // The next sync edge also restarts it.
+  Rig q;
+  q.fc.dropAlways = {0};
+  q.up();
+  q.step(Client::kCrcRetryMs * (Client::kCrcTries + 1) + 200);
+  QCOMPARE(q.cl.state(), Client::State::NoAnswer);
+  q.fc.dropAlways.clear();
+  q.cl.onSynced(false, q.now);
+  q.cl.onSynced(true, q.now);
+  q.step(200);
+  QCOMPARE(q.cl.state(), Client::State::Ready);
 }
 
 // ----------------------------------------------------------------- writes
@@ -729,6 +770,31 @@ void TstParamClient::someoneElsesChangeTriggersOneRelist() {
   QVERIFY(r.cl.set(QStringLiteral("B_U8"), 12, r.now));
   r.step(300);
   QCOMPARE(r.fc.listRequests, n);
+}
+
+void TstParamClient::aChangeByOthersDuringOurWriteIsReadAfterwards() {
+  Rig r;
+  r.up();
+  r.step(Client::kSettleMs + Client::kRelistGapMs + 100);
+  const int lists = r.fc.listRequests;
+  r.fc.holdAcks = true;
+  QVERIFY(r.cl.set(QStringLiteral("A_LIVE"), 2, r.now)); // pending
+  // Someone else changes another value while ours is pending.
+  r.fc.setLive(QStringLiteral("B_U8"), 6);
+  r.fc.sendValue(r.fc.idx(QStringLiteral("B_U8")));
+  QCOMPARE(r.fc.listRequests, lists); // not while a write is pending
+  r.fc.holdAcks = false;
+  r.fc.flush();
+  QCOMPARE(r.cl.pendingCount(), 0);
+  r.step(Client::kSettleMs + 200);
+  QCOMPARE(r.fc.listRequests, lists + 1); // owed, and now read
+  QCOMPARE(r.cl.value(QStringLiteral("B_U8"))->v, 6.0);
+  r.step(Client::kRelistGapMs * 2);
+  QCOMPARE(r.fc.listRequests, lists + 1); // once, not repeatedly
+  // Our own write alone never owes a read.
+  QVERIFY(r.cl.set(QStringLiteral("A_LIVE"), 3, r.now));
+  r.step(Client::kSettleMs + Client::kRelistGapMs + 200);
+  QCOMPARE(r.fc.listRequests, lists + 1);
 }
 
 void TstParamClient::theRealCatalogEndToEnd() {
