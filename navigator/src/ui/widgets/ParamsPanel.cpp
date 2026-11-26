@@ -38,10 +38,21 @@ constexpr int kRoleEntry = Qt::UserRole;      // param item: catalog index
 constexpr int kRoleGroup = Qt::UserRole + 1;  // group item: group id (0 = Live)
 constexpr int kMaxOutcomes = 200;
 
+// Plain notation, never an exponent, so what is shown can be typed back into
+// the editor as it stands: 0.00005, not 5e-05. The C locale: a value is not
+// shown with a comma in one place and typed with a point in another.
 QString numText(const Entry &e, double v) {
-  if (e.type == Type::F32)
-    return QString::number(double(float(v)), 'g', 7);
-  return QString::number(v, 'f', 0);
+  if (e.type != Type::F32)
+    return QLocale::c().toString(v, 'f', 0).remove(QLatin1Char(','));
+  QString s = QLocale::c().toString(double(float(v)), 'f', 9);
+  s.remove(QLatin1Char(','));
+  if (s.contains(QLatin1Char('.'))) {
+    while (s.endsWith(QLatin1Char('0')))
+      s.chop(1);
+    if (s.endsWith(QLatin1Char('.')))
+      s.chop(1);
+  }
+  return s == QLatin1String("-0") ? QStringLiteral("0") : s;
 }
 } // namespace
 

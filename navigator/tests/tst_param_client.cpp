@@ -132,6 +132,7 @@ private slots:
   void anArmedLockIsCheckedBeforeCommit();
   void someoneElsesChangeTriggersOneRelist();
   void aGenerationThatGoesBackwardsMeansARestart();
+  void aBackwardsGenerationIsLoggedOnce();
   void saveAllCommitsTheLiveValuesOfGroupZero();
   void aChangeByOthersDuringOurWriteIsReadAfterwards();
   void theRealCatalogEndToEnd();
@@ -799,6 +800,29 @@ void TstParamClient::aGenerationThatGoesBackwardsMeansARestart() {
   r.step(400);
   QCOMPARE(r.fc.listRequests, again + 1);
   QCOMPARE(r.cl.state(), Client::State::Ready);
+}
+
+void TstParamClient::aBackwardsGenerationIsLoggedOnce() {
+  Rig r;
+  r.up();
+  auto backs = [&] {
+    int n = 0;
+    for (const QString &l : r.logs)
+      if (l.contains(QLatin1String("generation went back")))
+        ++n;
+    return n;
+  };
+  for (int round = 0; round < 2; ++round) {
+    const int lists = r.fc.listRequests;
+    r.fc.generation = 50;
+    r.fc.sendValue(r.fc.idx(QStringLiteral("G1_X")));
+    r.step(Client::kSettleMs + Client::kRelistGapMs + 400);
+    r.fc.generation = 3; // backwards again, outside a re-list
+    r.fc.sendValue(r.fc.idx(QStringLiteral("G1_X")));
+    r.step(400);
+    QVERIFY(r.fc.listRequests > lists); // each one still reads the table again
+  }
+  QCOMPARE(backs(), 1);
 }
 
 void TstParamClient::saveAllCommitsTheLiveValuesOfGroupZero() {
