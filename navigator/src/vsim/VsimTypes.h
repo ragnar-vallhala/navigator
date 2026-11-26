@@ -171,4 +171,14 @@ struct WindConfig {
   bool enabled = false;
 };
 
+// What a barometer does to the true pressure (VSIM_CTL_SET_BARO_ERR). All zero
+// is off: the reading is the exact pressure. About 12 Pa is one metre of height
+// near sea level.
+struct BaroErrConfig {
+  float noisePa = 0.0f;         // white noise per reading, 1 sigma [Pa], 0..500
+  float walkPaPerSqrtS = 0.0f;  // random-walk offset [Pa/sqrt(s)], 0..50
+  float lagMs = 0.0f;           // first-order response time constant, 0..2000
+  float rateHz = 0.0f;          // output rate; 0 = every physics step, else 1..1000
+};
+
 } // namespace vsim

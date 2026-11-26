@@ -214,6 +214,26 @@ public:
   // Push the world wind field (VSIM_CTL_SET_WIND): steady + gust + turbulence.
   void sendWind(const WindConfig &w);
 
+  // The engine's own limits for the barometer error (VSIM_CTL_SET_BARO_ERR). A
+  // field outside them, or a non-finite one, makes the engine drop the whole
+  // message and only count a reject, which nothing here can read back; so the
+  // check is made before sending. On success fills `out`; on failure leaves it
+  // alone and, when `why` is given, says which field.
+  static bool baroErrBody(const BaroErrConfig &c, vsim_ctl_baro_err_t &out,
+                          QString *why = nullptr);
+
+  // Send the barometer error, queued between steps like the other config. A
+  // value the engine would drop is refused here: nothing is sent, false is
+  // returned and the reason is logged. All zero is a valid "off".
+  bool sendBaroErr(const BaroErrConfig &c);
+
+  // Test seam: while set, every generic ctl message built by the send* calls
+  // that use it (sendBaroErr) is also given to `sink` (opcode and body bytes)
+  // before it is queued, so a test sees what the GUI asked for without an
+  // engine. GUI thread only.
+  static void setCtlSinkForTest(
+      std::function<void(uint32_t subtype, const void *body, size_t len)> sink);
+
 signals:
   void poseUpdated(SimSnapshot snap);
   void logLine(QString line);

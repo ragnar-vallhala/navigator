@@ -39,6 +39,9 @@
 #include <QtTest>
 
 #include <atomic>
+#include <cstring>
+#include <limits>
+#include <vector>
 
 namespace {
 
@@ -68,6 +71,8 @@ class TstSitlEngine : public QObject {
   Q_OBJECT
 private slots:
   void resetBodyCarriesPoseAndSeed();
+  void baroErrBodyAcceptsTheEnginesRangeAndRefusesTheRest();
+  void sendBaroErrSendsExactlyOneBodyOrNothing();
   void seedResolution();
   void engineRunsWithRcFromTheBridge();
 };
@@ -88,6 +93,73 @@ void TstSitlEngine::resetBodyCarriesPoseAndSeed() {
   QCOMPARE(b.seed, 1337u);
   // Legacy callers still send seed 0 (free-running noise).
   QCOMPARE(vsim::SimWorker::resetBody(0, 0, 0, 0).seed, 0u);
+}
+
+void TstSitlEngine::baroErrBodyAcceptsTheEnginesRangeAndRefusesTheRest() {
+  vsim::BaroErrConfig c;
+  c.noisePa = 3.5f;
+  c.walkPaPerSqrtS = 0.25f;
+  c.lagMs = 120.0f;
+  c.rateHz = 25.0f;
+  vsim_ctl_baro_err_t b{};
+  QString why;
+  QVERIFY(vsim::SimWorker::baroErrBody(c, b, &why));
+  QCOMPARE(b.noise_pa, 3.5f);
+  QCOMPARE(b.walk_pa_per_sqrt_s, 0.25f);
+  QCOMPARE(b.lag_ms, 120.0f);
+  QCOMPARE(b.rate_hz, 25.0f);
+  // All zero is the valid "off"; every limit itself is in range.
+  QVERIFY(vsim::SimWorker::baroErrBody(vsim::BaroErrConfig{}, b));
+  const vsim::BaroErrConfig top{500.0f, 50.0f, 2000.0f, 1000.0f};
+  QVERIFY(vsim::SimWorker::baroErrBody(top, b));
+  // Just outside each limit, a NaN, and a rate between 0 and 1: refused, and the
+  // output is left as it was.
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const vsim::BaroErrConfig bads[] = {
+      {500.1f, 0, 0, 0}, {-1.0f, 0, 0, 0},    {0, 50.1f, 0, 0},
+      {0, -0.1f, 0, 0},  {0, 0, 2000.1f, 0},  {0, 0, -1.0f, 0},
+      {0, 0, 0, 1000.1f}, {0, 0, 0, 0.5f},    {0, 0, 0, -1.0f},
+      {nan, 0, 0, 0},    {0, nan, 0, 0},      {0, 0, nan, 0},
+      {0, 0, 0, nan}};
+  vsim_ctl_baro_err_t keep{};
+  keep.noise_pa = 7.0f;
+  for (const vsim::BaroErrConfig &bad : bads) {
+    vsim_ctl_baro_err_t o = keep;
+    why.clear();
+    QVERIFY(!vsim::SimWorker::baroErrBody(bad, o, &why));
+    QVERIFY(!why.isEmpty());
+    QCOMPARE(o.noise_pa, 7.0f);
+  }
+}
+
+void TstSitlEngine::sendBaroErrSendsExactlyOneBodyOrNothing() {
+  struct Seen {
+    uint32_t subtype;
+    std::vector<unsigned char> body;
+  };
+  std::vector<Seen> seen;
+  vsim::SimWorker::setCtlSinkForTest(
+      [&](uint32_t t, const void *p, size_t n) {
+        const auto *b = static_cast<const unsigned char *>(p);
+        seen.push_back({t, std::vector<unsigned char>(b, b + n)});
+      });
+  vsim::SimWorker w;
+  vsim::BaroErrConfig c;
+  c.noisePa = 2.0f;
+  c.lagMs = 80.0f;
+  QVERIFY(w.sendBaroErr(c));
+  QCOMPARE(seen.size(), size_t(1));
+  QCOMPARE(seen[0].subtype, uint32_t(VSIM_CTL_SET_BARO_ERR));
+  QCOMPARE(seen[0].body.size(), sizeof(vsim_ctl_baro_err_t));
+  vsim_ctl_baro_err_t got{};
+  std::memcpy(&got, seen[0].body.data(), sizeof got);
+  QCOMPARE(got.noise_pa, 2.0f);
+  QCOMPARE(got.lag_ms, 80.0f);
+  // A value the engine would drop is refused: nothing reaches the sink.
+  c.noisePa = 501.0f;
+  QVERIFY(!w.sendBaroErr(c));
+  QCOMPARE(seen.size(), size_t(1));
+  vsim::SimWorker::setCtlSinkForTest(nullptr);
 }
 
 void TstSitlEngine::seedResolution() {
