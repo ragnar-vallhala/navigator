@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 #include <QtTest>
+#include "ParamFileDialog.h"
 #include "ParamsPanel.h"
 #include <QLineEdit>
 #include <QListWidget>
@@ -25,6 +26,10 @@
 #include "NavlinkRouter.h"
 #include "ParamService.h"
 
+#include <QDialogButtonBox>
+#include <QLabel>
+#include <QTableWidget>
+#include <QTemporaryDir>
 #include <QTemporaryFile>
 #include <QThread>
 
@@ -165,6 +170,10 @@ private slots:
   void saveAllAppearsForUnsavedLiveValues();
   void aGroupIsCommittedAndDiscardIsGreyedWithAReason();
   void aLockedGroupIsNotEditableWhileArmed();
+  void aSavedFileHoldsTheGroupedValuesAndIsRefusedWhileStaged();
+  void aLoadedFileShowsTheDiffAndAppliesOnlyTheTickedChangedRows();
+  void aFileWithProblemsOrForAnotherTableShowsButCannotBeApplied();
+  void armedOrNotReadyRefusesTheLoadAndTheSave();
 };
 
 namespace {
@@ -303,6 +312,149 @@ void TstParamsPanel::aLockedGroupIsNotEditableWhileArmed() {
   QTest::qWait(10);
   QVERIFY(!(it->flags() & Qt::ItemIsEditable));
   QVERIFY(it->text(5).contains(QLatin1String("armed")));
+}
+
+namespace {
+const char *kFileHead = R"({"format":1,"table_crc":%1,"params":[%2]})";
+QString writeFileText(const QTemporaryDir &d, const char *name, const QString &crc, const QString &rows) {
+  const QString path = d.filePath(QString::fromLatin1(name));
+  QFile f(path);
+  if (!f.open(QIODevice::WriteOnly))
+    qFatal("temp file");
+  f.write(QString::fromLatin1(kFileHead).arg(crc, rows).toUtf8());
+  return path;
+}
+const QString kRows = QStringLiteral(
+    R"({"id":"G1_X","value":4},{"id":"G1_Y","value":2},{"id":"L2_Z","value":3})");
+ParamFileDialog *dialogOf(ParamsPanel &p) { return p.findChild<ParamFileDialog *>(); }
+QPushButton *applyOf(ParamFileDialog *d) {
+  return d->findChild<QPushButton *>(QStringLiteral("paramsFileApply"));
+}
+QLabel *resultOf(ParamsPanel &p) { return p.findChild<QLabel *>(QStringLiteral("paramsFileResult")); }
+} // namespace
+
+void TstParamsPanel::aSavedFileHoldsTheGroupedValuesAndIsRefusedWhileStaged() {
+  Rig r;
+  QTemporaryDir dir;
+  ParamsPanel p(&r.svc);
+  r.up();
+  const QString path = dir.filePath(QStringLiteral("a.json"));
+  QVERIFY(p.saveFile(path));
+  QFile f(path);
+  QVERIFY(f.open(QIODevice::ReadOnly));
+  const QByteArray text = f.readAll();
+  f.close();
+  QVERIFY(text.contains("G1_X"));
+  QVERIFY(text.contains("L2_Z"));
+  QVERIFY(!text.contains("A_LIVE")); // live values are not a tune
+  QVERIFY(resultOf(p)->isVisibleTo(&p));
+  QVERIFY(resultOf(p)->text().contains(QLatin1String("a.json")));
+  // A staged value is not what the vehicle runs: no file, and the reason is said.
+  p.submitEdit(r.svc.catalog().byId(QStringLiteral("G1_X"))->index, QStringLiteral("4"));
+  r.run(300);
+  QTest::qWait(10);
+  const QString path2 = dir.filePath(QStringLiteral("b.json"));
+  QVERIFY(!p.saveFile(path2));
+  QVERIFY(!QFile::exists(path2));
+  QVERIFY(resultOf(p)->text().contains(QLatin1String("staged")));
+}
+
+void TstParamsPanel::aLoadedFileShowsTheDiffAndAppliesOnlyTheTickedChangedRows() {
+  Rig r;
+  QTemporaryDir dir;
+  ParamsPanel p(&r.svc);
+  r.up();
+  p.loadFile(writeFileText(dir, "t.json", QStringLiteral("3735928559"), kRows));
+  ParamFileDialog *d = dialogOf(p);
+  QVERIFY(d);
+  auto *table = d->findChild<QTableWidget *>(QStringLiteral("paramsFileTable"));
+  QCOMPARE(table->rowCount(), 3);
+  QVERIFY(d->applyEnabled());
+  // Only the row that differs is ticked; the two that are the same are left out.
+  const auto items = d->ticked();
+  QCOMPARE(items.size(), 1);
+  QCOMPARE(items[0].id, QStringLiteral("G1_X"));
+  QCOMPARE(items[0].value, 4.0);
+  QCOMPARE(r.fc.sets, 0); // opening the dialog sent nothing
+  // Unticking the last row leaves nothing to apply.
+  table->item(0, 0)->setCheckState(Qt::Unchecked);
+  QVERIFY(!d->applyEnabled());
+  table->item(0, 0)->setCheckState(Qt::Checked);
+  QVERIFY(applyOf(d)->isEnabled());
+  applyOf(d)->click();
+  r.run(2000);
+  QTest::qWait(10);
+  QCOMPARE(r.fc.sets, 1);
+  QCOMPARE(r.fc.commits, 1);
+  QCOMPARE(r.svc.client().value(QStringLiteral("G1_X"))->v, 4.0);
+  QVERIFY(resultOf(p)->text().contains(QLatin1String("loaded")));
+}
+
+void TstParamsPanel::aFileWithProblemsOrForAnotherTableShowsButCannotBeApplied() {
+  Rig r;
+  QTemporaryDir dir;
+  ParamsPanel p(&r.svc);
+  r.up();
+  // An id the table does not have: listed, and nothing of the file may be applied.
+  p.loadFile(writeFileText(dir, "u.json", QStringLiteral("3735928559"),
+                           kRows + QStringLiteral(R"(,{"id":"NOPE","value":1})")));
+  ParamFileDialog *d = dialogOf(p);
+  QVERIFY(d);
+  QVERIFY(d->findChild<QLabel *>(QStringLiteral("paramsFileProblems"))->text().contains(QLatin1String("NOPE")));
+  QVERIFY(!applyOf(d)->isEnabled());
+  applyOf(d)->click();
+  r.run(500);
+  QCOMPARE(r.fc.sets, 0);
+  d->close();
+  QTest::qWait(10);
+  // Made for another table: the diff is there, the apply is not.
+  p.loadFile(writeFileText(dir, "o.json", QStringLiteral("1"), kRows));
+  d = dialogOf(p);
+  QVERIFY(d);
+  QCOMPARE(d->findChild<QTableWidget *>(QStringLiteral("paramsFileTable"))->rowCount(), 3);
+  QVERIFY(d->findChild<QLabel *>(QStringLiteral("paramsFileRefusal")));
+  QVERIFY(!applyOf(d)->isEnabled());
+  applyOf(d)->click();
+  r.run(500);
+  QCOMPARE(r.fc.sets, 0);
+}
+
+void TstParamsPanel::armedOrNotReadyRefusesTheLoadAndTheSave() {
+  Rig r;
+  QTemporaryDir dir;
+  ParamsPanel p(&r.svc);
+  auto *saveBtn = p.findChild<QPushButton *>(QStringLiteral("paramsSaveFile"));
+  auto *loadBtn = p.findChild<QPushButton *>(QStringLiteral("paramsLoadFile"));
+  QVERIFY(saveBtn && loadBtn);
+  QVERIFY(!saveBtn->isEnabled() && !loadBtn->isEnabled());
+  QVERIFY(!p.saveFile(dir.filePath(QStringLiteral("n.json"))));
+  QVERIFY(!QFile::exists(dir.filePath(QStringLiteral("n.json"))));
+  r.up(2);
+  QTest::qWait(10);
+  QVERIFY(saveBtn->isEnabled() && loadBtn->isEnabled());
+  const QString path = writeFileText(dir, "t.json", QStringLiteral("3735928559"), kRows);
+  // Armed when the file is opened: shown, not applicable.
+  r.heartbeat(4, 8);
+  r.run(100);
+  p.loadFile(path);
+  ParamFileDialog *d = dialogOf(p);
+  QVERIFY(d);
+  QVERIFY(!applyOf(d)->isEnabled());
+  QVERIFY(d->findChild<QLabel *>(QStringLiteral("paramsFileRefusal"))->text().contains(QLatin1String("armed")));
+  d->close();
+  QTest::qWait(10);
+  // Disarmed when opened, armed by the time Apply is pressed: asked again, refused.
+  r.heartbeat(2, 8);
+  r.run(100);
+  p.loadFile(path);
+  d = dialogOf(p);
+  QVERIFY(d && applyOf(d)->isEnabled());
+  r.heartbeat(4, 8);
+  r.run(100);
+  applyOf(d)->click();
+  r.run(500);
+  QCOMPARE(r.fc.sets, 0);
+  QVERIFY(resultOf(p)->text().contains(QLatin1String("armed")));
 }
 
 QTEST_MAIN(TstParamsPanel)

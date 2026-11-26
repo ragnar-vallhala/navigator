@@ -16,9 +16,12 @@
  */
 #pragma once
 
+#include "ParamApplier.h"
 #include "ParamClient.h"
+#include "ParamFile.h"
 
 #include <QHash>
+#include <QPointer>
 #include <QSet>
 #include <QStyledItemDelegate>
 #include <QTimer>
@@ -67,6 +70,13 @@ public:
   // The same path the editor takes (tests drive it directly).
   void submitEdit(int entry, const QString &text);
   void setFilter(const QString &text);
+  // The file buttons' work, without the file chooser (tests drive them).
+  // saveFile: false, with the outcome line added, when nothing was written.
+  bool saveFile(const QString &path);
+  // Reads the file and opens the diff dialog (nothing is sent until its Apply).
+  void loadFile(const QString &path);
+  // Why a loaded file may not be applied right now; empty when it may.
+  QString whyNotApply(const ParamFile::Loaded &f) const;
   // Room for the rows and the group buttons; below this the dock scrolls.
   QSize minimumSizeHint() const override { return {360, 240}; }
 
@@ -74,8 +84,13 @@ private slots:
   void scheduleRefresh();
   void refreshNow();
   void onWrite(const params::Client::WriteEvent &e);
+  void onApplied(const params::ParamApplier::Result &r);
 
 private:
+  QHash<QString, ParamFile::VehicleValue> vehicleValues() const;
+  void chooseSave();
+  void chooseLoad();
+  void showResult(const QString &text);
   void build();
   void addOutcome(const QString &line);
   QString badgesFor(const Entry &e, bool *editable) const;
@@ -83,6 +98,11 @@ private:
   ParamService *m_svc;
   QLabel *m_banner = nullptr;
   QPushButton *m_refresh = nullptr;
+  QPushButton *m_saveFile = nullptr, *m_loadFile = nullptr;
+  QLabel *m_result = nullptr;
+  QTimer m_resultHide;
+  ParamApplier *m_applier = nullptr;
+  QPointer<QDialog> m_dialog;
   QLineEdit *m_filter = nullptr;
   QTreeWidget *m_tree = nullptr;
   QListWidget *m_outcomes = nullptr;

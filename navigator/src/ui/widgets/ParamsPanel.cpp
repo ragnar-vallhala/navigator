@@ -15,10 +15,13 @@
  * limitations under the License.
  */
 #include "ParamsPanel.h"
+#include "ParamFileDialog.h"
 #include "ParamService.h"
 
 #include <QDateTime>
 #include <QDoubleValidator>
+#include <QFileInfo>
+#include <QFileDialog>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
@@ -119,9 +122,28 @@ ParamsPanel::ParamsPanel(ParamService *svc, QWidget *parent) : QWidget(parent), 
   m_refresh = new QPushButton(tr("Refresh"), this);
   m_refresh->setObjectName(QStringLiteral("paramsRefresh"));
   m_refresh->setToolTip(tr("Read the whole parameter table from the vehicle again"));
+  m_saveFile = new QPushButton(tr("Save to file…"), this);
+  m_saveFile->setObjectName(QStringLiteral("paramsSaveFile"));
+  m_loadFile = new QPushButton(tr("Load from file…"), this);
+  m_loadFile->setObjectName(QStringLiteral("paramsLoadFile"));
   bar->addWidget(m_banner, 1);
   bar->addWidget(m_refresh);
+  bar->addWidget(m_saveFile);
+  bar->addWidget(m_loadFile);
   top->addLayout(bar);
+
+  m_result = new QLabel(this);
+  m_result->setObjectName(QStringLiteral("paramsFileResult"));
+  m_result->setWordWrap(true);
+  m_result->setVisible(false);
+  top->addWidget(m_result);
+  m_resultHide.setSingleShot(true);
+  m_resultHide.setInterval(10000);
+  connect(&m_resultHide, &QTimer::timeout, m_result, &QLabel::hide);
+  m_applier = new ParamApplier(m_svc, this);
+  connect(m_applier, &ParamApplier::finished, this, &ParamsPanel::onApplied);
+  connect(m_saveFile, &QPushButton::clicked, this, &ParamsPanel::chooseSave);
+  connect(m_loadFile, &QPushButton::clicked, this, &ParamsPanel::chooseLoad);
 
   m_filter = new QLineEdit(this);
   m_filter->setPlaceholderText(tr("Filter by name or description"));
@@ -299,6 +321,15 @@ void ParamsPanel::refreshNow() {
   m_refresh->setVisible(st == Client::State::Mismatch || st == Client::State::Incomplete ||
                         st == Client::State::NoAnswer);
   m_refresh->setEnabled(true);
+  {
+    const QString why = !ok ? tr("The parameter table is not ready")
+                            : (m_svc->locked() || m_applier->busy()) ? tr("A change is being applied")
+                                                                      : QString();
+    m_saveFile->setEnabled(why.isEmpty());
+    m_saveFile->setToolTip(why.isEmpty() ? tr("Save the tuning parameters to a file") : why);
+    m_loadFile->setEnabled(why.isEmpty());
+    m_loadFile->setToolTip(why.isEmpty() ? tr("Compare a saved file with the vehicle, then apply it") : why);
+  }
 
   const Catalog &cat = m_svc->catalog();
   QHash<int, int> staged, unsaved;
@@ -411,6 +442,103 @@ void ParamsPanel::submitEdit(int entry, const QString &text) {
   }
   m_pending.insert(e.id);
   m_typed.insert(e.id, numText(e, v));
+  scheduleRefresh();
+}
+
+QHash<QString, ParamFile::VehicleValue> ParamsPanel::vehicleValues() const {
+  QHash<QString, ParamFile::VehicleValue> h;
+  for (const Entry &e : m_svc->catalog().entries()) {
+    const Client::Value *v = m_svc->client().value(e.id);
+    if (v && v->have)
+      h.insert(e.id, {v->v, v->flags, true});
+  }
+  return h;
+}
+
+void ParamsPanel::showResult(const QString &text) {
+  m_result->setText(text);
+  m_result->setVisible(true);
+  m_resultHide.start();
+  addOutcome(text);
+}
+
+void ParamsPanel::chooseSave() {
+  const QString name = QStringLiteral("params_%1.json")
+                           .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss")));
+  const QString path = QFileDialog::getSaveFileName(this, tr("Save parameters"), name,
+                                                    tr("Parameter files (*.json)"));
+  if (!path.isEmpty())
+    saveFile(path);
+}
+
+void ParamsPanel::chooseLoad() {
+  const QString path = QFileDialog::getOpenFileName(this, tr("Load parameters"), QString(),
+                                                    tr("Parameter files (*.json)"));
+  if (!path.isEmpty())
+    loadFile(path);
+}
+
+bool ParamsPanel::saveFile(const QString &path) {
+  QByteArray data;
+  QString why;
+  if (m_svc->client().state() != Client::State::Ready) {
+    showResult(tr("save to file: not saved (the parameter table is not ready)"));
+    return false;
+  }
+  if (!ParamFile::save(m_svc->catalog(), vehicleValues(), -1, QDateTime::currentDateTimeUtc(), &data,
+                       &why) ||
+      !ParamFile::writeFile(path, data, &why)) {
+    showResult(tr("save to file: not saved (%1)").arg(why));
+    return false;
+  }
+  showResult(tr("saved the parameters to %1").arg(QFileInfo(path).fileName()));
+  return true;
+}
+
+QString ParamsPanel::whyNotApply(const ParamFile::Loaded &f) const {
+  if (!f.ok())
+    return tr("the file has problems");
+  QString why;
+  if (!ParamFile::sameTable(f, m_svc->catalog(), &why))
+    return why;
+  if (m_svc->client().state() != Client::State::Ready)
+    return tr("the parameter table is not ready");
+  if (m_svc->armed())
+    return tr("the vehicle is armed (or its state is not known)");
+  if (m_svc->locked() || m_applier->busy())
+    return tr("a change is being applied");
+  return QString();
+}
+
+void ParamsPanel::loadFile(const QString &path) {
+  ParamFile::Loaded f;
+  QString why;
+  if (!ParamFile::readFile(path, m_svc->catalog(), &f, &why)) {
+    showResult(tr("load from file: %1").arg(why));
+    return;
+  }
+  if (m_dialog)
+    m_dialog->deleteLater();
+  auto *dlg = new ParamFileDialog(m_svc->catalog(), f,
+                                  ParamFile::diff(f, m_svc->catalog(), vehicleValues()),
+                                  whyNotApply(f), this);
+  dlg->setAttribute(Qt::WA_DeleteOnClose);
+  connect(dlg, &ParamFileDialog::applyRequested, this,
+          [this, f](const QVector<ParamApplier::Item> &items) {
+            // The state may have moved while the dialog was open: ask again.
+            QString why = whyNotApply(f);
+            if (why.isEmpty())
+              m_applier->apply(items, &why);
+            if (!why.isEmpty())
+              showResult(tr("load from file: not applied (%1)").arg(why));
+          });
+  m_dialog = dlg;
+  dlg->open();
+}
+
+void ParamsPanel::onApplied(const ParamApplier::Result &r) {
+  showResult(r.ok ? tr("loaded from file: %1").arg(r.text)
+                  : tr("load from file: not applied (%1)").arg(r.text));
   scheduleRefresh();
 }
 
