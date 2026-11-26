@@ -384,6 +384,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
   // Build Gyro Notch tuning
   m_gyroNotchWidget = new GyroNotchWidget(this);
   m_gyroNotchWidget->setProtocol(m_engine->protocol());
+  m_gyroNotchWidget->setParams(m_params);
   connect(m_gyroNotchWidget, &GyroNotchWidget::backToHomeRequested, this,
           &MainWindow::showHome);
   connect(m_gyroNotchWidget, &GyroNotchWidget::commandRequested,

@@ -17,6 +17,10 @@
 #include "GyroNotchWidget.h"
 
 #include "../../protocol/CommandCodec.h"
+#include "../core/Notify.h"
+#include "ParamApplier.h"
+#include "ParamRoute.h"
+#include "ParamService.h"
 
 #include <QFormLayout>
 #include <QGridLayout>
@@ -107,6 +111,14 @@ GyroNotchWidget::GyroNotchWidget(QWidget *parent) : QWidget(parent) {
           &GyroNotchWidget::backToHomeRequested);
   connect(m_applyBtn, &QPushButton::clicked, this,
           &GyroNotchWidget::onApplyClicked);
+  // Any edit by the user keeps the vehicle's values from overwriting the boxes.
+  const auto edited = [this] {
+    if (!m_filling)
+      m_dirty = true;
+  };
+  connect(m_enable, &QCheckBox::toggled, this, edited);
+  for (QDoubleSpinBox *s : {m_q, m_fmin, m_fmax, m_minRatio})
+    connect(s, qOverload<double>(&QDoubleSpinBox::valueChanged), this, edited);
 
   setConnected(false);
 }
@@ -118,14 +130,121 @@ void GyroNotchWidget::setProtocol(DroneProtocol *protocol) {
             &GyroNotchWidget::onNotchStatus);
 }
 
+void GyroNotchWidget::setParams(params::ParamService *svc) {
+  m_params = svc;
+  m_applier = new params::ParamApplier(svc, this);
+  connect(svc, &params::ParamService::changed, this,
+          &GyroNotchWidget::syncFromVehicle);
+  connect(m_applier, &params::ParamApplier::finished, this,
+          [this](const params::ParamApplier::Result &r) {
+            setBusy(false);
+            if (r.ok) {
+              Notify::ok(this, tr("Notch settings applied"));
+              m_dirty = false;
+              syncFromVehicle();
+              if (m_wantAutoband) { // the settings are in: now learn the band
+                emit commandRequested(CommandCodec::encodeNotchAutoband());
+                m_autoband->setChecked(false);
+                m_statusLabel->setText(tr("Auto-band armed"));
+              }
+            } else if (r.unknown) {
+              Notify::warn(this, tr("Lost the link while applying: the vehicle "
+                                    "may or may not have taken the notch settings"));
+            } else {
+              Notify::error(this, tr("Notch settings not applied: %1").arg(r.text));
+            }
+            m_wantAutoband = false;
+          });
+  syncFromVehicle();
+}
+
+void GyroNotchWidget::setBusy(bool busy) {
+  m_busy = busy;
+  // An edit while the apply runs is refused: the boxes are locked with it.
+  for (QWidget *w : {static_cast<QWidget *>(m_enable), static_cast<QWidget *>(m_autoband),
+                     static_cast<QWidget *>(m_q), static_cast<QWidget *>(m_fmin),
+                     static_cast<QWidget *>(m_fmax), static_cast<QWidget *>(m_minRatio)})
+    w->setEnabled(!busy);
+  updateApplyEnabled();
+}
+
+void GyroNotchWidget::updateApplyEnabled() {
+  m_applyBtn->setEnabled(m_connected && !m_busy);
+}
+
+// With the table ready the boxes show the vehicle's values and take their
+// ranges from the catalog; an edit of the user's is not overwritten.
+void GyroNotchWidget::syncFromVehicle() {
+  if (!m_params || m_busy ||
+      params::routeFor(m_params->client().state()) != params::Route::Params)
+    return;
+  const auto &cat = m_params->catalog();
+  const auto &cl = m_params->client();
+  const auto load = [&](const QString &id, QDoubleSpinBox *box) {
+    const params::Entry *e = cat.byId(id);
+    if (!e)
+      return;
+    m_filling = true;
+    box->setRange(e->min, e->max);
+    if (!m_dirty)
+      if (const auto *v = cl.value(id); v && v->have)
+        box->setValue(v->v);
+    m_filling = false;
+  };
+  load(QStringLiteral("NOTCH_Q"), m_q);
+  load(QStringLiteral("NOTCH_FMIN"), m_fmin);
+  load(QStringLiteral("NOTCH_FMAX"), m_fmax);
+  load(QStringLiteral("NOTCH_MINRATIO"), m_minRatio);
+  if (!m_dirty)
+    if (const auto *v = cl.value(QStringLiteral("NOTCH_EN")); v && v->have) {
+      m_filling = true;
+      m_enable->setChecked(v->v != 0.0);
+      m_filling = false;
+    }
+}
+
+void GyroNotchWidget::applyAsParams() {
+  const double fmin = m_fmin->value(), fmax = m_fmax->value();
+  if (fmin >= fmax) {
+    Notify::warn(this, tr("Notch not applied: the band minimum must be below the band maximum"));
+    return;
+  }
+  const QVector<params::ParamApplier::Item> items = {
+      {QStringLiteral("NOTCH_EN"), m_enable->isChecked() ? 1.0 : 0.0},
+      {QStringLiteral("NOTCH_Q"), m_q->value()},
+      {QStringLiteral("NOTCH_FMIN"), fmin},
+      {QStringLiteral("NOTCH_FMAX"), fmax},
+      {QStringLiteral("NOTCH_MINRATIO"), m_minRatio->value()},
+  };
+  QString why;
+  if (!m_applier->apply(items, &why)) {
+    Notify::warn(this, tr("Notch not applied: %1").arg(why));
+    return;
+  }
+  m_wantAutoband = m_autoband->isChecked();
+  setBusy(true);
+}
+
 void GyroNotchWidget::setConnected(bool connected) {
   m_connected = connected;
-  m_applyBtn->setEnabled(connected);
+  updateApplyEnabled();
   if (!connected)
     m_statusLabel->setText(tr("NOT CONNECTED"));
 }
 
 void GyroNotchWidget::onApplyClicked() {
+  if (m_params) {
+    switch (params::routeFor(m_params->client().state())) {
+    case params::Route::Params:
+      applyAsParams();
+      return;
+    case params::Route::NotReady:
+      Notify::warn(this, tr("The vehicle's parameters are not loaded yet — try again in a moment"));
+      return;
+    case params::Route::Legacy:
+      break; // older firmware: the old command below
+    }
+  }
   // The FC treats a non-positive detection field as "leave unchanged"; the panel
   // always sends real positive values, so a full tune is applied every time.
   emit commandRequested(CommandCodec::encodeSetGyroNotch(

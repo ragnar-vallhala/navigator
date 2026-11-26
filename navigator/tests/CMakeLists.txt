@@ -130,6 +130,27 @@ target_include_directories(tst_params_panel PRIVATE ${SRC}/params ${SRC}/protoco
 target_link_libraries(tst_params_panel PRIVATE navlink_codec)
 target_sources(tst_params_panel PRIVATE ${PARAMS_CATALOG_QRC})
 
+navigator_test(tst_gyro_notch_widget
+    tst_gyro_notch_widget.cpp
+    ${SRC}/ui/widgets/GyroNotchWidget.cpp
+    ${SRC}/protocol/DroneProtocol.cpp
+    ${SRC}/protocol/NavlinkRouter.cpp
+    ${SRC}/protocol/TelemetryEngine.cpp
+    ${SRC}/protocol/CommandCodec.cpp
+    ${SRC}/params/ParamCatalog.cpp
+    ${SRC}/params/ParamCodec.cpp
+    ${SRC}/params/ParamClient.cpp
+    ${SRC}/params/ParamService.cpp
+    ${SRC}/params/ParamApplier.cpp
+    ${SRC}/core/Notify.cpp
+    ${SRC}/core/ToastOverlay.cpp
+    ${SRC}/replay/RecordSink.cpp
+    ${SRC}/comm/SerialManager.cpp
+    ${SRC}/comm/UdpManager.cpp)
+target_include_directories(tst_gyro_notch_widget PRIVATE ${SRC}/params ${SRC}/protocol ${SRC}/ui/widgets ${SRC}/ui/main ${SRC}/core ${SRC}/replay ${SRC}/comm)
+target_link_libraries(tst_gyro_notch_widget PRIVATE navlink_codec)
+target_sources(tst_gyro_notch_widget PRIVATE ${PARAMS_CATALOG_QRC})
+
 navigator_test(tst_param_applier
     tst_param_applier.cpp
     ${SRC}/params/ParamCatalog.cpp

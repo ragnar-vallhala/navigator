@@ -24,6 +24,11 @@
 #include <QPushButton>
 #include <QWidget>
 
+namespace params {
+class ParamApplier;
+class ParamService;
+} // namespace params
+
 // Tuning + readout surface for the FFT dynamic gyro notch.
 //
 // Top half sends CMD_SET_GYRO_NOTCH (master enable + detection band / Q /
@@ -32,12 +37,20 @@
 // axis (0 Hz = that slot is currently bypassed). Mirrors CalibrationWidget's
 // command-emitting shape: it emits commandRequested() and MainWindow forwards it
 // to the FC when TX is allowed.
+//
+// With a vehicle that offers PARAMS the boxes show the vehicle's NOTCH_* values
+// (ranges from the catalog) and Apply writes them as parameters through
+// ParamApplier (one commit; the toast follows its result; the boxes are locked
+// while it runs); auto-band is then CMD_NOTCH_AUTOBAND, sent once the settings
+// are in. A vehicle without PARAMS keeps CMD_SET_GYRO_NOTCH; one that offers them
+// but has not loaded the table is refused with the reason.
 class GyroNotchWidget : public QWidget {
   Q_OBJECT
 
 public:
   explicit GyroNotchWidget(QWidget *parent = nullptr);
   void setProtocol(DroneProtocol *protocol);
+  void setParams(params::ParamService *svc);
 
 public slots:
   // Gate the Apply control on the link state (same policy as CalibrationWidget).
@@ -50,10 +63,21 @@ signals:
 private slots:
   void onApplyClicked();
   void onNotchStatus(const NotchStatusData &d);
+  void syncFromVehicle();
 
 private:
+  void applyAsParams();
+  void setBusy(bool busy);
+  void updateApplyEnabled();
+
   DroneProtocol *m_protocol = nullptr;
+  params::ParamService *m_params = nullptr;
+  params::ParamApplier *m_applier = nullptr;
   bool m_connected = false;
+  bool m_busy = false;         // a parameter apply is running
+  bool m_dirty = false;        // the user has edited a box since it was filled
+  bool m_filling = false;      // the boxes are being set from code
+  bool m_wantAutoband = false; // arm auto-band once the settings are in
 
   QCheckBox *m_enable = nullptr;
   QCheckBox *m_autoband = nullptr;

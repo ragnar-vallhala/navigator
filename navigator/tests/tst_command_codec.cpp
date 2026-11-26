@@ -39,6 +39,7 @@ private slots:
   void setPidGainsRoundTrip();
   void gyroLpfAndFlightModeIds();
   void setGyroNotchRoundTrip();
+  void notchAutobandRoundTrip();
 };
 
 namespace {
@@ -188,6 +189,14 @@ navlink_ack_t onNotch(void *, const navlink_frame_hdr_t *,
   g_notchGot = true;
   return navlink_ack_t{};
 }
+navlink_cmd_notch_autoband_t g_ab;
+bool g_abGot;
+navlink_ack_t onAutoband(void *, const navlink_frame_hdr_t *,
+                         const navlink_cmd_notch_autoband_t *m) {
+  g_ab = *m;
+  g_abGot = true;
+  return navlink_ack_t{};
+}
 } // namespace
 
 void TstCommandCodec::setGyroNotchRoundTrip() {
@@ -205,6 +214,17 @@ void TstCommandCodec::setGyroNotchRoundTrip() {
   QCOMPARE(g_notch.fmax_hz, 450.0f);
   QCOMPARE(g_notch.min_ratio, 4.0f);
   QCOMPARE(quint8(g_notch.autoband), quint8(1));
+}
+
+void TstCommandCodec::notchAutobandRoundTrip() {
+  navlink_handlers_t h{};
+  g_abGot = false;
+  h.on_cmd_notch_autoband = onAutoband;
+  QVERIFY(decodesAs(CommandCodec::encodeNotchAutoband(7), NAVLINK_MSGID_CMD_NOTCH_AUTOBAND, h));
+  QVERIFY(g_abGot);
+  QCOMPARE(quint8(g_ab.target_sys), quint8(7));
+  QCOMPARE(quint8(g_ab.target_comp), quint8(1));
+  QCOMPARE(NAVLINK_MSGID_CMD_NOTCH_AUTOBAND, 8209u);
 }
 
 QTEST_APPLESS_MAIN(TstCommandCodec)
