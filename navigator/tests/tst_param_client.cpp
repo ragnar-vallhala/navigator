@@ -134,6 +134,7 @@ private slots:
   void aGenerationThatGoesBackwardsMeansARestart();
   void aBackwardsGenerationIsLoggedOnce();
   void saveAllCommitsTheLiveValuesOfGroupZero();
+  void aSlowCommitIsWaitedFor();
   void aChangeByOthersDuringOurWriteIsReadAfterwards();
   void theRealCatalogEndToEnd();
 };
@@ -837,6 +838,25 @@ void TstParamClient::saveAllCommitsTheLiveValuesOfGroupZero() {
   QCOMPARE(r.fc.commitReqSeqs.size(), 1);
   QCOMPARE(r.last().op, Client::Op::Commit);
   QCOMPARE(r.last().outcome, Client::Outcome::Applied);
+}
+
+void TstParamClient::aSlowCommitIsWaitedFor() {
+  Rig r;
+  r.up();
+  QVERIFY(r.cl.set(QStringLiteral("G1_X"), 4, r.now));
+  r.step(300);
+  r.fc.holdAcks = true; // the vehicle is saving: the ack comes late
+  QString why;
+  QVERIFY2(r.cl.commit(1, r.now, &why), qPrintable(why));
+  r.step(4000);
+  QCOMPARE(r.cl.pendingCount(), 1);       // still waiting, not timed out
+  QCOMPARE(r.fc.commitReqSeqs.size(), 1); // and the commit was not sent twice
+  r.fc.holdAcks = false;
+  r.fc.flush();
+  r.step(300);
+  QCOMPARE(r.last().op, Client::Op::Commit);
+  QCOMPARE(r.last().outcome, Client::Outcome::Applied);
+  QCOMPARE(r.fc.commitReqSeqs.size(), 1);
 }
 
 void TstParamClient::aChangeByOthersDuringOurWriteIsReadAfterwards() {

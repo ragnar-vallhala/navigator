@@ -89,6 +89,10 @@ public:
   static constexpr int kReadRetries = 3;       // per missing index
   static constexpr int kReadBatch = 8;         // re-requests per quiet window
   static constexpr qint64 kAckMs = 1500;       // resend once, then give up
+  // A commit or discard is answered after the vehicle has saved (it may take
+  // seconds, and says IN_PROGRESS while it works): wait this long for the ack,
+  // without resending, before giving up.
+  static constexpr qint64 kCommitAckMs = 5000;
   static constexpr qint64 kEchoMs = 1000;      // ACK seen, echo not: read it
   static constexpr qint64 kRetryWindowMs = 5000; // after the sync edge
   static constexpr qint64 kSettleMs = 2000;    // generation jumps we caused
