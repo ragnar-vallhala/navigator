@@ -51,6 +51,16 @@ public:
   // Barometer error (its own staged Apply): noise, drift, lag, output rate.
   const vsim::BaroErrConfig &baroConfig() const { return baro_; }
   void setBaroConfig(const vsim::BaroErrConfig &b);
+  // GPS receiver model (its own staged Apply) and the receiver fault. The fault
+  // is an event, not a setting: it is requested, never stored or restored.
+  const vsim::GpsConfig &gpsConfig() const { return gps_; }
+  void setGpsConfig(const vsim::GpsConfig &g);
+  const vsim::GpsGlitchConfig &gpsGlitchConfig() const { return glitch_; }
+  // Fill the fault form (nothing is sent; Send fault does that).
+  void setGpsGlitchConfig(const vsim::GpsGlitchConfig &f);
+  // Control messages the engine did not recognise (pose proto v6). A non-zero
+  // count after the GPS controls were used means a module older than the SDK.
+  void setEngineIgnoredCount(uint32_t n);
 
   // Procedural-world settings (biome, seed, size, field, flora, look, preset id)
   // as a compact JSON string, using the same keys as the .vworld export. Used
@@ -77,6 +87,8 @@ signals:
   void worldApplied();     // user committed env → push to daemon + persist
   void windApplied();      // user committed wind → push to daemon + persist
   void baroApplied();      // user committed the barometer error → push + persist
+  void gpsApplied();       // user committed the GPS model → push + persist
+  void gpsGlitchRequested(); // user asked for a receiver fault (or its end) now
   void obstaclesChanged(); // obstacle list/edit changed → preview + persist
   void obstacleSelectionChanged(int index); // list selection → 3D highlight
   void worldMeshChanged(); // imported mesh path/scale/up-axis changed
@@ -85,6 +97,8 @@ private slots:
   void onApply();
   void onApplyWind();
   void onApplyBaro();
+  void onApplyGps();
+  void onSendGpsGlitch(bool clear);
   void onImportWorldMesh();
   void onClearWorldMesh();
   void onAddObstacle(int type);
@@ -104,6 +118,7 @@ private:
   void loadWorldObject(const QJsonObject &o);
   void buildWindSection(QVBoxLayout *root);
   void buildBaroSection(QVBoxLayout *root);
+  void buildGpsSection(QVBoxLayout *root);
   void buildProceduralSection(QVBoxLayout *root);
   void buildProceduralTuningSection(QVBoxLayout *root);
   void buildWorldMeshSection(QVBoxLayout *root);
@@ -115,6 +130,9 @@ private:
   void syncUiToWind();          // spinboxes/checkbox -> wind_
   void syncBaroToUi();          // baro_ -> spinboxes
   void syncUiToBaro();          // spinboxes -> baro_
+  void syncGpsToUi();           // gps_ -> controls
+  void syncUiToGps();           // controls -> gps_
+  void syncUiToGlitch();        // glitch controls -> glitch_
   void refreshObstacleList();   // list labels from cfg_.obstacles
   void syncFormFromSelection(); // selected obstacle → form fields
 
@@ -148,6 +166,26 @@ private:
   QDoubleSpinBox *baroRate_ = nullptr;
   QPushButton *baroApplyBtn_ = nullptr; // enabled only when dirty
   bool baroSyncing_ = false;
+  // GPS receiver model and fault.
+  vsim::GpsConfig gps_;
+  vsim::GpsGlitchConfig glitch_;
+  QCheckBox *gpsEnable_ = nullptr;
+  QDoubleSpinBox *gpsRate_ = nullptr;
+  QDoubleSpinBox *gpsPosNoise_ = nullptr;
+  QDoubleSpinBox *gpsVelNoise_ = nullptr;
+  QDoubleSpinBox *gpsLag_ = nullptr;
+  QDoubleSpinBox *gpsSats_ = nullptr;
+  QPushButton *gpsApplyBtn_ = nullptr; // enabled only when dirty
+  bool gpsSyncing_ = false;
+  QComboBox *glitchMode_ = nullptr;
+  QDoubleSpinBox *glitchN_ = nullptr;
+  QDoubleSpinBox *glitchE_ = nullptr;
+  QDoubleSpinBox *glitchD_ = nullptr;
+  QDoubleSpinBox *glitchDur_ = nullptr;
+  QPushButton *glitchSendBtn_ = nullptr;
+  QPushButton *glitchClearBtn_ = nullptr;
+  class QLabel *engineIgnored_ = nullptr;
+  uint32_t ignoredShown_ = 0; // the count the label shows (pose frames repeat it)
 
   // Obstacle editor.
   QListWidget *obsList_ = nullptr;

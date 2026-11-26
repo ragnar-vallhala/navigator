@@ -206,7 +206,7 @@ struct GpsGlitchConfig {
   GpsGlitchMode mode = GpsGlitchMode::None;
   float offsetN = 0.0f;   // Offset mode: metres north
   float offsetE = 0.0f;   // east
-  float offsetD = 0.0f;   // down; the vector length is limited to 100000 m
+  float offsetD = 0.0f;   // down; each axis is limited to 100000 m
   float durationS = 0.0f; // 0..3600 sim seconds; 0 holds until cleared or reset
 };
 

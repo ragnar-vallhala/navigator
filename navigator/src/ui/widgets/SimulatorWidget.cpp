@@ -390,6 +390,7 @@ void SimulatorWidget::buildUi() {
   m_worldEditor->setConfig(restoreWorld());
   m_worldEditor->setWindConfig(restoreWind());
   m_worldEditor->setBaroConfig(restoreBaro());
+  m_worldEditor->setGpsConfig(restoreGps());
   if (m_renderer)
     m_renderer->setObstacles(m_worldEditor->config().obstacles);
   if (m_downRenderer)
@@ -796,6 +797,8 @@ void SimulatorWidget::updateHud(const vsim::SimSnapshot &s) {
   if (crashed && !m_crashLogged)
     appendLog("sim", vsim::crash::bannerText(s.crash_flags, s.peak_impact));
   m_crashLogged = crashed;
+  if (m_worldEditor)
+    m_worldEditor->setEngineIgnoredCount(s.ctl_unknown);
   updateTreeColliders(false);
   if (m_hud)
     m_hud->setSnapshot(s);
@@ -2491,6 +2494,7 @@ void SimulatorWidget::startInAppSim() {
     updateTreeColliders(true); // trunks of the loaded chunks, or a clear
     m_sim->sendWind(m_worldEditor->windConfig()); // restore wind across restart
     m_sim->sendBaroErr(m_worldEditor->baroConfig()); // and the barometer error
+    m_sim->sendGps(m_worldEditor->gpsConfig());      // and the GPS receiver
     pushNoise();  // apply the configured sensor models (σ / enable)
     pushFaults(); // re-assert any latched faults across the restart
     loadWorldMeshToRenderer(); // re-loads + ships the collision BVH now m_sim exists
@@ -3061,6 +3065,37 @@ vsim::BaroErrConfig SimulatorWidget::restoreBaro() {
   if (!vsim::SimWorker::baroErrBody(b, probe))
     return vsim::BaroErrConfig{};
   return b;
+}
+
+void SimulatorWidget::persistGps(const vsim::GpsConfig &g) {
+  QSettings s;
+  s.beginGroup(kWorldGroup);
+  s.setValue("gpsEnabled", g.enabled);
+  s.setValue("gpsRateHz", g.rateHz);
+  s.setValue("gpsPosNoiseM", g.posNoiseM);
+  s.setValue("gpsVelNoiseMps", g.velNoiseMps);
+  s.setValue("gpsLagMs", g.lagMs);
+  s.setValue("gpsSats", g.sats);
+  s.endGroup();
+}
+
+vsim::GpsConfig SimulatorWidget::restoreGps() {
+  vsim::GpsConfig g; // off if nothing saved
+  QSettings s;
+  s.beginGroup(kWorldGroup);
+  g.enabled = s.value("gpsEnabled", g.enabled).toBool();
+  g.rateHz = s.value("gpsRateHz", g.rateHz).toFloat();
+  g.posNoiseM = s.value("gpsPosNoiseM", g.posNoiseM).toFloat();
+  g.velNoiseMps = s.value("gpsVelNoiseMps", g.velNoiseMps).toFloat();
+  g.lagMs = s.value("gpsLagMs", g.lagMs).toFloat();
+  g.sats = s.value("gpsSats", g.sats).toInt();
+  s.endGroup();
+  // A stored value outside the engine's limits (an edited settings file) would
+  // be refused at send time; start from "off" instead of showing it as set.
+  vsim_ctl_gps_t probe{};
+  if (!vsim::SimWorker::gpsBody(g, probe))
+    return vsim::GpsConfig{};
+  return g;
 }
 
 // Worker/firmware thread: append the just-written UART2 bytes to the coalescing

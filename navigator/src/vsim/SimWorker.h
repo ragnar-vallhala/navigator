@@ -63,6 +63,10 @@ struct SimSnapshot {
   // impact and crash (pose proto v5); zero from a module without the tail.
   uint32_t crash_flags = 0;   // VSIM_POSE_CRASHED
   float peak_impact = 0.0f;   // strongest contact normal speed since reset [m/s]
+  // what the engine supports (pose proto v6): VSIM_CAP_* bits, and the count of
+  // control messages whose subtype it did not recognise (it ignored them).
+  uint32_t ctl_caps = 0;
+  uint32_t ctl_unknown = 0;
 };
 
 // SimWorker -- in-process RTOS SITL engine driver (+ external pose-stream attach).

@@ -69,6 +69,43 @@ void SimulatorWidget::buildWorldPage(ui::MinWidthScrollArea *scroll) {
                            .arg(b.lagMs)
                            .arg(b.rateHz));
   });
+  // GPS receiver model: its own staged Apply -> push + persist. A setting the
+  // engine would drop is refused by the sender and says so in the log.
+  connect(m_worldEditor, &WorldEditorWidget::gpsApplied, this, [this] {
+    const vsim::GpsConfig g = m_worldEditor->gpsConfig();
+    const bool sent = m_sim && m_sim->sendGps(g);
+    persistGps(g);
+    if (!m_sim)
+      appendLog("world", tr("GPS receiver saved; it is sent when the sim starts"));
+    else if (!sent)
+      appendLog("world", tr("GPS receiver NOT sent: a value is outside the "
+                            "engine's limits"));
+    else if (!g.enabled)
+      appendLog("world", tr("GPS receiver off"));
+    else
+      appendLog("world", tr("GPS receiver applied (%1 Hz, noise %2 m / %3 m/s, "
+                            "latency %4 ms, %5 satellites)")
+                             .arg(g.rateHz)
+                             .arg(g.posNoiseM)
+                             .arg(g.velNoiseMps)
+                             .arg(g.lagMs)
+                             .arg(g.sats));
+  });
+  // A receiver fault is an event: sent now, not saved, not re-sent at restart.
+  connect(m_worldEditor, &WorldEditorWidget::gpsGlitchRequested, this, [this] {
+    const vsim::GpsGlitchConfig f = m_worldEditor->gpsGlitchConfig();
+    if (!m_sim) {
+      appendLog("world", tr("GPS fault not sent: the sim is not running"));
+      return;
+    }
+    if (!m_sim->sendGpsGlitch(f))
+      appendLog("world", tr("GPS fault NOT sent: a value is outside the "
+                            "engine's limits"));
+    else if (f.mode == vsim::GpsGlitchMode::None)
+      appendLog("world", tr("GPS fault ended"));
+    else
+      appendLog("world", tr("GPS fault sent"));
+  });
   // Obstacles are visual (phase 1): live-update the 3D view + persist on any
   // add/remove/edit, no Apply needed.
   connect(m_worldEditor, &WorldEditorWidget::obstaclesChanged, this, [this] {
