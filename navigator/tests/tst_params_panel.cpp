@@ -174,6 +174,7 @@ private slots:
   void aLoadedFileShowsTheDiffAndAppliesOnlyTheTickedChangedRows();
   void aFileWithProblemsOrForAnotherTableShowsButCannotBeApplied();
   void armedOrNotReadyRefusesTheLoadAndTheSave();
+  void aValueThatMovesWhileTheDiffIsOpenTurnsApplyOff();
 };
 
 namespace {
@@ -455,6 +456,37 @@ void TstParamsPanel::armedOrNotReadyRefusesTheLoadAndTheSave() {
   r.run(500);
   QCOMPARE(r.fc.sets, 0);
   QVERIFY(resultOf(p)->text().contains(QLatin1String("armed")));
+}
+
+void TstParamsPanel::aValueThatMovesWhileTheDiffIsOpenTurnsApplyOff() {
+  Rig r;
+  QTemporaryDir dir;
+  ParamsPanel p(&r.svc);
+  r.up();
+  p.loadFile(writeFileText(dir, "t.json", QStringLiteral("3735928559"), kRows));
+  ParamFileDialog *d = dialogOf(p);
+  QVERIFY(d && d->applyEnabled() && !d->stale());
+  // Another edit (the panel's own, the vehicle's) lands on a row of the file.
+  p.submitEdit(r.svc.catalog().byId(QStringLiteral("G1_Y"))->index, QStringLiteral("6"));
+  r.run(300);
+  QTest::qWait(10);
+  QVERIFY(d->stale());
+  QVERIFY(!d->applyEnabled());
+  QVERIFY(d->findChild<QLabel *>(QStringLiteral("paramsFileStale"))->isVisibleTo(d));
+  applyOf(d)->click();
+  r.run(500);
+  QCOMPARE(r.fc.commits, 0);
+  // A value that is not in the file does not matter.
+  d->close();
+  QTest::qWait(10);
+  p.loadFile(writeFileText(dir, "u.json", QStringLiteral("3735928559"),
+                           QStringLiteral(R"({"id":"G1_X","value":4})")));
+  d = dialogOf(p);
+  QVERIFY(d && d->applyEnabled());
+  p.submitEdit(r.svc.catalog().byId(QStringLiteral("L2_Z"))->index, QStringLiteral("7"));
+  r.run(300);
+  QTest::qWait(10);
+  QVERIFY(!d->stale());
 }
 
 QTEST_MAIN(TstParamsPanel)

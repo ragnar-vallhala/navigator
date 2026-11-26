@@ -77,6 +77,8 @@ public:
   void loadFile(const QString &path);
   // Why a loaded file may not be applied right now; empty when it may.
   QString whyNotApply(const ParamFile::Loaded &f) const;
+  // Empty while the vehicle still holds what the open diff was made from.
+  QString whyStale() const;
   // Room for the rows and the group buttons; below this the dock scrolls.
   QSize minimumSizeHint() const override { return {360, 240}; }
 
@@ -103,6 +105,8 @@ private:
   QTimer m_resultHide;
   ParamApplier *m_applier = nullptr;
   QPointer<QDialog> m_dialog;
+  QHash<QString, ParamFile::VehicleValue> m_snapshot; // what the open diff was made from
+  QStringList m_snapshotIds;                          // the file's ids
   QLineEdit *m_filter = nullptr;
   QTreeWidget *m_tree = nullptr;
   QListWidget *m_outcomes = nullptr;
