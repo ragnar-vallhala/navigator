@@ -19,6 +19,7 @@
 #include "AutotuneGains.h"
 #include "ParamApplier.h"
 #include "ParamCatalog.h"
+#include "ParamRoute.h"
 
 #include <QString>
 #include <QVector>
@@ -70,19 +71,8 @@ inline bool pidCmdsToItems(const QVector<PidSetCmd> &cmds, const params::Catalog
   return true;
 }
 
-// Which way an apply goes, from what the client knows of the vehicle.
-//  Params:   the table is Ready: the values go through ParamApplier.
-//  Legacy:   the vehicle does not offer PARAMS (older firmware): CMD_SET_PID.
-//  NotReady: it offers them but the table is not usable now (still loading, a
-//            different table, ...): nothing is sent, the reason is shown. The
-//            old command would bypass the staging and checks this path has.
-enum class Route { Params, Legacy, NotReady };
-inline Route routeFor(params::Client::State s) {
-  switch (s) {
-  case params::Client::State::Ready: return Route::Params;
-  case params::Client::State::NoCaps: return Route::Legacy;
-  default: return Route::NotReady;
-  }
-}
+// The route of an apply (see ParamRoute.h).
+using params::Route;
+using params::routeFor;
 
 } // namespace autotune_params

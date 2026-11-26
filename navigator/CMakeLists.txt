@@ -158,6 +158,7 @@ set(GCS_HEADERS
     src/params/ParamCatalog.h
     src/params/ParamCodec.h
     src/params/ParamClient.h
+    src/params/ParamRoute.h
     src/params/ParamService.h
     src/params/ParamApplier.h
     src/ui/widgets/ParamsPanel.h
