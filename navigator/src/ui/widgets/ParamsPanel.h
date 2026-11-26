@@ -67,6 +67,8 @@ public:
   // The same path the editor takes (tests drive it directly).
   void submitEdit(int entry, const QString &text);
   void setFilter(const QString &text);
+  // Room for the rows and the group buttons; below this the dock scrolls.
+  QSize minimumSizeHint() const override { return {360, 240}; }
 
 private slots:
   void scheduleRefresh();

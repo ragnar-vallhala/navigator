@@ -123,7 +123,7 @@ ParamsPanel::ParamsPanel(ParamService *svc, QWidget *parent) : QWidget(parent), 
   m_tree->setHeaderLabels({tr("Parameter"), tr("Value"), tr("Vehicle"), tr("Unit"), tr("Default"),
                            tr("State"), QString()});
   m_tree->setRootIsDecorated(true);
-  m_tree->setUniformRowHeights(true);
+  m_tree->setUniformRowHeights(false); // the group rows carry buttons and are taller
   m_tree->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed |
                           QAbstractItemView::SelectedClicked);
   m_tree->header()->setSectionResizeMode(kColName, QHeaderView::ResizeToContents);
@@ -165,6 +165,7 @@ void ParamsPanel::build() {
   const Catalog &cat = m_svc->catalog();
   m_builtCount = cat.count();
   // "Live" (group 0) first, then the catalog's groups in id order.
+  int actionW = 0;
   QVector<int> gids{0};
   for (const Group &g : cat.groups())
     gids.push_back(g.id);
@@ -214,6 +215,11 @@ void ParamsPanel::build() {
       m_discardBtn.insert(gid, d);
     }
     m_tree->setItemWidget(gi, kColAction, box);
+    // The buttons keep their own size: the row is as tall as they are and the
+    // action column as wide as the widest set of them.
+    const QSize bs = box->sizeHint();
+    gi->setSizeHint(kColAction, bs);
+    actionW = qMax(actionW, bs.width());
   }
   for (const Entry &e : cat.entries()) {
     QTreeWidgetItem *parent = m_groupItems.value(e.group);
@@ -232,6 +238,8 @@ void ParamsPanel::build() {
     it->setToolTip(kColValue, tip);
     m_items.insert(e.index, it);
   }
+  m_tree->header()->setSectionResizeMode(kColAction, QHeaderView::Fixed);
+  m_tree->setColumnWidth(kColAction, actionW + 8);
   m_tree->expandAll();
   m_built = true;
 }
