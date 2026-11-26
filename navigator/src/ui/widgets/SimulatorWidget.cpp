@@ -1309,10 +1309,13 @@ void SimulatorWidget::releaseStreamedWorld() {
 
 void SimulatorWidget::drainChunkResults() {
   for (ChunkSink::Done &d : m_chunkSink->take()) {
+    // A result of an older generation is dropped as it is. The streamer was
+    // reconfigured (or deactivated) when the generation changed, so it knows
+    // nothing of this build; forgetting the key here would erase the NEW
+    // generation's entry for the same chunk (worlds share the chunk grid) and
+    // have it planned and built a second time.
     if (d.gen == m_streamGen)
       onChunkMeshed(d.key, d.built);
-    else
-      m_chunkStreamer.forget(d.key); // stale: config changed mid-build
   }
 }
 

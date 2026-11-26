@@ -225,6 +225,11 @@ public:
   bool hasWorldChunks() const {
     return !worldChunks_.empty() || !pendingChunkUploads_.empty();
   }
+  // Chunk bookkeeping, for tests: meshes uploaded, uploads and removals still
+  // waiting for the next paintGL (a widget that is never painted keeps them).
+  size_t worldChunkCount() const { return worldChunks_.size(); }
+  size_t pendingChunkUploadCount() const { return pendingChunkUploads_.size(); }
+  size_t pendingChunkRemovalCount() const { return pendingChunkRemovals_.size(); }
 
   // Per-chunk instanced flora. `interleaved` is `count` blades of 9 floats each:
   // [posx,posy,posz, yaw,height,flower, tintr,tintg,tintb]. Deferred upload like
