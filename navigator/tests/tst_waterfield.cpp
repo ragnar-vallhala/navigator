@@ -24,6 +24,7 @@
 #include "procgen/TerrainField.h"
 #include "procgen/WaterField.h"
 
+#include <atomic>
 #include <cmath>
 #include <thread>
 
@@ -83,6 +84,60 @@ private slots:
       QCOMPARE(bad[size_t(t)], 0);
     QCOMPARE(shared.height(at(123).first, at(123).second),
              ref.height(at(123).first, at(123).second));
+  }
+
+  // Eight threads on one field while two more build, sample and drop fields of
+  // their own. The cache is per field and each thread keeps a front of its last
+  // cells, keyed by the field's id: a thread that samples two fields in the same
+  // cell must get each its own ground, and nothing may hang or differ.
+  void bodyCacheSurvivesEightThreadsAndFieldChurn() {
+    constexpr int kN = 20000;
+    const auto at = [](int i) {
+      return std::pair{float((i * 37) % 3000) - 1500.0f, float((i * 91) % 3000) - 1500.0f};
+    };
+    std::vector<float> want(kN);
+    for (int i = 0; i < kN; i += 50) {
+      const TerrainField fresh(hills());
+      want[size_t(i)] = fresh.height(at(i).first, at(i).second);
+    }
+    const TerrainField shared(hills());
+    std::atomic<int> bad{0};
+    std::vector<std::thread> pool;
+    for (int t = 0; t < 8; ++t)
+      pool.emplace_back([&, t] {
+        for (int n = 0; n < kN; ++n) {
+          const int i = (t % 2 == 0) ? n : kN - 1 - n;
+          const float h = shared.height(at(i).first, at(i).second);
+          if (i % 50 == 0 && h != want[size_t(i)])
+            ++bad;
+        }
+      });
+    for (int t = 0; t < 2; ++t)
+      pool.emplace_back([&, t] {
+        for (int k = 0; k < 60; ++k) {
+          const uint32_t sa = uint32_t(100 + 1000 * t + k), sb = sa + 7;
+          const TerrainField a(hills(sa));
+          const auto bs = bodies(a, 600.0f);
+          if (bs.empty())
+            continue;
+          // The middle of A's first pond: B (another seed) has other ground there.
+          const float px = bs[0].cx, py = bs[0].cy;
+          // References from a thread that has never seen either field.
+          float refA = 0, refB = 0;
+          std::thread([&] {
+            refA = TerrainField(hills(sa)).height(px, py);
+            refB = TerrainField(hills(sb)).height(px, py);
+          }).join();
+          const TerrainField b(hills(sb));
+          // Same thread, same cell, two fields: the thread-local front must not
+          // answer for the wrong field.
+          if (a.height(px, py) != refA || b.height(px, py) != refB || a.height(px, py) != refA)
+            ++bad;
+        }
+      });
+    for (auto &th : pool)
+      th.join();
+    QCOMPARE(bad.load(), 0);
   }
 
   void hillsWorldHasPonds() {

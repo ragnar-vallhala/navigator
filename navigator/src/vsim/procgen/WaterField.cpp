@@ -20,7 +20,6 @@
 #include <atomic>
 #include <cmath>
 #include <mutex>
-#include <shared_mutex>
 #include <unordered_map>
 
 namespace vsim::procgen {
@@ -87,7 +86,11 @@ struct WaterField::BodyCache {
     bool present = false;
     WaterBody body;
   };
-  std::shared_mutex mu;
+  // A plain mutex: the critical sections are one hash lookup and one insert, so a
+  // reader/writer lock saves nothing. (std::shared_mutex on MinGW is a winpthreads
+  // rwlock; tst_waterfield's thread case hung once for 300 s on the Windows CI
+  // job. That cause is a hypothesis, not proven; see the loop step in ci.yml.)
+  std::mutex mu;
   std::unordered_map<uint64_t, Slot> map;
   static uint64_t key(int ix, int iy) {
     return (static_cast<uint64_t>(static_cast<uint32_t>(ix)) << 32) |
@@ -173,7 +176,7 @@ bool WaterField::bodyAt(const HeightSource &src, float wx, float wy,
   c.valid = true;
   const uint64_t key = BodyCache::key(ix, iy);
   {
-    std::shared_lock lock(cache_->mu);
+    std::lock_guard lock(cache_->mu);
     const auto it = cache_->map.find(key);
     if (it != cache_->map.end()) {
       c.present = it->second.present;
@@ -185,7 +188,7 @@ bool WaterField::bodyAt(const HeightSource &src, float wx, float wy,
   }
   c.present = makeBody(src, ix, iy, c.body);
   {
-    std::unique_lock lock(cache_->mu);
+    std::lock_guard lock(cache_->mu);
     if (cache_->map.size() > 8192) // bounded: a long flight sweeps many cells
       cache_->map.clear();
     cache_->map[key] = {c.present, c.body};
