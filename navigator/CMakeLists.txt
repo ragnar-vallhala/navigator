@@ -82,6 +82,9 @@ set(GCS_SOURCES
     src/protocol/NavlinkRouter.cpp
     src/protocol/TelemetryEngine.cpp
     src/protocol/CommandCodec.cpp
+    src/params/ParamCatalog.cpp
+    src/params/ParamCodec.cpp
+    src/params/ParamClient.cpp
     src/ui/widgets/AttitudeWidget.cpp
     src/ui/widgets/HorizonHud.cpp
     src/ui/widgets/ImuPanel.cpp
@@ -149,6 +152,9 @@ set(GCS_HEADERS
     src/protocol/TelemetryEngine.h
     src/protocol/VehicleState.h
     src/protocol/CommandCodec.h
+    src/params/ParamCatalog.h
+    src/params/ParamCodec.h
+    src/params/ParamClient.h
     src/ui/widgets/AttitudeWidget.h
     src/ui/widgets/GlPaintHost.h
     src/ui/widgets/NativeClip.h
@@ -396,6 +402,7 @@ target_include_directories(Navigator PRIVATE
     src/core/ui
     src/comm
     src/protocol
+    src/params
     src/replay
     src/autotune
     src/ui/main
