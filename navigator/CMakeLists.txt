@@ -87,6 +87,7 @@ set(GCS_SOURCES
     src/params/ParamClient.cpp
     src/params/ParamService.cpp
     src/params/ParamApplier.cpp
+    src/params/ParamFile.cpp
     src/ui/widgets/ParamsPanel.cpp
     src/ui/widgets/AttitudeWidget.cpp
     src/ui/widgets/HorizonHud.cpp
@@ -159,6 +160,7 @@ set(GCS_HEADERS
     src/params/ParamCodec.h
     src/params/ParamClient.h
     src/params/ParamRoute.h
+    src/params/ParamFile.h
     src/params/ParamService.h
     src/params/ParamApplier.h
     src/ui/widgets/ParamsPanel.h
