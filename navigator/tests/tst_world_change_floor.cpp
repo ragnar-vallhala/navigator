@@ -102,6 +102,18 @@ public:
   // Chunk meshing: finished by workers so far, and still waiting for one.
   int chunksPosted() const { return w_.m_chunkSink->posted(); }
   size_t chunksQueued() const { return w_.m_chunkQueue->pending(); }
+  // The 3D view's chunk bookkeeping and the streamed window's size.
+  size_t viewChunks() const { return w_.m_renderer->worldChunkCount(); }
+  size_t viewPendingUploads() const {
+    return w_.m_renderer->pendingChunkUploadCount();
+  }
+  size_t viewPendingRemovals() const {
+    return w_.m_renderer->pendingChunkRemovalCount();
+  }
+  size_t windowChunks() const {
+    const size_t side = 2 * size_t(w_.m_chunkStreamer.config().renderRadius) + 1;
+    return side * side;
+  }
   bool shipRunning() const { return w_.m_shipWatcher != nullptr; }
   bool shipQueued() const { return w_.m_shipPending.has_value(); }
   bool collisionPending() const { return w_.m_collisionPending; }
@@ -473,6 +485,73 @@ private slots:
     qInfo("%s restored: above deck=%.2f", qPrintable(preset), aboveDeck(ab));
     QVERIFY2(aboveDeck(ab) >= 0.0f, "restored vehicle is inside the helipad");
     QVERIFY2(aboveDeck(ab) < 1.0f, "restored vehicle is not on the pad");
+  }
+
+  // A widget that is never painted (a minimised window, or the sim view in a
+  // hidden dock tab) does not run paintGL, which is where chunk uploads and
+  // removals are applied. World changes in that state must not pile up the old
+  // worlds' meshes: what waits for a paint is at most the current window.
+  void aHiddenWidgetKeepsAtMostOneWindowAcrossWorldChanges() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    auto *h = new SimulatorWidget(); // never shown
+    restored_.push_back(h);          // kept to the end, as the others
+    SimulatorWidgetTestAccess hv(*h);
+    // The first world is a forest: its chunks are slow to build, so it is still
+    // being built when the next change comes. While the GUI thread is blocked
+    // the workers go on and their results wait in the sink; they are of the
+    // old generation when the GUI reads them.
+    const char *presets[] = {"forest", "hills", "desert"};
+    const size_t last = sizeof(presets) / sizeof(presets[0]) - 1;
+    for (size_t i = 0; i <= last; ++i) {
+      const QString preset = QString::fromLatin1(presets[i]);
+      if (i > 0)
+        QThread::msleep(2000);
+      bool applied = false;
+      const int base = hv.chunksPosted();
+      hv.changeWorld([&](vsim::WorldConfig &c) {
+        applied = vsim::applyWorldPreset(c, preset, 17);
+        c.worldPreset = preset;
+      });
+      QVERIFY2(applied, "unknown preset");
+      const size_t window = hv.windowChunks();
+      if (i < last) // leave it half built
+        QVERIFY(waitFor([&] { return hv.chunksPosted() - base >= 4; }, 120000));
+      else
+        QVERIFY(waitFor([&] { return hv.chunksCached() >= window; }, 180000));
+      pump(300);
+      qInfo("hidden, %s: window=%zu cached=%zu viewChunks=%zu "
+            "pendingUploads=%zu pendingRemovals=%zu",
+            presets[i], window, hv.chunksCached(), hv.viewChunks(),
+            hv.viewPendingUploads(), hv.viewPendingRemovals());
+      // What waits for a paint is at most the current window, each chunk once.
+      QVERIFY2(hv.viewPendingUploads() <= window,
+               qPrintable(QStringLiteral("%1 uploads wait for a paint that "
+                                         "never comes, window is %2")
+                              .arg(hv.viewPendingUploads())
+                              .arg(window)));
+      QVERIFY2(hv.viewPendingRemovals() <= window, "removals pile up unpainted");
+    }
+  }
+
+  // Removing a chunk from a view that is not painted must also drop its queued
+  // upload: the flush erases first and uploads after, so the upload would bring
+  // the chunk back.
+  void removingAChunkDropsItsQueuedUpload() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    vsim::SimRendererWidget r; // never shown: nothing paints, nothing flushes
+    const std::vector<QVector3D> tri = {QVector3D(0, 0, 0), QVector3D(1, 0, 0),
+                                        QVector3D(0, 1, 0)};
+    const std::vector<QVector3D> nrm(3, QVector3D(0, 0, -1));
+    const std::vector<QVector3D> col(3, QVector3D(0.4f, 0.5f, 0.3f));
+    r.setWorldChunk(11, tri, nrm, col);
+    r.setWorldChunk(12, tri, nrm, col);
+    QCOMPARE(r.pendingChunkUploadCount(), size_t(2));
+    r.removeWorldChunk(11);
+    QCOMPARE(r.pendingChunkUploadCount(), size_t(1));
+    r.clearWorldChunks();
+    QCOMPARE(r.pendingChunkUploadCount(), size_t(0));
   }
 
   // Sim Running and the vehicle airborne (not landed): each preset change
