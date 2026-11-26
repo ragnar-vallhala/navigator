@@ -89,6 +89,10 @@ public:
   void placeAt(float x, float y, float z) { w_.placeVehicle(x, y, z); }
   // Make every collision build take at least `ms` (a slow runner, on demand).
   void shipDelay(int ms) { w_.m_testShipDelayMs = ms; }
+  // Where the streamer is told to stream while a placement is in flight, and
+  // the pad a spawn reset puts the vehicle on.
+  std::optional<QPointF> streamHint() const { return w_.m_streamHint; }
+  QPointF homePad() const { return QPointF(w_.m_homePad.x(), w_.m_homePad.y()); }
   // Run `f` wherever the collision's pad search runs (it must not be the GUI thread).
   void onPadSearch(std::function<void()> f) { w_.m_testOnPadSearch = std::move(f); }
   // Recentre the collision window on cell (cx, cy), as the streamer does when
@@ -817,6 +821,58 @@ private slots:
   // fall through to the engine's z=0 floor (which a slow machine, or a slow
   // collision build as forced here, would otherwise make it do). Sampled every
   // 50 ms from the teleport to 3 s after the vehicle is released and settled.
+  // A world change with the vehicle far from the pad: the reset onto the pad
+  // waits for the new collision, and meanwhile the window must be streamed AT
+  // the pad. Streamed where the vehicle still is, it is built, thrown away at
+  // the reset and built again (the first forest world after a long flight took
+  // 31 s instead of 12 s on a starved runner).
+  void aWorldChangeStreamsAtThePadNotWhereTheVehicleWas() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    if (!SitlModule::instance().available())
+      QSKIP("no engine module (set VAYU_SITL_MODULE)");
+    if (!a_->running()) {
+      a_->start();
+      QVERIFY(a_->running());
+    }
+    a_->changeWorld([&](vsim::WorldConfig &c) {
+      QVERIFY(vsim::applyWorldPreset(c, QStringLiteral("hills"), 31));
+    });
+    QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 30000));
+    pump(1000);
+    const float x = 480.0f, y = 360.0f; // far from the pad, as after a flight
+    a_->teleport(x, y, 8.0f);
+    QVERIFY(waitFor(
+        [&] {
+          const QVector3D p = a_->lastPos();
+          return std::hypot(p.x() - x, p.y() - y) < 30.0f && !a_->shipBusy();
+        },
+        60000));
+
+    // Every collision build now takes 4 s, so the change below is still waiting
+    // for its collision when the hint is read, on any machine.
+    struct Delay {
+      SimulatorWidgetTestAccess &a;
+      explicit Delay(SimulatorWidgetTestAccess &acc) : a(acc) { a.shipDelay(4000); }
+      ~Delay() { a.shipDelay(0); }
+    } delay(*a_);
+    a_->changeWorld([&](vsim::WorldConfig &c) {
+      QVERIFY(vsim::applyWorldPreset(c, QStringLiteral("desert"), 31));
+    });
+    const std::optional<QPointF> hint = a_->streamHint();
+    QVERIFY2(hint.has_value(),
+             "the spawn reset waits for the collision, nothing says where to "
+             "stream meanwhile: the window is built where the vehicle was");
+    const QPointF pad = a_->homePad();
+    const QPointF at = hint.value_or(QPointF(1.0e9, 1.0e9));
+    QVERIFY2(std::hypot(at.x() - pad.x(), at.y() - pad.y()) < 1.0,
+             "the window is streamed somewhere other than the pad");
+    QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 60000));
+    const QVector3D p = a_->lastPos();
+    QVERIFY2(std::hypot(p.x() - pad.x(), p.y() - pad.y()) < 30.0,
+             "the vehicle was not put back on the pad");
+  }
+
   void farTeleportNeverFallsThrough_data() {
     QTest::addColumn<QString>("preset");
     QTest::newRow("alpine") << QStringLiteral("alpine");
