@@ -16,6 +16,9 @@
  */
 #include "SimWorldPanel.h"
 
+#include <QElapsedTimer>
+#include <memory>
+
 #include "SimPanelsCommon.h"
 #include "SimControlsPanel.h"
 
@@ -69,11 +72,29 @@ void SimulatorWidget::buildWorldPage(ui::MinWidthScrollArea *scroll) {
                            .arg(b.lagMs)
                            .arg(b.rateHz));
   });
+  // The receiver fault last sent, so a receiver change that ends it (the
+  // engine clears a fault on every new GPS setting) can say so.
+  struct GpsFault {
+    const vsim::SimWorker *sim = nullptr; // the worker it went to
+    QElapsedTimer sent;
+    float durationS = 0.0f; // 0 = until ended
+    bool active = false;
+    bool stillOn(const vsim::SimWorker *cur) const {
+      return active && cur == sim &&
+             (durationS <= 0.0f ||
+              sent.elapsed() < static_cast<qint64>(durationS * 1000.0f));
+    }
+  };
+  const auto fault = std::make_shared<GpsFault>();
   // GPS receiver model: its own staged Apply -> push + persist. A setting the
   // engine would drop is refused by the sender and says so in the log.
-  connect(m_worldEditor, &WorldEditorWidget::gpsApplied, this, [this] {
+  connect(m_worldEditor, &WorldEditorWidget::gpsApplied, this, [this, fault] {
     const vsim::GpsConfig g = m_worldEditor->gpsConfig();
     const bool sent = m_sim && m_sim->sendGps(g);
+    if (sent && fault->stillOn(m_sim)) {
+      appendLog("world", tr("GPS fault ended by the receiver change"));
+      fault->active = false;
+    }
     persistGps(g);
     if (!m_sim)
       appendLog("world", tr("GPS receiver saved; it is sent when the sim starts"));
@@ -92,7 +113,7 @@ void SimulatorWidget::buildWorldPage(ui::MinWidthScrollArea *scroll) {
                              .arg(g.sats));
   });
   // A receiver fault is an event: sent now, not saved, not re-sent at restart.
-  connect(m_worldEditor, &WorldEditorWidget::gpsGlitchRequested, this, [this] {
+  connect(m_worldEditor, &WorldEditorWidget::gpsGlitchRequested, this, [this, fault] {
     const vsim::GpsGlitchConfig f = m_worldEditor->gpsGlitchConfig();
     if (!m_sim) {
       appendLog("world", tr("GPS fault not sent: the sim is not running"));
@@ -101,10 +122,16 @@ void SimulatorWidget::buildWorldPage(ui::MinWidthScrollArea *scroll) {
     if (!m_sim->sendGpsGlitch(f))
       appendLog("world", tr("GPS fault NOT sent: a value is outside the "
                             "engine's limits"));
-    else if (f.mode == vsim::GpsGlitchMode::None)
+    else if (f.mode == vsim::GpsGlitchMode::None) {
+      fault->active = false;
       appendLog("world", tr("GPS fault ended"));
-    else
+    } else {
+      fault->sim = m_sim;
+      fault->sent.start();
+      fault->durationS = f.durationS;
+      fault->active = true;
       appendLog("world", tr("GPS fault sent"));
+    }
   });
   // Obstacles are visual (phase 1): live-update the 3D view + persist on any
   // add/remove/edit, no Apply needed.
