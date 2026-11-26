@@ -16,6 +16,7 @@
  */
 #include "MainWindow.h"
 #include "ParamService.h"
+#include "ParamsPanel.h"
 #include "DockPanelIds.h"
 #include "DockShell.h"
 #include "WindowFit.h"
@@ -567,6 +568,7 @@ void MainWindow::setupDockHost() {
   m_dock->addPanel(dockpanel::kControlLoop, m_controlLoopWidget);
   m_dock->addPanel(dockpanel::kGyroNotch, m_gyroNotchWidget);
   m_dock->addPanel(dockpanel::kPerf, m_perfWidget);
+  m_dock->addPanel(dockpanel::kParams, new params::ParamsPanel(m_params, this));
 #ifdef NAVIGATOR_HAS_SITL
   m_dock->addPanel(dockpanel::kSim, m_simulatorWidget); // the whole page
 #endif

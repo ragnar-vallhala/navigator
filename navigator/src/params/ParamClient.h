@@ -122,6 +122,10 @@ public:
   bool commit(int group, qint64 nowMs, QString *why = nullptr);
   bool discard(int group, qint64 nowMs, QString *why = nullptr);
   void refresh(qint64 nowMs); // read the whole table again
+  // Why a commit / discard of `group` would be refused here (empty: it would be
+  // sent). The panel greys its buttons with this; commit()/discard() use it too.
+  QString whyNotCommit(int group) const;
+  QString whyNotDiscard(int group) const;
 
   // Outputs.
   State state() const { return m_state; }
@@ -132,6 +136,7 @@ public:
   int pendingCount() const { return m_pend.size(); }
   int staleAcks() const { return m_staleAcks; }
   bool hasSecureLinkCap() const { return m_caps & kCapSecureLink; }
+  bool armed() const { return m_armed; }
 
 private:
   struct Pending {

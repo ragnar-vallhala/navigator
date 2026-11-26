@@ -131,6 +131,8 @@ private slots:
   void aDeniedCommitKeepsTheStagedValues();
   void anArmedLockIsCheckedBeforeCommit();
   void someoneElsesChangeTriggersOneRelist();
+  void aGenerationThatGoesBackwardsMeansARestart();
+  void saveAllCommitsTheLiveValuesOfGroupZero();
   void aChangeByOthersDuringOurWriteIsReadAfterwards();
   void theRealCatalogEndToEnd();
 };
@@ -770,6 +772,47 @@ void TstParamClient::someoneElsesChangeTriggersOneRelist() {
   QVERIFY(r.cl.set(QStringLiteral("B_U8"), 12, r.now));
   r.step(300);
   QCOMPARE(r.fc.listRequests, n);
+}
+
+void TstParamClient::aGenerationThatGoesBackwardsMeansARestart() {
+  Rig r;
+  r.up();
+  QVERIFY(r.cl.set(QStringLiteral("B_U8"), 9, r.now)); // generation moves up
+  r.step(Client::kSettleMs + Client::kRelistGapMs + 100);
+  QCOMPARE(r.cl.state(), Client::State::Ready);
+  const int lists = r.fc.listRequests;
+  // A write is in flight when the vehicle restarts.
+  r.fc.holdAcks = true;
+  QVERIFY(r.cl.set(QStringLiteral("A_LIVE"), 2, r.now));
+  r.fc.generation = 1; // its counter began again
+  r.fc.sendValue(r.fc.idx(QStringLiteral("G1_X")));
+  QCOMPARE(r.last().outcome, Client::Outcome::Unknown);
+  QVERIFY(r.last().text.contains(QLatin1String("restarted")));
+  QCOMPARE(r.cl.pendingCount(), 0);
+  r.fc.holdAcks = false;
+  r.step(400);
+  QCOMPARE(r.cl.state(), Client::State::Ready);
+  QCOMPARE(r.fc.listRequests, lists + 1); // read again from the CRC
+  // Going backwards INSIDE a re-list is not a restart.
+  const int again = r.fc.listRequests;
+  r.cl.refresh(r.now);
+  r.step(400);
+  QCOMPARE(r.fc.listRequests, again + 1);
+  QCOMPARE(r.cl.state(), Client::State::Ready);
+}
+
+void TstParamClient::saveAllCommitsTheLiveValuesOfGroupZero() {
+  Rig r;
+  r.up();
+  QString why;
+  QVERIFY(!r.cl.commit(0, r.now, &why)); // nothing unsaved yet
+  QVERIFY(r.cl.set(QStringLiteral("A_LIVE"), 2, r.now));
+  QVERIFY(r.cl.value(QStringLiteral("A_LIVE"))->flags & Unsaved);
+  r.ev.clear();
+  QVERIFY2(r.cl.commit(0, r.now, &why), qPrintable(why)); // Save all
+  QCOMPARE(r.fc.commitReqSeqs.size(), 1);
+  QCOMPARE(r.last().op, Client::Op::Commit);
+  QCOMPARE(r.last().outcome, Client::Outcome::Applied);
 }
 
 void TstParamClient::aChangeByOthersDuringOurWriteIsReadAfterwards() {

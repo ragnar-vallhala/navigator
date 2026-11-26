@@ -205,6 +205,21 @@ void Client::onParamValue(const ParamCodec::ValueMsg &m, qint64 nowMs) {
     toMismatch(QStringLiteral("entry %1 (%2) is not the catalog's").arg(m.index).arg(m.id));
     return;
   }
+  // A generation that goes BACKWARDS outside a re-list is a vehicle that
+  // restarted (its counter began again): what we hold is from another life.
+  // Read everything again from the CRC; what was in flight may or may not have
+  // been applied.
+  if (m_state == State::Ready && !m_listing && m_haveGeneration &&
+      qint32(m.generation - m_generation) < 0) {
+    log(QStringLiteral("parameters: the vehicle's generation went back (%1 -> %2): "
+                       "it restarted, the table is read again")
+            .arg(m_generation)
+            .arg(m.generation));
+    failAllPending(Outcome::Unknown,
+                   QStringLiteral("outcome unknown; the vehicle restarted"));
+    start(nowMs);
+    return;
+  }
   Value &slot = m_vals[m.index];
   slot.v = v;
   slot.flags = m.flags;
@@ -591,29 +606,50 @@ bool Client::anyLocked(int group) const {
   return false;
 }
 
-bool Client::commit(int group, qint64 nowMs, QString *why) {
-  auto no = [&](const QString &m) {
-    if (why)
-      *why = m;
-    return false;
-  };
+QString Client::whyNotCommit(int group) const {
   if (m_state != State::Ready)
-    return no(stateText());
+    return stateText();
   if (group < 0 || group > 255 || (group != 0 && !m_cat->group(group)))
-    return no(QStringLiteral("unknown group %1").arg(group));
+    return QStringLiteral("unknown group %1").arg(group);
   if (!anyStaged(group, group == 0))
-    return no(QStringLiteral("nothing is staged to commit"));
+    return QStringLiteral("nothing is staged to commit");
   if (m_armed && anyLocked(group))
-    return no(QStringLiteral("these parameters cannot be committed while armed"));
+    return QStringLiteral("these parameters cannot be committed while armed");
   for (const Pending &p : m_pend)
     if (p.op != Op::Set)
-      return no(QStringLiteral("a commit is still in progress"));
+      return QStringLiteral("a commit is still in progress");
+  return {};
+}
+
+QString Client::whyNotDiscard(int group) const {
+  if (m_state != State::Ready)
+    return stateText();
+  if (group < 0 || group > 255 || (group != 0 && !m_cat->group(group)))
+    return QStringLiteral("unknown group %1").arg(group);
+  if (!anyStaged(group, false))
+    return QStringLiteral("nothing is staged to discard");
+  for (const Pending &p : m_pend)
+    if (p.op != Op::Set)
+      return QStringLiteral("a commit is still in progress");
+  return {};
+}
+
+bool Client::commit(int group, qint64 nowMs, QString *why) {
+  const QString block = whyNotCommit(group);
+  if (!block.isEmpty()) {
+    if (why)
+      *why = block;
+    return false;
+  }
   Pending p;
   p.op = Op::Commit;
   p.group = group;
   p.reqSeq = allocSeq();
-  if (!p.reqSeq)
-    return no(QStringLiteral("too many writes in flight"));
+  if (!p.reqSeq) {
+    if (why)
+      *why = QStringLiteral("too many writes in flight");
+    return false;
+  }
   p.serial = ++m_opSerial;
   p.sentAt = nowMs;
   m_pend.push_back(p);
@@ -622,26 +658,21 @@ bool Client::commit(int group, qint64 nowMs, QString *why) {
 }
 
 bool Client::discard(int group, qint64 nowMs, QString *why) {
-  auto no = [&](const QString &m) {
+  const QString block = whyNotDiscard(group);
+  if (!block.isEmpty()) {
     if (why)
-      *why = m;
+      *why = block;
     return false;
-  };
-  if (m_state != State::Ready)
-    return no(stateText());
-  if (group < 0 || group > 255 || (group != 0 && !m_cat->group(group)))
-    return no(QStringLiteral("unknown group %1").arg(group));
-  if (!anyStaged(group, false))
-    return no(QStringLiteral("nothing is staged to discard"));
-  for (const Pending &p : m_pend)
-    if (p.op != Op::Set)
-      return no(QStringLiteral("a commit is still in progress"));
+  }
   Pending p;
   p.op = Op::Discard;
   p.group = group;
   p.reqSeq = allocSeq();
-  if (!p.reqSeq)
-    return no(QStringLiteral("too many writes in flight"));
+  if (!p.reqSeq) {
+    if (why)
+      *why = QStringLiteral("too many writes in flight");
+    return false;
+  }
   p.serial = ++m_opSerial;
   p.sentAt = nowMs;
   m_pend.push_back(p);

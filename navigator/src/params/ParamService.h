@@ -65,6 +65,10 @@ public:
   bool discard(int group, QString *why = nullptr);
   void refresh();
   bool ticking() const { return m_timer.isActive(); }
+  // What the panel greys its buttons with (see Client).
+  QString whyNotCommit(int group) const { return m_client.whyNotCommit(group); }
+  QString whyNotDiscard(int group) const { return m_client.whyNotDiscard(group); }
+  bool armed() const { return m_client.armed(); }
   void tick(); // the timer calls it; tests drive it with their own clock
 
 public slots:
@@ -90,6 +94,7 @@ private:
   std::function<qint64()> m_clock;
   std::function<void(const QByteArray &)> m_send;
   qint64 m_lastHbMs = -1; // -1: none seen on this link
+  int m_lastNav = -1;     // the last nav_state, -1: none
   bool m_synced = false;  // the last sync state the app reported
 };
 

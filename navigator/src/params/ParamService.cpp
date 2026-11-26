@@ -72,13 +72,21 @@ void ParamService::onHeartbeat(quint8 navState, quint32 capabilities) {
   const qint64 t = now();
   // A long silence and then a heartbeat: the vehicle went away and came back
   // (rebooted), and its table, generation and clock are new. Start from scratch.
-  const bool returned = m_lastHbMs >= 0 && t - m_lastHbMs > kHbGapMs;
+  // The same if the vehicle says it is starting up (UNINITIALIZED 0 or INIT 1)
+  // after it had been past that: a reboot too quick to leave a heartbeat gap.
+  const bool gap = m_lastHbMs >= 0 && t - m_lastHbMs > kHbGapMs;
+  const bool restarted = m_lastNav >= 2 && navState <= 1;
+  const bool returned = gap || restarted;
   m_lastHbMs = t;
+  m_lastNav = int(navState);
   if (returned) {
     m_client.onSynced(false, t);
     m_client.onCapabilities(0, t);
   }
+  const bool wasArmed = m_client.armed();
   m_client.setArmed(armedFor(navState));
+  if (wasArmed != m_client.armed())
+    emit changed(); // the panel greys or frees the locked parameters
   // The client is told what Navigator can use: no secure-link session exists.
   m_client.onCapabilities(capabilities & ~Client::kCapSecureLink, t);
   if (returned && m_synced)
@@ -104,6 +112,7 @@ void ParamService::onSynced(bool synced) {
 
 void ParamService::linkDown() {
   m_lastHbMs = -1;
+  m_lastNav = -1;
   m_synced = false;
   m_client.setArmed(true);
   m_client.onSynced(false, now());

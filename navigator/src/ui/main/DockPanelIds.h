@@ -31,5 +31,6 @@ inline constexpr const char *kControlLoop = "control_loop";
 inline constexpr const char *kGyroNotch = "gyro_notch";
 inline constexpr const char *kPerf = "perf";
 inline constexpr const char *kSim = "sim"; // the whole simulator page
+inline constexpr const char *kParams = "params";
 inline constexpr const char *kSettings = "settings";
 } // namespace dockpanel
