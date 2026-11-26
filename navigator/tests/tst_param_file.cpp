@@ -19,6 +19,7 @@
 
 #include <QJsonDocument>
 #include <QTemporaryDir>
+#include <QTimeZone>
 #include <cmath>
 
 using namespace params;
@@ -29,7 +30,7 @@ QString catalogPath() {
   return qEnvironmentVariable("PARAMS_CATALOG_JSON",
                               QStringLiteral(NAVLINK_GEN_DIR "/params_catalog.json"));
 }
-const QDateTime kWhen(QDate(2026, 11, 27), QTime(1, 30, 0), Qt::UTC);
+const QDateTime kWhen(QDate(2026, 11, 27), QTime(1, 30, 0), QTimeZone::utc());
 } // namespace
 
 class TstParamFile : public QObject {
