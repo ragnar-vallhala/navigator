@@ -147,6 +147,13 @@ navigator_test(tst_autotune_gains
     tst_autotune_gains.cpp)
 target_include_directories(tst_autotune_gains PRIVATE ${SRC}/ui/widgets)
 
+navigator_test(tst_autotune_param_map
+    tst_autotune_param_map.cpp
+    ${SRC}/params/ParamCatalog.cpp)
+target_include_directories(tst_autotune_param_map PRIVATE ${SRC}/ui/widgets ${SRC}/params ${SRC}/protocol)
+target_compile_definitions(tst_autotune_param_map PRIVATE NAVLINK_GEN_DIR="${NAVLINK_GEN}")
+target_link_libraries(tst_autotune_param_map PRIVATE navlink_codec)
+
 # ---- C++ autotune optimizer port ------------------------------------------
 # Space.cpp: the all-optimizer convergence test runs on the real param bounds.
 navigator_test(tst_optimizer
