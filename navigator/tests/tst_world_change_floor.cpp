@@ -849,11 +849,12 @@ private slots:
         },
         60000));
 
-    // Every collision build now takes 4 s, so the change below is still waiting
-    // for its collision when the hint is read, on any machine.
+    // Every collision build now takes 17 s: the change below is still waiting
+    // for its collision when the hint is read, on any machine, and for longer
+    // than the 15 s a stream hint normally lasts (a starved forest ship does).
     struct Delay {
       SimulatorWidgetTestAccess &a;
-      explicit Delay(SimulatorWidgetTestAccess &acc) : a(acc) { a.shipDelay(4000); }
+      explicit Delay(SimulatorWidgetTestAccess &acc) : a(acc) { a.shipDelay(17000); }
       ~Delay() { a.shipDelay(0); }
     } delay(*a_);
     a_->changeWorld([&](vsim::WorldConfig &c) {
@@ -867,7 +868,15 @@ private slots:
     const QPointF at = hint.value_or(QPointF(1.0e9, 1.0e9));
     QVERIFY2(std::hypot(at.x() - pad.x(), at.y() - pad.y()) < 1.0,
              "the window is streamed somewhere other than the pad");
-    QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 60000));
+    // Past the 15 s cap, with the reset still waiting: still the pad.
+    pump(16500);
+    const std::optional<QPointF> later = a_->streamHint();
+    QVERIFY2(later.has_value(),
+             "the hint expired while the reset still waited for the collision");
+    const QPointF at2 = later.value_or(QPointF(1.0e9, 1.0e9));
+    QVERIFY2(std::hypot(at2.x() - pad.x(), at2.y() - pad.y()) < 1.0,
+             "past 15 s the window is streamed somewhere other than the pad");
+    QVERIFY(waitFor([&] { return !a_->shipBusy(); }, 120000));
     const QVector3D p = a_->lastPos();
     QVERIFY2(std::hypot(p.x() - pad.x(), p.y() - pad.y()) < 30.0,
              "the vehicle was not put back on the pad");

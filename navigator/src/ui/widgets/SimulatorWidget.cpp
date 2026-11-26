@@ -1127,7 +1127,13 @@ void SimulatorWidget::onStreamTick() {
     const QVector3D here = dronePos();
     const bool arrived = std::hypot(here.x() - m_streamHint->x(),
                                     here.y() - m_streamHint->y()) < 30.0;
-    if (arrived || !m_sim || m_streamHintAge.elapsed() > 15000) {
+    // A deferred spawn reset keeps its hint until the reset is sent: the
+    // collision it waits for can take far longer than the 15 s cap on a slow
+    // machine, and without the hint the window falls back to where the vehicle
+    // still is.
+    const bool expired =
+        m_streamHintAge.elapsed() > 15000 && !m_spawnResetPending;
+    if (arrived || !m_sim || expired) {
       m_streamHint.reset();
     } else {
       c = QVector3D(static_cast<float>(m_streamHint->x()),
