@@ -85,6 +85,7 @@ set(GCS_SOURCES
     src/params/ParamCatalog.cpp
     src/params/ParamCodec.cpp
     src/params/ParamClient.cpp
+    src/params/ParamService.cpp
     src/ui/widgets/AttitudeWidget.cpp
     src/ui/widgets/HorizonHud.cpp
     src/ui/widgets/ImuPanel.cpp
@@ -155,6 +156,8 @@ set(GCS_HEADERS
     src/params/ParamCatalog.h
     src/params/ParamCodec.h
     src/params/ParamClient.h
+    src/params/ParamService.h
+    src/protocol/ParamValueMsg.h
     src/ui/widgets/AttitudeWidget.h
     src/ui/widgets/GlPaintHost.h
     src/ui/widgets/NativeClip.h
@@ -395,6 +398,14 @@ else()
 endif()
 set(VAYU_SITL_SDK "${_vayu_sitl_sdk_default}"
     CACHE PATH "The firmware SITL SDK include dir (4 headers)")
+
+# The parameter catalog of the pinned navlink, built into the app (the vehicle's
+# table is checked against it by CRC; a different table is read-only).
+# (A .qrc in the build tree: the file is generated outside the source tree.)
+set(PARAMS_CATALOG_QRC ${CMAKE_CURRENT_BINARY_DIR}/params_catalog.qrc)
+file(WRITE ${PARAMS_CATALOG_QRC}
+"<RCC><qresource prefix=\"/params\"><file alias=\"params_catalog.json\">${NAVLINK_GEN}/params_catalog.json</file></qresource></RCC>\n")
+target_sources(Navigator PRIVATE ${PARAMS_CATALOG_QRC})
 
 target_include_directories(Navigator PRIVATE
     src

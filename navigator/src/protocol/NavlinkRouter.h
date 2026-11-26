@@ -17,6 +17,7 @@
 #pragma once
 
 #include "core/Types.h" // AttitudeData, ...
+#include "ParamValueMsg.h"
 #include <QByteArray>
 #include <QString>
 #include <cstdint>
@@ -61,6 +62,10 @@ public:
   std::function<void(const NotchStatusData &)> onNotchStatus;
   std::function<void(const HslStatusData &)> onHslStatus;
   std::function<void(uint8_t mode, uint8_t source)> onFlightMode;
+  // HEARTBEAT's nav_state and capabilities word (onHeartbeat keeps its own shape).
+  std::function<void(uint8_t navState, uint32_t capabilities)> onHeartbeatCaps;
+  // PARAM_VALUE, decoded (the parameter service, spec 12.2.1).
+  std::function<void(const params::ParamCodec::ValueMsg &)> onParamValue;
   // HEARTBEAT: nav_state is the flight-state enum index; timestamp + device id
   // (frame sysid) drive link liveness. The owner maps nav_state -> state name.
   std::function<void(uint8_t navState, uint64_t timestamp, uint8_t deviceId)>

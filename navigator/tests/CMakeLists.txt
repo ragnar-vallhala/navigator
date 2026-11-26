@@ -106,6 +106,18 @@ target_include_directories(tst_param_client PRIVATE ${SRC}/params ${SRC}/protoco
 target_compile_definitions(tst_param_client PRIVATE NAVLINK_GEN_DIR="${NAVLINK_GEN}")
 target_link_libraries(tst_param_client PRIVATE navlink_codec)
 
+# ---- Parameter service: heartbeat, sync and router thread hop -> client -----
+navigator_test(tst_param_service
+    tst_param_service.cpp
+    ${SRC}/params/ParamCatalog.cpp
+    ${SRC}/params/ParamCodec.cpp
+    ${SRC}/params/ParamClient.cpp
+    ${SRC}/params/ParamService.cpp
+    ${SRC}/protocol/NavlinkRouter.cpp)
+target_include_directories(tst_param_service PRIVATE ${SRC}/params ${SRC}/protocol)
+target_link_libraries(tst_param_service PRIVATE navlink_codec)
+target_sources(tst_param_service PRIVATE ${PARAMS_CATALOG_QRC})
+
 # ---- AT-1: autotune gains -> CMD_SET_PID mapping --------------------------
 navigator_test(tst_autotune_gains
     tst_autotune_gains.cpp)
@@ -711,11 +723,15 @@ if(TARGET Navigator AND NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_ab
   get_target_property(_nav_srcs Navigator SOURCES)
   set(_wf_srcs "")
   foreach(_s ${_nav_srcs})
+    if(_s STREQUAL "${PARAMS_CATALOG_QRC}")
+      continue() # absolute, in the build tree: added as it is below
+    endif()
     if(NOT _s MATCHES "(^|/)app/main\\.cpp$")
       list(APPEND _wf_srcs "${CMAKE_SOURCE_DIR}/${_s}")
     endif()
   endforeach()
   navigator_test(tst_world_change_floor tst_world_change_floor.cpp ${_wf_srcs})
+  target_sources(tst_world_change_floor PRIVATE ${PARAMS_CATALOG_QRC})
   get_target_property(_nav_inc Navigator INCLUDE_DIRECTORIES)
   get_target_property(_nav_def Navigator COMPILE_DEFINITIONS)
   get_target_property(_nav_lib Navigator LINK_LIBRARIES)
@@ -757,6 +773,9 @@ if(TARGET Navigator AND NAVIGATOR_SITL AND EXISTS "${VAYU_SITL_SDK}/vayu_sitl_ab
   get_target_property(_nav_srcs Navigator SOURCES)
   set(_wf_srcs "")
   foreach(_s ${_nav_srcs})
+    if(_s STREQUAL "${PARAMS_CATALOG_QRC}")
+      continue() # absolute, in the build tree: added as it is below
+    endif()
     if(NOT _s MATCHES "(^|/)app/main\\.cpp$")
       list(APPEND _wf_srcs "${CMAKE_SOURCE_DIR}/${_s}")
     endif()
@@ -782,11 +801,15 @@ if(TARGET Navigator AND TARGET navigator_workspace)
   get_target_property(_pr_srcs Navigator SOURCES)
   set(_pr_wf "")
   foreach(_s ${_pr_srcs})
+    if(_s STREQUAL "${PARAMS_CATALOG_QRC}")
+      continue() # absolute, in the build tree: added as it is below
+    endif()
     if(NOT _s MATCHES "(^|/)app/main\\.cpp$")
       list(APPEND _pr_wf "${CMAKE_SOURCE_DIR}/${_s}")
     endif()
   endforeach()
   navigator_test(tst_panel_real_min tst_panel_real_min.cpp ${_pr_wf})
+  target_sources(tst_panel_real_min PRIVATE ${PARAMS_CATALOG_QRC})
   get_target_property(_pr_inc Navigator INCLUDE_DIRECTORIES)
   get_target_property(_pr_def Navigator COMPILE_DEFINITIONS)
   get_target_property(_pr_lib Navigator LINK_LIBRARIES)
