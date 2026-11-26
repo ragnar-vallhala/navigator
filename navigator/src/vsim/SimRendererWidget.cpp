@@ -19,6 +19,7 @@
 #include "procgen/EdgeTrack.h"
 #include "procgen/PropStyle.h"
 
+#include <algorithm>
 #include <QSettings>
 #include <QCursor>
 #include <QElapsedTimer>
@@ -2414,6 +2415,13 @@ void SimRendererWidget::setWorldChunk(qint64 key,
 
 void SimRendererWidget::removeWorldChunk(qint64 key) {
   removeChunkVegetation(key); // vegetation loads and unloads with its chunk
+  // A queued upload of this chunk must not outlive the removal: the flush
+  // erases first and uploads after, so it would bring the chunk back, and on a
+  // view that is never painted it would sit there for good.
+  pendingChunkUploads_.erase(
+      std::remove_if(pendingChunkUploads_.begin(), pendingChunkUploads_.end(),
+                     [key](const PendingChunk &pc) { return pc.key == key; }),
+      pendingChunkUploads_.end());
   pendingChunkRemovals_.push_back(key);
   chunksDirty_ = true;
   update();
