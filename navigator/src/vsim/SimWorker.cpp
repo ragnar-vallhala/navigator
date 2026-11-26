@@ -40,6 +40,7 @@ namespace {
 // Only ever dereferenced on paths runEngine() has already gated on
 // SitlModule::available().
 std::function<void(const vsim::procgen::ColliderWindow &)> g_treeSink; // test seam
+std::function<void(uint32_t, const void *, size_t)> g_ctlSink;          // test seam
 inline const vayu_sitl_api_t *sitl() { return SitlModule::instance().api(); }
 } // namespace
 
@@ -198,6 +199,54 @@ void SimWorker::sendWind(const WindConfig &w) {
   body.enable = w.enabled ? 1 : 0;
   enqueue([body] { sitl()->set_wind(&body); });
   emit logLine("rtos engine: wind pushed");
+}
+
+bool SimWorker::baroErrBody(const BaroErrConfig &c, vsim_ctl_baro_err_t &out,
+                            QString *why) {
+  auto bad = [&](const char *field) {
+    if (why)
+      *why = QString::fromLatin1(field);
+    return false;
+  };
+  // Same bounds as the engine (vsim_proto.h, VSIM_CTL_SET_BARO_ERR). Written as
+  // "in range" so a NaN fails every test and is refused.
+  if (!(c.noisePa >= 0.0f && c.noisePa <= 500.0f))
+    return bad("noise_pa (0 to 500 Pa)");
+  if (!(c.walkPaPerSqrtS >= 0.0f && c.walkPaPerSqrtS <= 50.0f))
+    return bad("walk_pa_per_sqrt_s (0 to 50 Pa/sqrt(s))");
+  if (!(c.lagMs >= 0.0f && c.lagMs <= 2000.0f))
+    return bad("lag_ms (0 to 2000 ms)");
+  if (!(c.rateHz == 0.0f || (c.rateHz >= 1.0f && c.rateHz <= 1000.0f)))
+    return bad("rate_hz (0, or 1 to 1000 Hz)");
+  out = vsim_ctl_baro_err_t{};
+  out.noise_pa = c.noisePa;
+  out.walk_pa_per_sqrt_s = c.walkPaPerSqrtS;
+  out.lag_ms = c.lagMs;
+  out.rate_hz = c.rateHz;
+  return true;
+}
+
+void SimWorker::setCtlSinkForTest(
+    std::function<void(uint32_t, const void *, size_t)> sink) {
+  g_ctlSink = std::move(sink);
+}
+
+bool SimWorker::sendBaroErr(const BaroErrConfig &c) {
+  vsim_ctl_baro_err_t body{};
+  QString why;
+  if (!baroErrBody(c, body, &why)) {
+    emit logLine(QStringLiteral("rtos engine: barometer error NOT sent: %1 out of range")
+                     .arg(why));
+    return false;
+  }
+  if (g_ctlSink)
+    g_ctlSink(VSIM_CTL_SET_BARO_ERR, &body, sizeof body);
+  enqueue([body] {
+    if (const vayu_sitl_api_t *api = sitl(); api && api->ctl)
+      api->ctl(VSIM_CTL_SET_BARO_ERR, &body, sizeof body);
+  });
+  emit logLine("rtos engine: barometer error pushed");
+  return true;
 }
 
 void SimWorker::sendWorld(const WorldConfig &w) {
