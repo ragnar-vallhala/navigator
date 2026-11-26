@@ -47,7 +47,11 @@ runs:
         # notices until this line moves, and then the module refuses to load
         # and the SITL cases fail loudly -- which is the right place to find
         # out, but not the earliest one.
-        VAYU_FW_VERSION: v0.3.0
+        VAYU_FW_VERSION: v0.4.0
+        # SHA-256 of that release's SDK tarball. A release asset can be replaced
+        # under the same tag, and the BUILD_ID check below reads a file inside the
+        # tarball, so it cannot notice that. Bump this with VAYU_FW_VERSION.
+        VAYU_SDK_SHA256: 3d4b103b16e7e0ed1f4d7d67977ba6b073ee35d9987c08ecf4c0d0f729b17873
         # vayu is private: see the header of ci.yml. Read-only, vayu Contents only.
         GH_TOKEN: ${{ inputs.vayu-token }}
       run: |
@@ -61,12 +65,13 @@ runs:
         ASSET="vayu-sitl-sdk-${VAYU_FW_VERSION}-linux-x86_64.tar.gz"
         gh release download "${VAYU_FW_VERSION}" \
           --repo ragnar-vallhala/vayu --pattern "${ASSET}"
+        echo "${VAYU_SDK_SHA256}  ${ASSET}" | sha256sum -c -
         tar xzf "$ASSET"
         echo "engine build id: $(cat vayu-sitl-sdk/BUILD_ID)"
         # The stamp must be the pinned tag. If it is a bare commit hash the
         # asset came from the rolling release, meaning the pin silently did
-        # not take. v0.3.0 is stamped "firmware-v0.3.0": the stamp is the
-        # nearest tag and the firmware tag sits on the same commit as v0.3.0.
+        # not take. v0.3.0 was stamped "firmware-v0.3.0" (v0.4.0 is plain "v0.4.0"): the stamp is the
+        # nearest tag and a firmware tag may sit on the same commit as the release.
         # So the tag, with or without that "firmware-" prefix, is accepted and
         # nothing looser (the dots are escaped, a hash or the rolling release
         # still fail).

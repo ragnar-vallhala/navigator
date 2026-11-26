@@ -60,7 +60,10 @@ env:
   # intended, an unverifiable binary is not bundled.
   NAV_VERSION: '1.4.0'
   # Firmware the SITL module comes from: keep equal to VAYU_FW_VERSION in ci.yml.
-  VAYU_FW_VERSION: v0.3.0
+  VAYU_FW_VERSION: v0.4.0
+  # SHA-256 of that release's SDK tarball (see the qt-build action): a release
+  # asset can be replaced under the same tag. Bump it with VAYU_FW_VERSION.
+  VAYU_SDK_SHA256: 3d4b103b16e7e0ed1f4d7d67977ba6b073ee35d9987c08ecf4c0d0f729b17873
 
 jobs:
   meta:
@@ -145,10 +148,11 @@ jobs:
           ASSET="vayu-sitl-sdk-${VAYU_FW_VERSION}-linux-x86_64.tar.gz"
           gh release download "${VAYU_FW_VERSION}" \
             --repo ragnar-vallhala/vayu --pattern "${ASSET}"
+          echo "${VAYU_SDK_SHA256}  ${ASSET}" | sha256sum -c -
           tar xzf "$ASSET"
           rm -f "$ASSET"
           echo "engine build id: $(cat vayu-sitl-sdk/BUILD_ID)"
-          # v0.3.0 is stamped "firmware-v0.3.0" (nearest tag; the firmware tag
+          # v0.3.0 was stamped "firmware-v0.3.0" (nearest tag; the firmware tag
           # is on the same commit): accept the tag with or without that
           # prefix, nothing looser. Same check as the qt-build action.
           VER_RE="${VAYU_FW_VERSION//./\\.}"
