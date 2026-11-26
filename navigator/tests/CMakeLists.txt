@@ -130,6 +130,18 @@ target_include_directories(tst_params_panel PRIVATE ${SRC}/params ${SRC}/protoco
 target_link_libraries(tst_params_panel PRIVATE navlink_codec)
 target_sources(tst_params_panel PRIVATE ${PARAMS_CATALOG_QRC})
 
+navigator_test(tst_param_applier
+    tst_param_applier.cpp
+    ${SRC}/params/ParamCatalog.cpp
+    ${SRC}/params/ParamCodec.cpp
+    ${SRC}/params/ParamClient.cpp
+    ${SRC}/params/ParamService.cpp
+    ${SRC}/params/ParamApplier.cpp
+    ${SRC}/protocol/NavlinkRouter.cpp)
+target_include_directories(tst_param_applier PRIVATE ${SRC}/params ${SRC}/protocol)
+target_link_libraries(tst_param_applier PRIVATE navlink_codec)
+target_sources(tst_param_applier PRIVATE ${PARAMS_CATALOG_QRC})
+
 # ---- AT-1: autotune gains -> CMD_SET_PID mapping --------------------------
 navigator_test(tst_autotune_gains
     tst_autotune_gains.cpp)

@@ -60,14 +60,18 @@ public:
   const Client &client() const { return m_client; }
 
   // Requests (the panel). Same contract as Client.
-  bool set(const QString &id, double value, QString *why = nullptr);
-  bool commit(int group, QString *why = nullptr);
-  bool discard(int group, QString *why = nullptr);
+  // While the service is locked (an apply is running, see ParamApplier) every
+  // request is refused with the lock's reason, except the owner's (`owner`).
+  bool set(const QString &id, double value, QString *why = nullptr, bool owner = false);
+  bool commit(int group, QString *why = nullptr, bool owner = false);
+  bool discard(int group, QString *why = nullptr, bool owner = false);
+  void lockFor(const QString &reason); // empty: unlock
+  bool locked() const { return !m_lock.isEmpty(); }
   void refresh();
   bool ticking() const { return m_timer.isActive(); }
   // What the panel greys its buttons with (see Client).
-  QString whyNotCommit(int group) const { return m_client.whyNotCommit(group); }
-  QString whyNotDiscard(int group) const { return m_client.whyNotDiscard(group); }
+  QString whyNotCommit(int group) const { return m_lock.isEmpty() ? m_client.whyNotCommit(group) : m_lock; }
+  QString whyNotDiscard(int group) const { return m_lock.isEmpty() ? m_client.whyNotDiscard(group) : m_lock; }
   bool armed() const { return m_client.armed(); }
   void tick(); // the timer calls it; tests drive it with their own clock
 
@@ -96,6 +100,7 @@ private:
   qint64 m_lastHbMs = -1; // -1: none seen on this link
   int m_lastNav = -1;     // the last nav_state, -1: none
   bool m_synced = false;  // the last sync state the app reported
+  QString m_lock;         // why requests are refused right now; empty: not locked
 };
 
 } // namespace params

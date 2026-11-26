@@ -120,19 +120,42 @@ void ParamService::linkDown() {
   follow();
 }
 
-bool ParamService::set(const QString &id, double value, QString *why) {
+namespace {
+bool refusedByLock(const QString &lock, bool owner, QString *why) {
+  if (lock.isEmpty() || owner)
+    return false;
+  if (why)
+    *why = lock;
+  return true;
+}
+} // namespace
+
+void ParamService::lockFor(const QString &reason) {
+  if (m_lock == reason)
+    return;
+  m_lock = reason;
+  emit changed(); // the panel greys or frees its editors and buttons
+}
+
+bool ParamService::set(const QString &id, double value, QString *why, bool owner) {
+  if (refusedByLock(m_lock, owner, why))
+    return false;
   const bool ok = m_client.set(id, value, now(), why);
   follow();
   return ok;
 }
 
-bool ParamService::commit(int group, QString *why) {
+bool ParamService::commit(int group, QString *why, bool owner) {
+  if (refusedByLock(m_lock, owner, why))
+    return false;
   const bool ok = m_client.commit(group, now(), why);
   follow();
   return ok;
 }
 
-bool ParamService::discard(int group, QString *why) {
+bool ParamService::discard(int group, QString *why, bool owner) {
+  if (refusedByLock(m_lock, owner, why))
+    return false;
   const bool ok = m_client.discard(group, now(), why);
   follow();
   return ok;

@@ -408,8 +408,8 @@ void Client::tick(qint64 nowMs) {
   for (int i = 0; i < m_pend.size();) {
     Pending &p = m_pend[i];
     if (!p.acked) {
-      if (nowMs - p.sentAt >= kAckMs) {
-        if (!p.resent) {
+      if (nowMs - p.sentAt >= (p.op == Op::Set ? kAckMs : kCommitAckMs)) {
+        if (!p.resent && p.op == Op::Set) {
           p.resent = true;
           p.sentAt = nowMs;
           send(frameFor(p));
