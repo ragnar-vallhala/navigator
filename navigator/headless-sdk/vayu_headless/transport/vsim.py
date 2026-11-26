@@ -24,7 +24,7 @@ original sim/host/sitl_lab.py so behaviour is identical):
 import math
 import struct
 
-MAGIC, VERSION = 0x4D495356, 5
+MAGIC, VERSION = 0x4D495356, 6
 FRAME_POSE = 3
 
 # vsim_ctl_* subtypes (see vsim_proto.h).
@@ -40,12 +40,15 @@ HDR = struct.Struct("<IHHII")
 # The pose body is APPEND-ONLY (vsim_proto.h): a field is added at the tail and
 # an existing one never moves, so a reader decodes the prefix it knows and
 # ignores the rest. POSE_V3 is the oldest layout this decoder accepts; POSE is
-# the current one (v4 air_density_ratio, v5 crash_flags + peak_impact).
+# the current one (v4 air_density_ratio, v5 crash_flags + peak_impact,
+# v6 ctl_caps + ctl_unknown).
 _POSE_V3_FMT = "II3f4f3f3f4f4f3fffffff"                  # 128 B
 POSE_V3 = struct.Struct("<" + _POSE_V3_FMT)
-POSE = struct.Struct("<" + _POSE_V3_FMT + "f" + "If")  # v5 body, 140 B
+POSE = struct.Struct("<" + _POSE_V3_FMT + "f" + "If" + "II")  # v6 body, 148 B
 POSE_V4_SIZE = POSE_V3.size + 4
-assert HDR.size == 16 and POSE_V3.size == 128 and POSE.size == 140
+POSE_V5 = struct.Struct("<" + _POSE_V3_FMT + "f" + "If")      # 140 B
+assert (HDR.size == 16 and POSE_V3.size == 128 and POSE_V5.size == 140
+        and POSE.size == 148)
 POSE_CRASHED = 0x1      # crash_flags bit 0
 
 
@@ -124,15 +127,20 @@ def parse_pose(buf):
             # Tail fields exist only when the sim is new enough to send them;
             # a missing tail reads as "not crashed", never as garbage.
             crash_flags, peak = 0, 0.0
-            if plen >= POSE.size:
+            ctl_caps, ctl_unknown = 0, 0
+            if plen >= POSE_V5.size:
                 crash_flags, peak = struct.unpack_from(
                     "<If", buf, body + POSE_V4_SIZE)
+            if plen >= POSE.size:
+                ctl_caps, ctl_unknown = struct.unpack_from(
+                    "<II", buf, body + POSE_V5.size)
             truth = {
                 "pos": p[2:5], "quat": p[5:9], "vel": p[9:12],
                 "omega": p[12:15], "motor_omega": p[15:19],
                 "wind": p[23:26],
                 "crash_flags": crash_flags, "peak_impact": peak,
                 "crashed": bool(crash_flags & POSE_CRASHED),
+                "ctl_caps": ctl_caps, "ctl_unknown": ctl_unknown,
             }
         pos += HDR.size + plen
     del buf[:pos]
