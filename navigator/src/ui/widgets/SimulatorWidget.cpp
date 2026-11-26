@@ -389,6 +389,7 @@ void SimulatorWidget::buildUi() {
   }
   m_worldEditor->setConfig(restoreWorld());
   m_worldEditor->setWindConfig(restoreWind());
+  m_worldEditor->setBaroConfig(restoreBaro());
   if (m_renderer)
     m_renderer->setObstacles(m_worldEditor->config().obstacles);
   if (m_downRenderer)
@@ -2489,6 +2490,7 @@ void SimulatorWidget::startInAppSim() {
     m_sim->sendObstacles(m_worldEditor->config().obstacles);
     updateTreeColliders(true); // trunks of the loaded chunks, or a clear
     m_sim->sendWind(m_worldEditor->windConfig()); // restore wind across restart
+    m_sim->sendBaroErr(m_worldEditor->baroConfig()); // and the barometer error
     pushNoise();  // apply the configured sensor models (σ / enable)
     pushFaults(); // re-assert any latched faults across the restart
     loadWorldMeshToRenderer(); // re-loads + ships the collision BVH now m_sim exists
@@ -3032,6 +3034,33 @@ vsim::WindConfig SimulatorWidget::restoreWind() {
   w.enabled = s.value("windEnabled", w.enabled).toBool();
   s.endGroup();
   return w;
+}
+
+void SimulatorWidget::persistBaro(const vsim::BaroErrConfig &b) {
+  QSettings s;
+  s.beginGroup(kWorldGroup);
+  s.setValue("baroNoisePa", b.noisePa);
+  s.setValue("baroWalk", b.walkPaPerSqrtS);
+  s.setValue("baroLagMs", b.lagMs);
+  s.setValue("baroRateHz", b.rateHz);
+  s.endGroup();
+}
+
+vsim::BaroErrConfig SimulatorWidget::restoreBaro() {
+  vsim::BaroErrConfig b; // all zero (off) if nothing saved
+  QSettings s;
+  s.beginGroup(kWorldGroup);
+  b.noisePa = s.value("baroNoisePa", b.noisePa).toFloat();
+  b.walkPaPerSqrtS = s.value("baroWalk", b.walkPaPerSqrtS).toFloat();
+  b.lagMs = s.value("baroLagMs", b.lagMs).toFloat();
+  b.rateHz = s.value("baroRateHz", b.rateHz).toFloat();
+  s.endGroup();
+  // A stored value outside the engine's limits (an edited settings file) would
+  // be refused at send time; start from "off" instead of showing it as set.
+  vsim_ctl_baro_err_t probe{};
+  if (!vsim::SimWorker::baroErrBody(b, probe))
+    return vsim::BaroErrConfig{};
+  return b;
 }
 
 // Worker/firmware thread: append the just-written UART2 bytes to the coalescing

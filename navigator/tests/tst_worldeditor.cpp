@@ -233,6 +233,52 @@ private slots:
     QVERIFY(!vsim::isStreamedBiome(QString()));
   }
 
+  // The barometer section: its spinboxes stop at the engine's limits (the same
+  // numbers tst_sitl_engine proves SimWorker accepts at the top and refuses just
+  // beyond), Apply is staged, and applying emits baroApplied with the values.
+  void baroSectionStagesAndAppliesWithinTheEnginesLimits() {
+    WorldEditorWidget we;
+    QCOMPARE(we.baroNoise_->maximum(), 500.0);
+    QCOMPARE(we.baroWalk_->maximum(), 50.0);
+    QCOMPARE(we.baroLag_->maximum(), 2000.0);
+    QCOMPARE(we.baroRate_->maximum(), 1000.0);
+    QCOMPARE(we.baroNoise_->minimum(), 0.0);
+    QCOMPARE(we.baroRate_->minimum(), 0.0);
+    QVERIFY(!we.baroApplyBtn_->isEnabled()); // clean at start
+    QSignalSpy spy(&we, &WorldEditorWidget::baroApplied);
+    we.baroNoise_->setValue(3.0);
+    we.baroWalk_->setValue(0.25);
+    we.baroLag_->setValue(120.0);
+    we.baroRate_->setValue(25.0);
+    QVERIFY(we.baroApplyBtn_->isEnabled()); // an edit makes it dirty
+    QCOMPARE(spy.count(), 0);               // staged: nothing sent yet
+    we.baroApplyBtn_->click();
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(!we.baroApplyBtn_->isEnabled()); // clean until the next edit
+    const vsim::BaroErrConfig c = we.baroConfig();
+    QCOMPARE(c.noisePa, 3.0f);
+    QCOMPARE(c.walkPaPerSqrtS, 0.25f);
+    QCOMPARE(c.lagMs, 120.0f);
+    QCOMPARE(c.rateHz, 25.0f);
+    // An out-of-range value is clamped by the control, never carried through.
+    we.baroNoise_->setValue(9999.0);
+    we.baroApplyBtn_->click();
+    QCOMPARE(we.baroConfig().noisePa, 500.0f);
+  }
+
+  void setBaroConfigSyncsWidgetsAndStaysClean() {
+    WorldEditorWidget we;
+    vsim::BaroErrConfig c;
+    c.noisePa = 7.0f;
+    c.lagMs = 200.0f;
+    QSignalSpy spy(&we, &WorldEditorWidget::baroApplied);
+    we.setBaroConfig(c);
+    QCOMPARE(we.baroNoise_->value(), 7.0);
+    QCOMPARE(we.baroLag_->value(), 200.0);
+    QVERIFY(!we.baroApplyBtn_->isEnabled()); // a restore is not an edit
+    QCOMPARE(spy.count(), 0);                // and sends nothing by itself
+  }
+
   void setConfigRestoresWidgets() {
     WorldEditorWidget we;
     vsim::WorldConfig w;
