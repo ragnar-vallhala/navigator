@@ -296,6 +296,7 @@ void WorldEditorWidget::buildUi() {
 
   // -- Wind & turbulence (its own staged Apply, mockup World tab) --
   buildWindSection(root);
+  buildBaroSection(root);
 
   // -- Apply / Save / Load --
   {
@@ -591,6 +592,88 @@ void WorldEditorWidget::buildWindSection(QVBoxLayout *root) {
 
   sec->setContentWidget(body);
   root->addWidget(sec);
+}
+
+void WorldEditorWidget::buildBaroSection(QVBoxLayout *root) {
+  auto *sec = new CollapsibleSection(tr("Barometer error"), this,
+                                     /*expanded=*/false);
+  auto *body = new QWidget();
+  auto *col = new QVBoxLayout(body);
+  auto *form = new QFormLayout();
+  // The ranges are the engine's own limits (it drops a message outside them), so
+  // the controls cannot produce a value the sim would refuse.
+  baroNoise_ = spin(0.0, 500.0, 1, 0.5, baro_.noisePa, QStringLiteral(" Pa"));
+  baroWalk_ =
+      spin(0.0, 50.0, 3, 0.05, baro_.walkPaPerSqrtS, QStringLiteral(" Pa/√s"));
+  baroLag_ = spin(0.0, 2000.0, 0, 10.0, baro_.lagMs, QStringLiteral(" ms"));
+  baroRate_ = spin(0.0, 1000.0, 0, 1.0, baro_.rateHz, QStringLiteral(" Hz"));
+  baroRate_->setSpecialValueText(tr("every step"));
+  baroNoise_->setToolTip(
+      tr("White noise per reading, 1 sigma. About 12 Pa is one metre of height."));
+  baroWalk_->setToolTip(
+      tr("A random-walk offset that wanders rather than ramps."));
+  baroLag_->setToolTip(tr("First-order response time constant."));
+  baroRate_->setToolTip(
+      tr("The part's output rate (sample-and-hold). 'every step' = a new "
+         "reading each physics step."));
+  form->addRow(tr("Noise:"), baroNoise_);
+  form->addRow(tr("Drift:"), baroWalk_);
+  form->addRow(tr("Lag:"), baroLag_);
+  form->addRow(tr("Output rate:"), baroRate_);
+  col->addLayout(form);
+  {
+    auto *row = new QHBoxLayout();
+    row->addStretch();
+    baroApplyBtn_ = new ui::SuccessButton(tr("Apply to Sim"), body);
+    baroApplyBtn_->setToolTip(tr("Push the barometer error to the simulator."));
+    baroApplyBtn_->setEnabled(false); // enabled when a value changes (dirty)
+    row->addWidget(baroApplyBtn_);
+    col->addLayout(row);
+    connect(baroApplyBtn_, &QPushButton::clicked, this,
+            &WorldEditorWidget::onApplyBaro);
+  }
+  for (QDoubleSpinBox *s : {baroNoise_, baroWalk_, baroLag_, baroRate_})
+    connect(s, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+            [this](double) {
+              if (!baroSyncing_ && baroApplyBtn_)
+                baroApplyBtn_->setEnabled(true);
+            });
+  sec->setContentWidget(body);
+  root->addWidget(sec);
+}
+
+void WorldEditorWidget::syncBaroToUi() {
+  baroSyncing_ = true;
+  if (baroNoise_)
+    baroNoise_->setValue(baro_.noisePa);
+  if (baroWalk_)
+    baroWalk_->setValue(baro_.walkPaPerSqrtS);
+  if (baroLag_)
+    baroLag_->setValue(baro_.lagMs);
+  if (baroRate_)
+    baroRate_->setValue(baro_.rateHz);
+  baroSyncing_ = false;
+  if (baroApplyBtn_)
+    baroApplyBtn_->setEnabled(false); // freshly synced = clean
+}
+
+void WorldEditorWidget::syncUiToBaro() {
+  baro_.noisePa = static_cast<float>(baroNoise_->value());
+  baro_.walkPaPerSqrtS = static_cast<float>(baroWalk_->value());
+  baro_.lagMs = static_cast<float>(baroLag_->value());
+  baro_.rateHz = static_cast<float>(baroRate_->value());
+}
+
+void WorldEditorWidget::onApplyBaro() {
+  syncUiToBaro();
+  if (baroApplyBtn_)
+    baroApplyBtn_->setEnabled(false); // clean until next edit
+  emit baroApplied();
+}
+
+void WorldEditorWidget::setBaroConfig(const vsim::BaroErrConfig &b) {
+  baro_ = b;
+  syncBaroToUi();
 }
 
 QString WorldEditorWidget::serializeProcedural(const vsim::WorldConfig &w) {

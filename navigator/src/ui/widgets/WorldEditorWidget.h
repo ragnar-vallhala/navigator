@@ -48,6 +48,9 @@ public:
   // Wind & turbulence (its own staged Apply button, mockup World tab).
   const vsim::WindConfig &windConfig() const { return wind_; }
   void setWindConfig(const vsim::WindConfig &w);
+  // Barometer error (its own staged Apply): noise, drift, lag, output rate.
+  const vsim::BaroErrConfig &baroConfig() const { return baro_; }
+  void setBaroConfig(const vsim::BaroErrConfig &b);
 
   // Procedural-world settings (biome, seed, size, field, flora, look, preset id)
   // as a compact JSON string, using the same keys as the .vworld export. Used
@@ -73,6 +76,7 @@ public:
 signals:
   void worldApplied();     // user committed env → push to daemon + persist
   void windApplied();      // user committed wind → push to daemon + persist
+  void baroApplied();      // user committed the barometer error → push + persist
   void obstaclesChanged(); // obstacle list/edit changed → preview + persist
   void obstacleSelectionChanged(int index); // list selection → 3D highlight
   void worldMeshChanged(); // imported mesh path/scale/up-axis changed
@@ -80,6 +84,7 @@ signals:
 private slots:
   void onApply();
   void onApplyWind();
+  void onApplyBaro();
   void onImportWorldMesh();
   void onClearWorldMesh();
   void onAddObstacle(int type);
@@ -98,6 +103,7 @@ private:
   // Load a world from its portable JSON and push it like Load... does.
   void loadWorldObject(const QJsonObject &o);
   void buildWindSection(QVBoxLayout *root);
+  void buildBaroSection(QVBoxLayout *root);
   void buildProceduralSection(QVBoxLayout *root);
   void buildProceduralTuningSection(QVBoxLayout *root);
   void buildWorldMeshSection(QVBoxLayout *root);
@@ -107,6 +113,8 @@ private:
   void syncProcToUi();          // cfg_ -> procedural section widgets
   void syncWindToUi();          // wind_ -> spinboxes/checkbox
   void syncUiToWind();          // spinboxes/checkbox -> wind_
+  void syncBaroToUi();          // baro_ -> spinboxes
+  void syncUiToBaro();          // spinboxes -> baro_
   void refreshObstacleList();   // list labels from cfg_.obstacles
   void syncFormFromSelection(); // selected obstacle → form fields
 
@@ -132,6 +140,14 @@ private:
   QPushButton *windApplyBtn_ = nullptr; // enabled only when dirty
   class QLabel *windReadout_ = nullptr; // live speed/dir from the pose stream
   bool windSyncing_ = false;            // guard sync from marking dirty
+  // Barometer error.
+  vsim::BaroErrConfig baro_;
+  QDoubleSpinBox *baroNoise_ = nullptr;
+  QDoubleSpinBox *baroWalk_ = nullptr;
+  QDoubleSpinBox *baroLag_ = nullptr;
+  QDoubleSpinBox *baroRate_ = nullptr;
+  QPushButton *baroApplyBtn_ = nullptr; // enabled only when dirty
+  bool baroSyncing_ = false;
 
   // Obstacle editor.
   QListWidget *obsList_ = nullptr;

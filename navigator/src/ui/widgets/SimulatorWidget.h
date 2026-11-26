@@ -467,6 +467,8 @@ private:
   vsim::WorldConfig restoreWorld();
   void persistWind(const vsim::WindConfig &w);
   vsim::WindConfig restoreWind();
+  void persistBaro(const vsim::BaroErrConfig &b);
+  vsim::BaroErrConfig restoreBaro();
 
   // Switch the right-hand properties panel: 0 = Vehicle, 1 = World.
   // Vehicle is locked while the sim is running.
