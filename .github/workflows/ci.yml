@@ -587,6 +587,29 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir build-win --output-on-failure
+      - name: Water cache thread cases, 200 runs
+        # tst_waterfield's thread case hung once for 300 s on this job (11 green
+        # runs before it). The cause is a hypothesis (the winpthreads rwlock
+        # behind std::shared_mutex, now a plain mutex), not proven. The cases
+        # take ~0.1 s each, so 200 runs cost seconds here, and a regression or a
+        # remaining hang shows up with a log instead of once in a dozen runs.
+        if: ${{ !cancelled() }}
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          exe=$(find build-win -name tst_waterfield.exe | head -1)
+          [ -n "$exe" ] || { echo "no tst_waterfield.exe (the build failed?)"; exit 0; }
+          for i in $(seq 200); do
+            rc=0
+            timeout 60 "$exe" bodyCacheGivesTheSameHeightsOnAnyThread \
+                bodyCacheSurvivesEightThreadsAndFieldChurn > water-loop.txt 2>&1 || rc=$?
+            if [ "$rc" -ne 0 ]; then
+              echo "run $i of 200 failed, exit=$rc"
+              tail -60 water-loop.txt
+              exit 1
+            fi
+          done
+          echo "200 runs clean"
       - name: Workspace mock + tests (Qt Advanced Docking)
         # Qt Advanced Docking System is fetched (pinned commit) and built here.
         # Never tried on MSYS2 UCRT64 by the author: it is allowed to fail
