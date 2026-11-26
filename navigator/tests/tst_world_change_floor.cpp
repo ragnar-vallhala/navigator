@@ -39,6 +39,8 @@
 #include "ProceduralWorld.h"
 #include "procgen/TerrainField.h"
 #include "WorldEditorWidget.h"
+#include "SimWorker.h"
+#include "procgen/TreeColliderWindow.h"
 
 #include <QScopeGuard>
 #include <QApplication>
@@ -152,6 +154,26 @@ public:
   float homePadTerrain() const { return w_.m_homePad.z(); }
   void persist() { w_.persistWorld(w_.m_worldEditor->config()); }
   vsim::WorldConfig restore() { return w_.restoreWorld(); }
+  // Trunk-collider path (updateTreeColliders). A SimWorker that is never
+  // started stands in for a running sim: sendTreeColliders only queues, and the
+  // test sink sees each window. dropFakeSim must run before the widget dies.
+  void fakeSim() { w_.m_sim = new vsim::SimWorker(&w_); }
+  void dropFakeSim() {
+    delete w_.m_sim;
+    w_.m_sim = nullptr;
+  }
+  // The streamed chunks' trunks, as onChunkMeshed stores them (one chunk).
+  void setColliders(std::vector<vsim::procgen::VegCollider> c) {
+    w_.m_chunkColliders.clear();
+    w_.m_chunkColliders[1] = std::move(c);
+    ++w_.m_colliderRev;
+  }
+  // A pose from the engine, through the widget's own pose handler.
+  void pose(float x, float y, float z) {
+    vsim::SimSnapshot s;
+    s.pos_w = QVector3D(x, y, z);
+    w_.updateHud(s);
+  }
   void start() { w_.startInAppSim(); }
   void stop() { w_.stopInAppSim(); }
   // Change the world the way the World tab does.
@@ -318,6 +340,120 @@ private slots:
     box->setChecked(before);
     QCOMPARE(a_->treesShown(), before);
     QCOMPARE(QSettings().value("sim/vegetationTrees").toBool(), before);
+  }
+
+  // Trees checkbox -> trunk colliders. Drives the real checkbox and the real
+  // pose handler; the engine side is the SimWorker test sink (what the GUI
+  // asked sendTreeColliders to send), so it runs on an SDK without ENV too. The
+  // chunk trunks are injected the way onChunkMeshed stores them.
+  void treesToggleSendsClearThenRebuild() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    using namespace vsim::procgen;
+    QCheckBox *box = nullptr;
+    for (QCheckBox *c : w_->findChildren<QCheckBox *>())
+      if (c->text() == QLatin1String("Trees"))
+        box = c;
+    QVERIFY2(box, "no Trees checkbox in the Sim controls");
+    if (!box->isEnabled())
+      QSKIP("NAV_VEGETATION_TREES is set; the variable beats the checkbox");
+    const bool before = box->isChecked();
+    struct Sent {
+      bool clear;
+      std::vector<EngineCylinder> cyl;
+    };
+    std::vector<Sent> sent;
+    vsim::SimWorker::setTreeColliderSinkForTest([&](const ColliderWindow &w) {
+      sent.push_back({w.cylinders.empty(), w.cylinders});
+    });
+    a_->fakeSim();
+    auto cleanup = qScopeGuard([&] {
+      vsim::SimWorker::setTreeColliderSinkForTest(nullptr);
+      a_->dropFakeSim();
+      box->setChecked(before);
+    });
+    if (!box->isChecked())
+      box->setChecked(true);
+    const auto tree = [](float x, float y) {
+      return VegCollider{PgVec3{x, y, 0.0f}, 0.3f, 10.0f, false};
+    };
+    // Three trunks in the 150 m window and one far outside it.
+    a_->setColliders({tree(10, 0), tree(40, 5), tree(-30, 20), tree(400, 0)});
+    sent.clear();
+
+    a_->pose(0, 0, -5); // Trees on, trunks in the window: a set goes out
+    QCOMPARE(int(sent.size()), 1);
+    QVERIFY(!sent[0].clear);
+    QCOMPARE(int(sent[0].cyl.size()), 3);
+    const std::vector<EngineCylinder> first = sent[0].cyl;
+    a_->pose(5, 0, -5); // inside the hysteresis: nothing
+    QCOMPARE(int(sent.size()), 1);
+    a_->pose(30, 0, -5); // moved more than a quarter of the margin: rebuild
+    QCOMPARE(int(sent.size()), 2);
+    a_->pose(0, 0, -5); // and back: the window is the first one again
+    QCOMPARE(int(sent.size()), 3);
+    QVERIFY(sent[2].cyl == first);
+
+    sent.clear();
+    box->setChecked(false); // the real toggle: exactly one clear
+    QCOMPARE(int(sent.size()), 1);
+    QVERIFY(sent[0].clear);
+    for (float x : {0.0f, 30.0f, 200.0f, 0.0f, 90.0f}) // moving sends nothing
+      a_->pose(x, 0, -5);
+    QCOMPARE(int(sent.size()), 1);
+
+    box->setChecked(true); // back on: the rebuild is the same set again
+    QCOMPARE(int(sent.size()), 2);
+    QVERIFY(!sent[1].clear);
+    QVERIFY(sent[1].cyl == first);
+  }
+
+  // A different world (seed) forces a rebuild even with the drone standing still.
+  void worldChangeRebuildsTheColliders() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    using namespace vsim::procgen;
+    QCheckBox *box = nullptr;
+    for (QCheckBox *c : w_->findChildren<QCheckBox *>())
+      if (c->text() == QLatin1String("Trees"))
+        box = c;
+    QVERIFY2(box, "no Trees checkbox in the Sim controls");
+    if (!box->isEnabled())
+      QSKIP("NAV_VEGETATION_TREES is set; the variable beats the checkbox");
+    const bool before = box->isChecked();
+    int sends = 0;
+    vsim::SimWorker::setTreeColliderSinkForTest(
+        [&](const ColliderWindow &) { ++sends; });
+    // The world is changed first (stopped, as the other cases do), then a sim
+    // stand-in appears, so only the colliders path sees it.
+    a_->changeWorld([](vsim::WorldConfig &c) {
+      QVERIFY(vsim::applyWorldPreset(c, QStringLiteral("hills"), 11));
+    });
+    pump(100);
+    a_->fakeSim();
+    auto cleanup = qScopeGuard([&] {
+      vsim::SimWorker::setTreeColliderSinkForTest(nullptr);
+      a_->dropFakeSim();
+      box->setChecked(before);
+    });
+    if (!box->isChecked())
+      box->setChecked(true);
+    a_->setColliders({VegCollider{PgVec3{10, 0, 0}, 0.3f, 10.0f, false}});
+    sends = 0;
+    a_->pose(0, 0, -5);
+    QCOMPARE(sends, 1);
+    a_->pose(1, 0, -5); // standing still: nothing
+    a_->pose(0, 0, -5);
+    QCOMPARE(sends, 1);
+    // Same preset, another seed, as the World tab does it.
+    a_->dropFakeSim();
+    a_->changeWorld([](vsim::WorldConfig &c) {
+      QVERIFY(vsim::applyWorldPreset(c, QStringLiteral("hills"), 12));
+    });
+    a_->fakeSim();
+    sends = 0;
+    a_->pose(0, 0, -5); // same position, new world: rebuilt
+    QCOMPARE(sends, 1);
   }
 
   // The Sim controls "Survey grid" checkbox is off by default, switches the
