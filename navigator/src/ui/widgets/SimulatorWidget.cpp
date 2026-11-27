@@ -1012,6 +1012,7 @@ void SimulatorWidget::loadWorldMeshToRenderer() {
     gp.lacunarity = w.field.lacunarity;
     gp.gain = w.field.gain;
     gp.mountainMix = w.field.mountainMix;
+    gp.ridgeSoft = w.field.ridgeSoft;
     gp.grassMaxFrac = w.flora.grassMaxFrac;
     gp.slopeLo = w.flora.slopeLo;
     gp.slopeHi = w.flora.slopeHi;

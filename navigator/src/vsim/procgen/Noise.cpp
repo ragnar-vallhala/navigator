@@ -107,7 +107,7 @@ float Noise::fbm(float x, float y, int octaves, float lacunarity,
 }
 
 float Noise::ridged(float x, float y, int octaves, float lacunarity,
-                    float gain) const {
+                    float gain, float soft) const {
   float sum = 0.0f;
   float amp = 1.0f;
   float freq = 1.0f;
@@ -117,7 +117,9 @@ float Noise::ridged(float x, float y, int octaves, float lacunarity,
   for (int o = 0; o < octaves; ++o) {
     // 1 - |noise| peaks (=1) where the noise crosses zero -> sharp ridge lines;
     // squaring sharpens the ridge and rounds the valley floor.
-    float r = 1.0f - std::fabs(gradient(x * freq, y * freq));
+    const float n = gradient(x * freq, y * freq);
+    float r = 1.0f - (soft > 0.0f ? std::sqrt(n * n + soft * soft) - soft
+                                  : std::fabs(n));
     r *= r;
     sum += amp * r;
     norm += amp;

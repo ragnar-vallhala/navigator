@@ -121,6 +121,7 @@ QJsonObject worldToJson(const vsim::WorldConfig &w) {
                     {"feature_m", w.field.featureM},
                     {"mountain_mix", w.field.mountainMix},
                     {"max_slope", w.field.maxSlope},
+                    {"ridge_soft", w.field.ridgeSoft},
                     {"preset", w.worldPreset},
                     {"shape", w.field.shape},
                     {"palette", w.field.palette},
@@ -200,6 +201,7 @@ vsim::WorldConfig worldFromJson(const QJsonObject &root) {
   w.field.featureM = pg.value("feature_m").toDouble(w.field.featureM);
   w.field.mountainMix = pg.value("mountain_mix").toDouble(w.field.mountainMix);
   w.field.maxSlope = pg.value("max_slope").toDouble(w.field.maxSlope);
+  w.field.ridgeSoft = pg.value("ridge_soft").toDouble(w.field.ridgeSoft);
   w.worldPreset = pg.value("preset").toString(w.worldPreset);
   w.field.shape = pg.value("shape").toInt(w.field.shape);
   w.field.palette = pg.value("palette").toInt(w.field.palette);

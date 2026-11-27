@@ -131,7 +131,7 @@ float TerrainField::rawHeight(float wx, float wy) const {
   // thin high-frequency spikes). The fbm `roll` above supplies the fine surface
   // texture on the slopes, so the result is wide mountains, not cones.
   const int ridgeOctaves = std::min(p_.octaves, 4);
-  const float ridge = mtn_.ridged(wxw, wyw, ridgeOctaves, p_.lacunarity, 0.55f);
+  const float ridge = mtn_.ridged(wxw, wyw, ridgeOctaves, p_.lacunarity, 0.55f, p_.ridgeSoft);
   const float mtnUnit = std::pow(clamp01(ridge), 0.7f); // round the crests
 
   // Meadow regions: gentle undulation only. Mountain regions: rounded ridges

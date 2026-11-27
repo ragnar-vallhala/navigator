@@ -51,6 +51,9 @@ struct FieldParams {
   // than this are eroded down so the mesh has no near-vertical faces. >=8
   // disables it.
   float maxSlope = 0.8f;
+  // Rounds the mountain crests (Noise::ridged `soft`): 0 keeps the sharp ridge
+  // lines; ~0.2 removes the kink that the slope cap cuts into flat facets.
+  float ridgeSoft = 0.0f;
 
   // Surface-colour thresholds, as fractions of heightM (0..1). Each is the
   // elevation where that band is reached; colour() blends with fixed widths.
