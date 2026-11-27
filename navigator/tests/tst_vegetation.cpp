@@ -104,6 +104,8 @@ private slots:
   void treesHaveGapsAndMixedZones();
   void crownsSetTheSpacing();
   void collidersFollowTheDrawnSize();
+  void alpineRocksSkewSmall();
+  void rockLookIsAlpineOnly();
   void paletteSpeciesShares();
   void forestHasTwoConifersAndTwoBroadleafs();
   void grassIsTintedPerPalette();
@@ -412,6 +414,62 @@ void TstVegetation::collidersFollowTheDrawnSize() {
     QVERIFY(cs[i].radius > 0.1f && cs[i].radius < 1.5f); // a trunk, not a sapling
     QVERIFY(!cs[i].isRock);
   }
+}
+
+// The rock tint and the small-scree skew belong to alpine alone: every other
+// palette keeps today's rock colour and size spread exactly (rockTint off feeds
+// u_rock = 0, the old shader branch; skew 1 skips the scale pow()).
+void TstVegetation::rockLookIsAlpineOnly() {
+  QVERIFY(!VegSpeciesParams{}.rockTint);
+  QCOMPARE(VegSpeciesParams{}.scaleSkew, 1.0f);
+  for (int pal : {int(kPalEndless), int(kPalDesert), int(kPalForest),
+                  int(kPalPasture), int(kPalYard), int(kPalMeadow),
+                  int(kPalAlpine), int(kPalHills), int(kPalFlat),
+                  int(kPalRacing)}) {
+    const VegSpeciesParams &r = vegParamsForPalette(pal).species[kVegRock];
+    const bool alpine = pal == int(kPalAlpine);
+    QVERIFY2(r.rockTint == alpine, qPrintable(QString("palette %1").arg(pal)));
+    QVERIFY2((r.scaleSkew != 1.0f) == alpine,
+             qPrintable(QString("palette %1").arg(pal)));
+  }
+}
+
+// Alpine rocks are mostly small scree with a few boulders (scaleSkew), and the
+// collider-sized share (scale >= kVegRockColliderMinScale) drops with it.
+void TstVegetation::alpineRocksSkewSmall() {
+  const TerrainField f = makeField(kPalAlpine, 11u);
+  VegParams skew = vegParamsForPalette(kPalAlpine);
+  VegParams flat = skew;
+  flat.species[kVegRock].scaleSkew = 1.0f;
+  QVERIFY(skew.species[kVegRock].scaleSkew > 1.0f);
+  std::vector<float> a, b;
+  for (int j = 0; j < 6; ++j)
+    for (int i = 0; i < 6; ++i) {
+      for (const VegInstance &v : scatterVegetation(f, i, j, 256.0f, skew))
+        if (v.species == kVegRock)
+          a.push_back(v.scale);
+      for (const VegInstance &v : scatterVegetation(f, i, j, 256.0f, flat))
+        if (v.species == kVegRock)
+          b.push_back(v.scale);
+    }
+  QVERIFY2(a.size() > 200, "too few alpine rocks to compare");
+  qInfo("alpine rock count: skewed %zu, uniform %zu", a.size(), b.size());
+  const auto &sp = skew.species[kVegRock];
+  auto big = [](const std::vector<float> &v) {
+    size_t n = 0;
+    for (float s : v)
+      n += s >= kVegRockColliderMinScale ? 1 : 0;
+    return n;
+  };
+  for (float s : a)
+    QVERIFY(s >= sp.scaleMin - 1e-4f && s <= sp.scaleMax + 1e-4f);
+  std::vector<float> sa = a, sb = b;
+  std::sort(sa.begin(), sa.end());
+  std::sort(sb.begin(), sb.end());
+  qInfo("alpine rocks: %zu, median scale skewed %.2f vs uniform %.2f, collider-sized %zu vs %zu",
+        a.size(), double(sa[sa.size() / 2]), double(sb[sb.size() / 2]), big(a), big(b));
+  QVERIFY(sa[sa.size() / 2] < sb[sb.size() / 2] - 0.2f);
+  QVERIFY(big(a) < big(b));
 }
 
 void TstVegetation::paletteSpeciesShares() {

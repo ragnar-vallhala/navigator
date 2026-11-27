@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 #include "NavlinkRouter.h"
+#include "NavlinkText.h"
 #include "TxSeq.h"
 
 #include "core/MathUtils.h" // float16_to_float32 (IMU delta reconstruction)
@@ -256,7 +257,7 @@ void thunkParamValue(void *ctx, const navlink_frame_hdr_t *,
   if (!r->onParamValue)
     return;
   params::ParamCodec::ValueMsg v;
-  v.id = QString::fromLatin1(m->param_id, int(qstrnlen(m->param_id, 16)));
+  v.id = navtext::fieldLatin1(m->param_id);
   v.index = m->index;
   v.count = m->count;
   v.generation = m->generation;
@@ -284,14 +285,11 @@ void thunkFaultStatus(void *ctx, const navlink_frame_hdr_t *,
   auto *r = static_cast<NavlinkRouter *>(ctx);
   if (!r->onFault)
     return;
-  size_t n = 0;
-  while (n < sizeof(m->text) && m->text[n] != '\0')
-    n++;
   FaultEvent e;
   e.id = m->id;
   e.severity = m->severity;
   e.active = m->active != 0;
-  e.text = QString::fromLatin1(m->text, static_cast<int>(n));
+  e.text = navtext::fieldLatin1(m->text);
   if (const navlink_fault_info_t *info = navlink_fault_info(m->id)) {
     e.name = QString::fromLatin1(info->name);
     if (e.text.isEmpty())
@@ -392,10 +390,7 @@ void thunkPerfTaskname(void *ctx, const navlink_frame_hdr_t *,
   auto *r = static_cast<NavlinkRouter *>(ctx);
   if (!r->onTaskName)
     return;
-  size_t n = 0;
-  while (n < sizeof(m->name) && m->name[n] != '\0')
-    n++;
-  r->onTaskName(m->task_id, QString::fromLatin1(m->name, static_cast<int>(n)));
+  r->onTaskName(m->task_id, navtext::fieldLatin1(m->name));
 }
 
 void thunkTimeSync(void *ctx, const navlink_frame_hdr_t *,

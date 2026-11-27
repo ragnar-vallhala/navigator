@@ -280,6 +280,9 @@ public:
   static bool treesEnabledByConfig();
   void setTreesEnabled(bool on);
   bool treesEnabled() const { return treesOn_; }
+  // Tint rocks (VegSpecies::rockTint of the world's palette); off = their plain
+  // texture colour.
+  void setRockTint(bool on) { rockTint_ = on; }
 
   // Chunk instance lists. CPU only, no GL needed; call on the GUI thread.
   // (cx, cy) is the chunk centre and half its side, world metres.
@@ -445,7 +448,7 @@ private:
   bool blobGlTried_ = false, droneBlobDrawn_ = false;
   // Per-draw uniform locations (the per-frame ones are set by name).
   struct Locs {
-    int k = -1, height = -1, sway = -1, cutout = -1, cutoff = -1, a2c = -1;
+    int k = -1, height = -1, sway = -1, cutout = -1, cutoff = -1, a2c = -1, rock = -1;
     int cy = -1, half = -1, tile = -1;
     int bakeMvp = -1;
   } loc_;
@@ -457,7 +460,7 @@ private:
   std::unique_ptr<QOpenGLShaderProgram> progShadow_;
   std::vector<std::vector<float>> casterBuckets_; // per variant, 8 floats an instance
   BakeStats bakeStatsOut_;
-  bool atlasOk_ = false, glReady_ = false, atlasTried_ = false, treesOn_ = false;
+  bool atlasOk_ = false, glReady_ = false, atlasTried_ = false, treesOn_ = false, rockTint_ = false;
   bool a2c_ = false; // alpha-to-coverage this frame (multisampled target)
   float maxAniso_ = 1.0f;
   int speciesUploadBudget_ = 0;

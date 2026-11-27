@@ -166,6 +166,13 @@ struct VegSpeciesParams {
   float altHiFrac = 1.0f;
   float scaleMin = 0.8f;
   float scaleMax = 1.3f;
+  // Exponent on the scale draw: 1 = uniform between scaleMin and scaleMax, above 1
+  // = many small instances and few large ones.
+  float scaleSkew = 1.0f;
+  // Rocks only: colour each stone granite / rust / basalt from its hash
+  // (VegetationRenderer's rockTint) instead of the texture's own brown. Off keeps
+  // the plain colour, which every palette but alpine uses.
+  bool rockTint = false;
   // Least TerrainField::grassFactor needed (keeps off tracks, ponds, paving;
   // rocks accept less since rock patches have no grass).
   float groundMin = 0.5f;

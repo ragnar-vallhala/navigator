@@ -143,7 +143,7 @@ public:
       return;
     navlink_param_value_t m{};
     const QByteArray id = cat->entries()[i].id.toLatin1();
-    std::memcpy(m.param_id, id.constData(), size_t(id.size()));
+    std::memcpy(m.param_id, id.constData(), qMin(size_t(id.size()), sizeof m.param_id));
     m.index = quint16(i);
     m.count = quint16(count);
     m.generation = generation;
