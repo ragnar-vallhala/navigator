@@ -123,6 +123,43 @@ private slots:
     // Each cascade is coarser than the one before.
     QVERIFY(s.info[0].x() < s.info[1].x() && s.info[1].x() < s.info[2].x());
   }
+  // The far cascade's bias factor follows the sun's height: exactly 1 up to 35 deg (and so the
+  // low-sun shadows are untouched), the full factor from 46 deg, smooth and monotone between.
+  void farBiasFactorRampsWithSunHeight() {
+    const float deg = 3.14159265f / 180.0f;
+    QCOMPARE(farCascadeBiasFactor(0.0f), 1.0f);
+    QCOMPARE(farCascadeBiasFactor(std::sin(8.0f * deg)), 1.0f);
+    QCOMPARE(farCascadeBiasFactor(std::sin(20.0f * deg)), 1.0f);
+    QCOMPARE(farCascadeBiasFactor(std::sin(30.0f * deg)), 1.0f);
+    QCOMPARE(farCascadeBiasFactor(kFarBiasSunLo), 1.0f);
+    QVERIFY2(farCascadeBiasFactor(std::sin(35.0f * deg)) < 1.005f, "35 deg is where it starts: practically 1");
+    QVERIFY2(farCascadeBiasFactor(std::sin(46.0f * deg)) > kFarBiasMul - 0.01f, "46 deg is full");
+    QCOMPARE(farCascadeBiasFactor(kFarBiasSunHi), kFarBiasMul);
+    QCOMPARE(farCascadeBiasFactor(std::sin(70.0f * deg)), kFarBiasMul);
+    QCOMPARE(farCascadeBiasFactor(1.0f), kFarBiasMul);
+    QVERIFY(qFuzzyCompare(farCascadeBiasFactor(0.5f * (kFarBiasSunLo + kFarBiasSunHi)), 0.5f * (1.0f + kFarBiasMul)));
+    float prev = 1.0f;
+    for (int i = 0; i <= 100; ++i) {
+      const float f = farCascadeBiasFactor(float(i) / 100.0f);
+      QVERIFY2(f >= prev - 1e-6f && f <= kFarBiasMul + 1e-6f, "monotone, never above the full factor");
+      prev = f;
+    }
+  }
+
+  // The shader text carries the same numbers, applies the factor only from the last cascade on,
+  // and has no placeholder left.
+  void farBiasShaderUsesTheSameConstants() {
+    const QByteArray s = cascadeShadowSource();
+    QVERIFY2(!s.contains('@'), "an unfilled placeholder");
+    QVERIFY(s.contains("const float kCsmFarBiasMul = 2.000;"));
+    QVERIFY(s.contains("const float kCsmFarSunLo = 0.570;"));
+    QVERIFY(s.contains("const float kCsmFarSunHi = 0.720;"));
+    QVERIFY(s.contains("(ci >= 2) ? mix(1.0, kCsmFarBiasMul, smoothstep(kCsmFarSunLo, kCsmFarSunHi, -L.z)) : 1.0"));
+    QCOMPARE(kFarBiasMul, 2.0f);
+    QCOMPARE(kFarBiasSunLo, 0.57f);
+    QCOMPARE(kFarBiasSunHi, 0.72f);
+  }
+
   void lowPathIsOneCascade() {
     const ShadowCascadeSet s =
         fitShadowCascades(QVector3D(0.5f, 0.4f, -0.5f), QMatrix4x4(), 60.0f,
