@@ -373,12 +373,15 @@ GroundCover::Sample GroundCover::sampleImpl(float wx, float wy, const PgVec3 &ba
   }
 
   // Scattered rock: clusters (region mask) of small blobs (high-frequency mask).
-  if (s.rockAmt > 0.0f && s.rockPaint) {
+  // The colour is only painted where rockPaint says so; the grass is kept off
+  // the blobs everywhere (the GPU grass mask and the CPU flora count on it).
+  if (s.rockAmt > 0.0f) {
     const float region = smoothstep(0.05f, 0.30f, rock_.fbm(wx / 120.0f, wy / 120.0f, 2, 2.0f, 0.5f) + (s.rockAmt - 0.3f));
     const float blob = smoothstep(0.30f, 0.46f, rock_.fbm(wx / 6.5f + 40.0f, wy / 6.5f, 2, 2.0f, 0.5f));
     const float m = region * blob * spawn * alt;
     const float tone = 0.8f + 0.4f * (0.5f + 0.5f * fine_.gradient(wx / 2.3f, wy / 2.3f));
-    col = mix(col, scale(s.rockCol, tone), m);
+    if (s.rockPaint)
+      col = mix(col, scale(s.rockCol, tone), m);
     grass *= 1.0f - m;
   }
 
