@@ -63,6 +63,10 @@ inline uint32_t hash2(int x, int y, uint32_t salt) {
   h ^= h >> 16;
   return h;
 }
+
+// Whether the parcel border starting at cell (x, y) carries a track (salt 91 for
+// a border along v, 92 for one along u): one in three do.
+inline bool borderHasTrack(int x, int y, uint32_t salt) { return hash2(x, y, salt) % 3u == 0u; }
 inline float u01(uint32_t h) { return (h & 0xffffffu) / 16777216.0f; }
 
 constexpr int kMaxCrops = 6;
@@ -231,9 +235,14 @@ PgVec3 parcelColourAt(const CoverStyle &s, const ParcelCoords &pc, const Noise &
   // and shortens it on the other: both parcels see the same moved line and the
   // blend stays continuous. Past the moved line the distance turns negative and
   // the neighbour takes over more than half.
+  // A border that carries a track stays straight (the track follows the straight
+  // line, and a road wiggling by +-4 m would look wrong); the choice is the
+  // border's own, so both parcels agree and the blend stays continuous.
   const float push = kParcelRagM * rag;
-  const float du = std::min(pc.fu, 1.0f - pc.fu) * s.fieldW + (pc.fu < 0.5f ? -push : push);
-  const float dv = std::min(pc.fv, 1.0f - pc.fv) * s.fieldH + (pc.fv < 0.5f ? -push : push);
+  const float pushU = borderHasTrack(pc.iu + (pc.fu < 0.5f ? 0 : 1), pc.iv, 91u) ? 0.0f : push;
+  const float pushV = borderHasTrack(pc.iu, pc.iv + (pc.fv < 0.5f ? 0 : 1), 92u) ? 0.0f : push;
+  const float du = std::min(pc.fu, 1.0f - pc.fu) * s.fieldW + (pc.fu < 0.5f ? -pushU : pushU);
+  const float dv = std::min(pc.fv, 1.0f - pc.fv) * s.fieldH + (pc.fv < 0.5f ? -pushV : pushV);
   const int nu = pc.fu < 0.5f ? pc.iu - 1 : pc.iu + 1;
   const int nv = pc.fv < 0.5f ? pc.iv - 1 : pc.iv + 1;
   // Neighbour weight from the signed distance: 0.5 on the line, 0 kParcelBlendM
@@ -318,16 +327,16 @@ GroundCover::Sample GroundCover::sampleImpl(float wx, float wy, const PgVec3 &ba
     // A track runs along some parcel borders (the left/bottom border of a parcel).
     const float du = std::min(fu, 1.0f - fu) * s.fieldW;
     const float dv = std::min(fv, 1.0f - fv) * s.fieldH;
-    const uint32_t hl = hash2(iu, iv, 91u), hr = hash2(iu + 1, iv, 91u);
-    const uint32_t hb = hash2(iu, iv, 92u), ht = hash2(iu, iv + 1, 92u);
-    const float dl = (fu < 0.5f ? (hl % 3u == 0u) : (hr % 3u == 0u)) ? du : 1e3f;
-    const float db = (fv < 0.5f ? (hb % 3u == 0u) : (ht % 3u == 0u)) ? dv : 1e3f;
+    const bool tl = borderHasTrack(iu, iv, 91u), tr = borderHasTrack(iu + 1, iv, 91u);
+    const bool tb = borderHasTrack(iu, iv, 92u), tt = borderHasTrack(iu, iv + 1, 92u);
+    const float dl = (fu < 0.5f ? tl : tr) ? du : 1e3f;
+    const float db = (fv < 0.5f ? tb : tt) ? dv : 1e3f;
     edgeTrack = 1.0f - smoothstep(kEdgeTrackD0, kEdgeTrackD1, std::min(dl, db));
     // The same distance, signed: the offset from the border line the parcel's
     // nearer side has (left of the middle, else right), 1e3 where that border
     // carries no track.
-    const bool tu = fu < 0.5f ? (hl % 3u == 0u) : (hr % 3u == 0u);
-    const bool tv = fv < 0.5f ? (hb % 3u == 0u) : (ht % 3u == 0u);
+    const bool tu = fu < 0.5f ? tl : tr;
+    const bool tv = fv < 0.5f ? tb : tt;
     const float su = (fu < 0.5f ? fu : fu - 1.0f) * s.fieldW;
     const float sv = (fv < 0.5f ? fv : fv - 1.0f) * s.fieldH;
     if (tu && (!tv || std::fabs(su) <= std::fabs(sv)))
