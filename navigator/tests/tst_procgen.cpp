@@ -34,6 +34,7 @@
 #include "procgen/TerrainField.h"
 #include "procgen/TerrainGen.h"
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <thread>
@@ -73,6 +74,7 @@ private slots:
   void sameSeedSameMesh();
   void differentSeedDiffersMesh();
   void fieldIsDeterministicAndBounded();
+  void slopeCapIsTheSameInEveryDirection();
   void groundCoverDeterministicAndBounded();
   void groundCoverGivesVarietyInEveryPalette();
   void groundCoverPondsAndTracksExist();
@@ -228,6 +230,41 @@ void TstProcgen::fieldIsDeterministicAndBounded() {
     QCOMPARE(h, b.height(wx, wy));                   // deterministic
     QVERIFY(h >= -1e-4f && h <= fp.heightM + 1e-3f); // bounded, never negative
   }
+}
+
+void TstProcgen::slopeCapIsTheSameInEveryDirection() {
+  // A ramp rising k per node along one grid axis, and one rising k per node
+  // along both (2k over a diagonal step of length sqrt(2)). With k just under
+  // the cap the axis ramp is allowed; the diagonal ramp, 2k/sqrt(2) per metre
+  // toward its lowest diagonal neighbour, exceeds the cap and must be cut. The
+  // old four-neighbour cap left it standing and carved stair teeth into steep
+  // diagonal crests.
+  constexpr int gn = 21;
+  constexpr float maxStep = 1.0f, k = 0.9f;
+  constexpr float kSqrt2 = 1.41421356f;
+  const auto grid = [&](bool diagonal) {
+    std::vector<float> H(static_cast<std::size_t>(gn) * gn);
+    for (int j = 0; j < gn; ++j)
+      for (int i = 0; i < gn; ++i)
+        H[j * gn + i] = diagonal ? k * float(i + j) : k * float(i);
+    return H;
+  };
+  const std::vector<float> axisIn = grid(false), diagIn = grid(true);
+  std::vector<float> axis = axisIn, diag = diagIn;
+  erodeSlopeCap(axis, gn, maxStep, 1);
+  erodeSlopeCap(diag, gn, maxStep, 1);
+  int axisCut = 0, diagCut = 0;
+  for (int j = 1; j < gn - 1; ++j)
+    for (int i = 1; i < gn - 1; ++i) {
+      const int c = j * gn + i;
+      axisCut += axis[c] < axisIn[c] - 1e-4f;
+      diagCut += diag[c] < diagIn[c] - 1e-4f;
+      // Whatever the direction, no node ends above its lowest neighbour by more
+      // than the cap allows for that neighbour's distance.
+      QVERIFY(diag[c] <= diagIn[c - gn - 1] + kSqrt2 * maxStep + 1e-4f);
+    }
+  QCOMPARE(axisCut, 0);                   // k < maxStep: a gentle axis ramp stays
+  QCOMPARE(diagCut, (gn - 2) * (gn - 2)); // the steeper diagonal ramp is cut
 }
 
 void TstProcgen::fieldChunksTileSeamlessly() {

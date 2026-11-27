@@ -274,7 +274,8 @@ constexpr int kErodeIters = 6;
 
 // Slope-capped height grid: gn x gn nodes, node (i, j) at world
 // (x0 + step*(iLo+i), y0 + step*(jLo+j)). The cap pulls any node down to at most
-// maxSlope*step above its lowest 4-neighbour (grayscale erosion, buffered so it
+// maxSlope*step above its lowest axis neighbour and maxSlope*sqrt(2)*step above
+// its lowest diagonal one (grayscale erosion, buffered so it
 // is order-independent). Nodes within kErodeIters of the grid border are not
 // reliable, so callers keep an apron >= kErodeIters around what they use. Shared
 // by the mesher and the analytic surfaceHeight() so both see one surface.
@@ -288,20 +289,8 @@ std::vector<float> cappedGrid(const TerrainField &f, float x0, float y0,
                    y0 + step * static_cast<float>(jLo + j));
 
   const float maxSlope = f.params().maxSlope;
-  if (maxSlope > 0.0f && maxSlope < 8.0f) {
-    const float maxStep = maxSlope * step;
-    std::vector<float> B = H;
-    for (int k = 0; k < kErodeIters; ++k) {
-      for (int j = 1; j < gn - 1; ++j)
-        for (int i = 1; i < gn - 1; ++i) {
-          const std::size_t c = static_cast<std::size_t>(j) * gn + i;
-          const float lo = std::min(std::min(H[c - 1], H[c + 1]),
-                                    std::min(H[c - gn], H[c + gn]));
-          B[c] = std::min(H[c], lo + maxStep);
-        }
-      H = B;
-    }
-  }
+  if (maxSlope > 0.0f && maxSlope < 8.0f)
+    erodeSlopeCap(H, gn, maxSlope * step, kErodeIters);
   return H;
 }
 
@@ -311,6 +300,26 @@ int erodeApron(const TerrainField &f) {
 }
 
 } // namespace
+
+void erodeSlopeCap(std::vector<float> &H, int gn, float maxStep, int iters) {
+  constexpr float kSqrt2 = 1.41421356f;
+  std::vector<float> B = H;
+  for (int k = 0; k < iters; ++k) {
+    for (int j = 1; j < gn - 1; ++j)
+      for (int i = 1; i < gn - 1; ++i) {
+        const std::size_t c = static_cast<std::size_t>(j) * gn + i;
+        const float lo = std::min(std::min(H[c - 1], H[c + 1]),
+                                  std::min(H[c - gn], H[c + gn]));
+        // Diagonal neighbours are sqrt(2) further away, so they allow sqrt(2)
+        // the step: the cap is the same slope in every direction. With the four
+        // axis neighbours alone a steep diagonal crest was cut into stair teeth.
+        const float diag = std::min(std::min(H[c - gn - 1], H[c - gn + 1]),
+                                    std::min(H[c + gn - 1], H[c + gn + 1]));
+        B[c] = std::min(H[c], std::min(lo + maxStep, diag + kSqrt2 * maxStep));
+      }
+    H = B;
+  }
+}
 
 float surfaceHeight(const TerrainField &f, float wx, float wy, float chunkM,
                     int res) {

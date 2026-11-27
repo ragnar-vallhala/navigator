@@ -145,6 +145,13 @@ private:
 ProcMesh meshFieldChunk(const TerrainField &f, int cx, int cy, float chunkM,
                         int res);
 
+// Slope-cap erosion of a gn x gn height grid in place (what surfaceHeight() and
+// the chunk mesher apply): `iters` passes, each pulling a node down to at most
+// maxStep above its lowest axis neighbour and sqrt(2)*maxStep above its lowest
+// diagonal one, so the cap is the same in every direction. Border nodes are left
+// as they are. Public so the isotropy can be tested on a synthetic grid.
+void erodeSlopeCap(std::vector<float> &H, int gn, float maxStep, int iters);
+
 // Elevation [m] of the surface meshFieldChunk(f, cx, cy, chunkM, res) presents at
 // world (wx, wy): slope cap included, interpolated on the same triangles. Use
 // this (not f.height()) for anything that must rest on the mesh the pilot sees
