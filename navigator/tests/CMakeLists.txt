@@ -435,6 +435,11 @@ navigator_test(tst_terrainmaterial tst_terrainmaterial.cpp)
 target_include_directories(tst_terrainmaterial PRIVATE ${SRC}/vsim)
 
 # ---- Procedural vegetation placement (Qt-free core, headless) ---------------
+navigator_test(tst_noise_ridged
+    tst_noise_ridged.cpp
+    ${SRC}/vsim/procgen/Noise.cpp)
+target_include_directories(tst_noise_ridged PRIVATE ${SRC}/vsim)
+
 navigator_test(tst_vegetation
     tst_vegetation.cpp
     ${SRC}/vsim/procgen/Noise.cpp

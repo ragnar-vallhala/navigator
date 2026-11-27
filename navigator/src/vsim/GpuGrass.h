@@ -63,6 +63,7 @@ public:
     float heightM = 70.0f, featureM = 220.0f, macroM = 1400.0f;
     int octaves = 6;
     float lacunarity = 2.0f, gain = 0.5f, mountainMix = 0.55f;
+    float ridgeSoft = 0.0f; // FieldParams::ridgeSoft (the fill shader must match the mesh)
     // Grass placement (mirrors procgen::FloraParams).
     float grassMaxFrac = 0.5f, slopeLo = 0.80f, slopeHi = 0.93f;
     float heightMean = 1.0f, heightStdDev = 0.3f, flowerFrac = 0.02f;
