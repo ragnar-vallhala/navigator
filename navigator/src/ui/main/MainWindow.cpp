@@ -25,6 +25,7 @@
 #include "DockShell.h"
 #include "WindowFit.h"
 #include "../core/ArmGate.h"
+#include "../core/AckText.h"
 #include "../core/FaultsModel.h"
 #include "../core/Notify.h"
 #include "../core/SettingsManager.h"
@@ -279,6 +280,15 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
           &params::ParamService::onParamValue);
   connect(proto, &DroneProtocol::commandAckReceived, m_params,
           &params::ParamService::onCommandAck);
+  // A refused ARM / DISARM / flight-mode command is shown, not only logged.
+  connect(proto, &DroneProtocol::commandAckReceived, this,
+          [this](quint32 command, quint8 /*reqSeq*/, quint8 result) {
+            const QString why = acktext::ackFailure(command, result);
+            if (why.isEmpty())
+              return;
+            m_logPanel->appendLog(QStringLiteral("[GCS] ") + why);
+            Notify::warn(this, why);
+          });
   connect(proto, &DroneProtocol::timeSyncResponse, this,
           &MainWindow::onTimeSyncResponse);
   connect(proto, &DroneProtocol::timeSyncRequested, this,
@@ -1569,6 +1579,8 @@ void MainWindow::setConnected(bool on) {
   // `on` = the live transport is up/down (from connectionStateChanged). The FSM
   // (m_source) owns the mode; this drives the transport-tied UI side effects.
   m_linkLost = false; // reset the watchdog on any connect/disconnect edge
+  CommandCodec::resetTarget(); // the next heartbeat picks the vehicle
+  m_foreignSysid = -1;
   updateExportEnabled();
 
   // Page-level gating: any page whose actions only make sense with a
@@ -1959,7 +1971,27 @@ void MainWindow::updateLiveBlinker() {
 
 void MainWindow::onHeartbeatReceived(uint64_t timestamp, uint8_t deviceId) {
   Q_UNUSED(timestamp);
-  Q_UNUSED(deviceId);
+  // Address commands to the vehicle that sent the first heartbeat after
+  // connect, and stay with it: a heartbeat from another sysid only warns.
+  switch (CommandCodec::observeHeartbeat(deviceId)) {
+  case CommandCodec::TargetEvent::Latched:
+    m_foreignSysid = -1;
+    m_logPanel->appendLog(QStringLiteral("[GCS] commanding vehicle %1").arg(deviceId));
+    break;
+  case CommandCodec::TargetEvent::Conflict:
+    if (m_foreignSysid != deviceId) { // once per craft, not once per heartbeat
+      m_foreignSysid = deviceId;
+      const QString msg =
+          tr("Heartbeat from another vehicle (id %1): still commanding vehicle %2")
+              .arg(deviceId)
+              .arg(CommandCodec::targetSys());
+      m_logPanel->appendLog(QStringLiteral("[GCS] ") + msg);
+      Notify::warn(this, msg);
+    }
+    break;
+  default:
+    break;
+  }
   // Heartbeat is liveness-only now; clock alignment moved to the time-sync
   // handshake (onTimeSyncResponse). The wire-packet counter lives in the engine.
   m_lastHbTime = QDateTime::currentMSecsSinceEpoch();

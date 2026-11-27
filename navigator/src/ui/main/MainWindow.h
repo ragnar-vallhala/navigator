@@ -336,6 +336,7 @@ private:
   // heartbeat on a live link (non-destructive; the transport stays open).
   int m_linkLossTimeoutMs = 1500;
   bool m_linkLost = false;
+  int m_foreignSysid = -1; // last other-vehicle heartbeat warned about
   // Units & Display launch behaviour (set by applyAllSettings, read by
   // restoreUiState). startupPage: 0 last-viewed, 1 dashboard, 2 simulator.
   int m_startupPage = 0;

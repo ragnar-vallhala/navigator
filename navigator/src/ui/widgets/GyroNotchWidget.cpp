@@ -162,7 +162,7 @@ void GyroNotchWidget::setParams(params::ParamService *svc) {
               syncFromVehicle();
               if (m_wantAutoband) { // the settings are in: now learn the band
                 quint8 seq = 0;
-                emit commandRequested(CommandCodec::encodeNotchAutoband(42, &seq));
+                emit commandRequested(CommandCodec::encodeNotchAutoband(CommandCodec::targetSys(), &seq));
                 m_autoband->setChecked(false);
                 // Armed only when the vehicle says so.
                 m_autobandSeq = seq;
