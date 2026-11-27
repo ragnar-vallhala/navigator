@@ -21,6 +21,7 @@
 // window. State names are the ones TelemetryEngine accepts from the HEARTBEAT
 // nav_state; an empty or unrecognised name means the state is unknown.
 #include <QString>
+#include <cmath>
 
 namespace armgate {
 
@@ -55,6 +56,16 @@ inline bool calibrationStartAllowed(const QString &state) {
 inline bool calibrationCancelAllowed(const QString &state) {
   return calibrationStartAllowed(state) ||
          state == QLatin1String("CALIBRATING");
+}
+
+// Legacy CMD_SET_PID gains: reject what can never be a gain (NaN, infinity,
+// negative). Per-controller ranges are the firmware's and the parameter
+// catalog's to enforce; this only keeps garbage off the wire.
+inline bool pidGainsValid(float kp, float ki, float kd, float kff) {
+  for (float g : {kp, ki, kd, kff})
+    if (!std::isfinite(g) || g < 0.0f)
+      return false;
+  return true;
 }
 
 } // namespace armgate

@@ -460,6 +460,25 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
               case autotune_params::Route::Legacy:
                 break;
               }
+              // Legacy CMD_SET_PID: gains are locked while armed (as the
+              // parameters are), and nothing that is not a gain goes out. The
+              // whole batch is checked first, so a bad slot sends no slot.
+              if (m_armed) {
+                m_logPanel->appendLog(
+                    "[GCS] Apply gains refused — the vehicle is armed");
+                Notify::warn(this, tr("Disarm before applying gains"));
+                return;
+              }
+              for (const PidSetCmd &c : cmds) {
+                if (!armgate::pidGainsValid(c.kp, c.ki, c.kd, c.kff)) {
+                  m_logPanel->appendLog(
+                      "[GCS] Apply gains refused — a gain is not a finite, "
+                      "non-negative number");
+                  Notify::error(this, tr("Invalid gain value — nothing was "
+                                         "sent"));
+                  return;
+                }
+              }
               const uint32_t now =
                   static_cast<uint32_t>(QDateTime::currentMSecsSinceEpoch());
               for (const PidSetCmd &c : cmds)
