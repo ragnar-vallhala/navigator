@@ -19,6 +19,7 @@
 // and the dock layout never asks the main window for more than a 1366x768
 // screen, for the default workspace and every built-in one. Nothing is shown:
 // several panels hold GL windows that cannot be created without GL.
+#include "AdsBackend.h"
 #include "DockShell.h"
 #include "MainWindow.h"
 #include "PanelFrame.h"
@@ -149,8 +150,10 @@ private slots:
     openAll();
   }
   void cleanupTestCase() {
-    m_win->close(); // stops the telemetry worker thread
-    delete m_win;
+    if (m_win) {
+      m_win->close(); // stops the telemetry worker thread
+      delete m_win;
+    }
   }
 
   // Every real panel is hosted so that its dock widget reports the panel's own
@@ -224,6 +227,94 @@ private slots:
                qPrintable(QString("%1: window min %2x%3").arg(n)
                               .arg(wmin.width()).arg(wmin.height())));
     }
+  }
+
+  // Quit the real app with panels floated and start it again: they come back
+  // floating, visible and where they were. Built from the real MainWindow, so
+  // the real close path (layout saved, then the floats closed) and the real
+  // startup restore (queued until the window is up) are the ones tested. Last in
+  // the file: it retires the shared window first and starts from empty settings.
+  void restartRestoresFloatedPanelsInTheRealWindow() {
+    m_win->close();
+    delete m_win;
+    m_win = nullptr;
+    m_shell = nullptr;
+    {
+      QSettings st;
+      st.clear();
+      st.sync();
+    }
+    // Asked for; a real panel may be given more than that (its content minimum) and a
+    // platform may place the frame differently, so what is compared after the restart is
+    // what each float had when the app quit.
+    const QRect imuAsk(40, 60, 300, 220), logsAsk(380, 150, 320, 240);
+    QRect imuAt, logsAt;
+    const auto shellOf = [](MainWindow &w) { return w.findChild<DockShell *>(); };
+    const auto floatsShown = [] {
+      int n = 0;
+      for (QWidget *tw : QApplication::topLevelWidgets())
+        if (tw->isVisible() &&
+            QByteArray(tw->metaObject()->className()).contains("Floating"))
+          ++n;
+      return n;
+    };
+    {
+      MainWindow w;
+      w.resize(1200, 800);
+      w.show();
+      QVERIFY(QTest::qWaitForWindowExposed(&w));
+      QTest::qWait(600); // the queued startup restore
+      DockShell *sh = shellOf(w);
+      QVERIFY(sh);
+      auto *b = sh->workspaces()->backend();
+      b->floatPanel("imu");
+      b->floatPanel("logs");
+      b->floatPanel("rc");
+      QTest::qWait(400);
+      for (QWidget *tw : QApplication::topLevelWidgets())
+        if (QByteArray(tw->metaObject()->className()).contains("Floating"))
+          tw->show();
+      b->setFloatGeometry("imu", imuAsk);
+      b->setFloatGeometry("logs", logsAsk);
+      b->hidePanel("rc"); // floated, then closed: stays closed
+      QTest::qWait(400);
+      QVERIFY(b->panelState("imu").floating);
+      QVERIFY(b->panelState("logs").floating);
+      imuAt = b->panelState("imu").floatGeometry;
+      logsAt = b->panelState("logs").floatGeometry;
+      w.close(); // MainWindow::closeEvent: save, then close the floats
+      QTest::qWait(900);
+    }
+    MainWindow w2;
+    w2.resize(1200, 800);
+    w2.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&w2));
+    QTest::qWait(1200);
+    DockShell *sh2 = shellOf(w2);
+    QVERIFY(sh2);
+    auto *b2 = sh2->workspaces()->backend();
+    const auto near = [](const QRect &a, const QRect &e) {
+      return qAbs(a.x() - e.x()) <= 4 && qAbs(a.y() - e.y()) <= 4 &&
+             qAbs(a.width() - e.width()) <= 4 && qAbs(a.height() - e.height()) <= 4;
+    };
+    const ws::PanelState imu = b2->panelState("imu"), logs = b2->panelState("logs");
+    const auto geo = [](const ws::PanelState &p) {
+      return QStringLiteral("%1,%2 %3x%4").arg(p.floatGeometry.x()).arg(p.floatGeometry.y())
+          .arg(p.floatGeometry.width()).arg(p.floatGeometry.height());
+    };
+    QVERIFY2(imu.visible && imu.floating,
+             qPrintable(QStringLiteral("imu visible=%1 floating=%2").arg(imu.visible).arg(imu.floating)));
+    QVERIFY2(logs.visible && logs.floating,
+             qPrintable(QStringLiteral("logs visible=%1 floating=%2").arg(logs.visible).arg(logs.floating)));
+    QVERIFY2(near(imu.floatGeometry, imuAt), qPrintable("imu at " + geo(imu)));
+    QVERIFY2(near(logs.floatGeometry, logsAt), qPrintable("logs at " + geo(logs)));
+    QVERIFY(!b2->panelState("rc").visible);
+    // The offscreen platform hides floats once the dock manager's window is activated (its
+    // stay-on-top emulation re-sets a window flag; X11 and Wayland do not), so the count of
+    // shown windows is only meaningful on a real one.
+    if (QGuiApplication::platformName() != QLatin1String("offscreen"))
+      QCOMPARE(floatsShown(), 2);
+    w2.close();
   }
 };
 
