@@ -80,6 +80,16 @@ vec4 instVary(vec2 p) {
   return vec4(a > 0.5 ? -1.0 : 1.0, mix(0.80, 1.22, b), c * 6.2831853, d * 0.07);
 }
 vec3 tintMul(float t) { return mix(vec3(0.86, 0.90, 0.82), vec3(1.10, 1.06, 0.96), t); }
+// Rocks: one of three stones picked from the instance hash (t is uniform in
+// 0..1): cool grey granite, the photo's own rust, dark basalt. The textures are
+// all brown; without this every rock in a scene reads as the same colour.
+vec3 rockTint(vec3 c, float t) {
+  float l = dot(c, vec3(0.299, 0.587, 0.114));
+  vec3 granite = vec3(min(l * 2.4 + 0.10, 0.75)) * vec3(1.0, 1.0, 1.04);
+  vec3 rust = c * vec3(1.05, 0.95, 0.85);
+  vec3 basalt = vec3(l) * vec3(0.95, 0.97, 1.0) * 1.0;
+  return mix(mix(granite, rust, smoothstep(0.30, 0.36, t)), basalt, smoothstep(0.64, 0.70, t));
+}
 // Crown colour per tree: value and hue vary independently (t is a hash of the
 // tree's cell, so a tree keeps its colour). Hue runs from a yellower green to a
 // bluer one; value from dim to bright.
@@ -196,6 +206,7 @@ out vec4 o_color;
 uniform sampler2D u_diffuse;  // sRGB colour, linear alpha coverage
 uniform sampler2D u_normal;   // linear, tangent space, +Y up
 uniform sampler2D u_arm;      // linear: R = ambient occlusion, G = roughness
+uniform float u_rock;    // 1 while drawing rocks: colour by rockTint(), not tintMul()
 uniform float u_cutout;
 uniform float u_cutoff;
 uniform float u_a2c;      // 1: alpha-to-coverage (multisampled target)
@@ -259,7 +270,8 @@ void main() {
   // Albedo is stored sRGB and sampled linear (correct mip filtering); the sim's
   // lighting works on display-referred colour, so encode back before applying
   // the same sun + ambient terms the terrain uses.
-  vec3 base = srgbEnc(d.rgb) * (u_cutout > 0.5 && v_paint < 0.5 ? foliageTint(v_tint) : tintMul(v_tint));
+  vec3 base = u_rock > 0.5 ? rockTint(srgbEnc(d.rgb), v_tint)
+                            : srgbEnc(d.rgb) * (u_cutout > 0.5 && v_paint < 0.5 ? foliageTint(v_tint) : tintMul(v_tint));
   if (v_paint > 0.5) {
     // Grass: keep the blade's own brightness, move its hue to the ground's.
     int pk = int(v_paint + 0.5);
@@ -1072,6 +1084,7 @@ bool VegetationRenderer::buildPrograms(const VegGlsl &g) {
   loc_.height = prog_->uniformLocation("u_height");
   loc_.sway = prog_->uniformLocation("u_sway");
   loc_.cutout = prog_->uniformLocation("u_cutout");
+  loc_.rock = prog_->uniformLocation("u_rock");
   loc_.cutoff = prog_->uniformLocation("u_cutoff");
   loc_.a2c = prog_->uniformLocation("u_a2c");
   if (progBillboard_) {
@@ -1560,6 +1573,7 @@ void VegetationRenderer::drawBucket(VariantGpu &v, int lod,
   prog_->setUniformValue(loc_.k, v.k);
   prog_->setUniformValue(loc_.height, v.height);
   prog_->setUniformValue(loc_.sway, kTable[v.info].sway);
+  prog_->setUniformValue(loc_.rock, rockTint_ && kTable[v.info].cat == procgen::kVegRock ? 1.0f : 0.0f);
   const SpeciesGpu &sg = sp_[size_t(v.species)];
   const VegSpeciesAssets &sa = assets_.species[size_t(v.species)];
   for (const VegSubmesh &sm : m.submeshes) {
