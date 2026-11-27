@@ -491,6 +491,8 @@ public:
   // Tests: trees and rocks out of the shadow map (the drone and ground stay);
   // the first cascade that gets them (default 1; 0 adds the finest one).
   void setVegCastersOffForTest(bool off) { vegCastersOffForTest_ = off; }
+  // The far range of the vegetation casters (kVegCasterFarRangeM by default; <= 0 = none).
+  void setVegCasterFarRangeForTest(float m) { vegCasterFarRangeM_ = m; }
   void setVegCasterFirstCascadeForTest(int ci) { vegCasterFirst_ = ci; }
   void setVegCasterPushForTest(float m) {
     vegCasterPushM_ = m;
@@ -687,6 +689,7 @@ private:
   int vegCasterFirst_ = 0;
   float vegCasterPushM_ = kVegCasterPushM; // depth pull toward the sun (negative: away)
   bool vegCastersOffForTest_ = false;
+  float vegCasterFarRangeM_ = kVegCasterFarRangeM;
   quint64 vegCasterKey_ = 0;
   float droneVisualScale() const;
   bool droneCasterReady() const;
