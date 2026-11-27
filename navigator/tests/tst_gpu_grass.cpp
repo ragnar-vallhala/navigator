@@ -24,6 +24,7 @@
 //    compute pass really emits are read back and each is checked against
 //    grassFactor() at its position.
 #include "GpuGrass.h"
+#include "procgen/WorldPresets.h"
 
 #include <QGuiApplication>
 #include <QMatrix4x4>
@@ -325,6 +326,117 @@ private slots:
     QVERIFY2(dHard > 0.5, "the soft and sharp fields barely differ here: the "
                           "test says nothing");
     QVERIFY2(dSoft < 0.3, "GLSL ridged() does not match the CPU one");
+    g.release(&gl);
+    ctx.doneCurrent();
+  }
+
+  // The alpine preset has terms the plain field test above leaves at 0:
+  // mountainBias, the flattened spawn pad and the relief hummocks. Blades must
+  // sit on the mesh's own height there too (todo 81).
+  void gpuHeightFollowsAlpineTerms() {
+    if (QGuiApplication::platformName() == "offscreen")
+      QSKIP("needs a real GL platform: QT_QPA_PLATFORM=xcb on an Xvfb with "
+            "LIBGL_ALWAYS_SOFTWARE=1");
+    QSurfaceFormat fmt;
+    fmt.setVersion(4, 3);
+    fmt.setProfile(QSurfaceFormat::CoreProfile);
+    QOpenGLContext ctx;
+    ctx.setFormat(fmt);
+    if (!ctx.create())
+      QSKIP("no GL 4.3 context");
+    QOffscreenSurface surf;
+    surf.setFormat(ctx.format());
+    surf.create();
+    QVERIFY(ctx.makeCurrent(&surf));
+    QOpenGLExtraFunctions gl(&ctx);
+
+    procgen::PresetData pd;
+    QVERIFY(procgen::buildWorldPreset("alpine", 5u, pd));
+    FieldParams fp = pd.field;
+    QVERIFY(fp.mountainBias > 0.0f && fp.flatRadiusM > 0.0f && fp.reliefM > 0.0f);
+    fp.palette = procgen::kPalMeadow; // grass grows here; heights ignore the palette
+    const TerrainField cpu(fp);
+
+    GpuGrass::Params p;
+    p.field = fp;
+    p.seed = fp.seed;
+    p.heightM = fp.heightM;
+    p.featureM = fp.featureM;
+    p.macroM = fp.macroM;
+    p.octaves = fp.octaves;
+    p.lacunarity = fp.lacunarity;
+    p.gain = fp.gain;
+    p.mountainMix = fp.mountainMix;
+    p.ridgeSoft = fp.ridgeSoft;
+    p.cell = 0.2f;
+    p.grid = 256;
+    p.asyncMask = false;
+    p.slopeLo = 0.0f;
+    p.slopeHi = 0.01f;
+    p.grassMaxFrac = 100.0f;
+    GpuGrass g;
+    g.setParams(p);
+    if (!g.init(&gl))
+      QSKIP("compute shaders unavailable on this GL");
+
+    // Views: the spawn pad and its blend ring, and the mountain spot with the
+    // largest height range (macro field puts most places in the flat basins).
+    float mx = 0.0f, my = 0.0f;
+    double best = -1.0;
+    for (int j = -12; j <= 12; ++j)
+      for (int i = -12; i <= 12; ++i) {
+        const float x = 200.0f * float(i), y = 200.0f * float(j);
+        float lo = 1e9f, hi = -1e9f;
+        for (int v = -2; v <= 2; ++v)
+          for (int u = -2; u <= 2; ++u) {
+            const float h = cpu.height(x + 10.0f * u, y + 10.0f * v);
+            lo = std::min(lo, h);
+            hi = std::max(hi, h);
+          }
+        if (double(hi - lo) > best) {
+          best = double(hi - lo);
+          mx = x;
+          my = y;
+        }
+      }
+    qInfo("mountain view at (%.0f, %.0f), range %.1f m", double(mx), double(my), best);
+    const float views[2][2] = {{0.0f, 0.0f}, {mx, my}};
+    const char *names[2] = {"pad", "mountain"};
+    for (int vi = 0; vi < 2; ++vi) {
+      const float cx = views[vi][0], cy = views[vi][1];
+      QMatrix4x4 proj, view;
+      view.translate(-cx, -cy);
+      proj.ortho(-25.0f, 25.0f, -25.0f, 25.0f, -1000.0f, 1000.0f);
+      g.render(&gl, proj, view, QVector3D(cx, cy, 0.0f),
+               QVector3D(0.3f, 0.3f, -1.0f), 0.0f);
+      gl.glFinish();
+      const std::vector<GpuGrass::Blade> blades = g.readBlades(&gl, 0);
+      QVERIFY2(blades.size() > 500, "too few blades to say anything");
+      double sum = 0.0, worst = 0.0;
+      for (const GpuGrass::Blade &b : blades) {
+        const double d = std::fabs(double(-b.negH) - double(cpu.height(b.x, b.y)));
+        sum += d;
+        worst = std::max(worst, d);
+      }
+      const double mean = sum / double(blades.size());
+      qInfo("%s: %zu blades, mean |GPU - CPU| %.4f m, worst %.3f m", names[vi],
+            blades.size(), mean, worst);
+      // Against the mesh the player sees (slope-capped), on a subsample: each
+      // surfaceHeight() builds and erodes its own window.
+      double sSum = 0.0, sWorst = 0.0;
+      int sN = 0;
+      for (std::size_t k = 0; k < blades.size(); k += 97, ++sN) {
+        const double d = std::fabs(double(-blades[k].negH) -
+                                   double(procgen::surfaceHeight(
+                                       cpu, blades[k].x, blades[k].y,
+                                       procgen::kStreamChunkM, procgen::kStreamChunkRes)));
+        sSum += d;
+        sWorst = std::max(sWorst, d);
+      }
+      qInfo("%s: against the slope-capped mesh (%d samples) mean %.4f m, worst %.3f m",
+            names[vi], sN, sSum / sN, sWorst);
+      QVERIFY2(mean < 0.05, names[vi]);
+    }
     g.release(&gl);
     ctx.doneCurrent();
   }
