@@ -180,6 +180,8 @@ VegParams vegParamsForPalette(int palette) {
     B.density = 0.0f;
     G = sp(8.0f, 0.10f, 0.85f, 0.0f, 0.40f, 0.6f, 1.1f, 0.5f);
     R = sp(7.0f, 0.60f, 0.50f, 0.0f, 1.0f, 0.5f, 2.6f, 0.05f);
+    R.scaleSkew = 2.0f; // mostly small scree, a few big boulders
+    R.rockTint = true;  // grey granite / rust / basalt, not one brown
     break;
   case kPalYard:
     T.density = 0.004f;
@@ -429,8 +431,10 @@ std::vector<VegInstance> scatterVegetation(const TerrainField &f, int cx, int cy
 
         VegInstance v;
         v.yaw = 6.2831853f * u01(hcell(gx, gy, p.seed, salt + 3));
-        v.scale = sv.scaleMin + (sv.scaleMax - sv.scaleMin) *
-                                    u01(hcell(gx, gy, p.seed, salt + 4));
+        float su = u01(hcell(gx, gy, p.seed, salt + 4));
+        if (sv.scaleSkew != 1.0f)
+          su = std::pow(su, sv.scaleSkew);
+        v.scale = sv.scaleMin + (sv.scaleMax - sv.scaleMin) * su;
         // A rock stands on its footprint's lowest point (a slope would
         // otherwise leave the downhill side in the air); the rest on the spot.
         float hz = surface.at(wx, wy);
