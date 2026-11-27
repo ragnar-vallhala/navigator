@@ -62,6 +62,9 @@ public:
     float fadeH = 9.0f;  // cover fades out above this elevation fraction
   };
   static PondStyle pondStyle(int palette);
+  // Whether the palette paints the scattered rock blobs into the ground colour
+  // (alpine, forest and endless; elsewhere the real rock meshes stand alone).
+  static bool paintsRock(int palette);
 
   struct Sample {
     PgVec3 color;
