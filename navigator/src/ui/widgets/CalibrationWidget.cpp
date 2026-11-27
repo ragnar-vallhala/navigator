@@ -17,6 +17,8 @@
 #include "CalibrationWidget.h"
 
 #include "../protocol/CommandCodec.h"
+#include "../core/ArmGate.h"
+#include "navlink_msgs.h"
 #include "core/Theme.h"
 #include "core/ui/Buttons.h"
 
@@ -200,8 +202,7 @@ void CalibrationWidget::setConnected(bool connected) {
     m_sensorSelectArea->setEnabled(connected);
   if (m_configGroup)
     m_configGroup->setEnabled(connected);
-  if (m_startBtn)
-    m_startBtn->setEnabled(connected);
+  // Start/Cancel follow the connection AND the vehicle state: updateGate().
   // Cancel only makes sense mid-calibration, which can't happen while
   // disconnected — leave it visibility-driven elsewhere.
   if (!connected && m_statusLabel) {
@@ -217,10 +218,125 @@ void CalibrationWidget::setConnected(bool connected) {
     if (m_instructionText)
       m_instructionText->setText(tr("SELECT A SENSOR AND PRESS START"));
   }
+  updateGate();
+}
+
+void CalibrationWidget::setVehicleState(const QString &state) {
+  m_vehicleState = state;
+  updateGate();
+}
+
+// One place decides which buttons are live. Start: connected, idle, nothing in
+// flight to the FC, and the vehicle in STANDBY/PREARM. Cancel: the vehicle is
+// not armed or flying (a stop frame sent then can be read as a disarm, todo 36).
+void CalibrationWidget::updateGate() {
+  if (!m_startBtn || !m_cancelBtn)
+    return;
+  const bool idle = !m_running && m_awaiting == Awaiting::None;
+  const bool startOk = m_connected && idle &&
+                       armgate::calibrationStartAllowed(m_vehicleState);
+  m_startBtn->setEnabled(startOk);
+  m_cancelBtn->setEnabled(m_connected && m_awaiting != Awaiting::Cancel &&
+                          armgate::calibrationCancelAllowed(m_vehicleState));
+  // CALIBRATING is transient right after a finish/cancel (the FC leaves it a
+  // moment later): keep the result message, don't overwrite it.
+  if (m_connected && idle && !startOk && m_statusLabel && m_instructionText &&
+      m_vehicleState != QLatin1String("CALIBRATING")) {
+    m_statusLabel->setText(tr("START DISABLED"));
+    m_statusLabel->setStyleSheet(QString("color: %1; font-weight: bold;")
+                                     .arg(Theme::hex(Theme::kWarn)));
+    m_instructionText->setText(
+        tr("Calibration needs the vehicle in STANDBY or PREARM (now: %1)")
+            .arg(m_vehicleState.isEmpty() ? tr("unknown") : m_vehicleState));
+  } else if (startOk && m_statusLabel &&
+             m_statusLabel->text() == tr("START DISABLED")) {
+    m_statusLabel->setText(tr("SYSTEM READY"));
+    m_statusLabel->setStyleSheet(QString("color: %1; font-weight: bold;")
+                                     .arg(Theme::hex(Theme::kAccent)));
+    if (m_instructionText)
+      m_instructionText->setText(tr("SELECT A SENSOR AND PRESS START"));
+  }
+}
+
+void CalibrationWidget::resetToIdle(const QString &status, const QString &hint) {
+  m_ackTimer.stop();
+  m_awaiting = Awaiting::None;
+  m_running = false;
+  m_cancelBtn->setVisible(false);
+  m_sensorSelectArea->setEnabled(m_connected);
+  m_configGroup->setEnabled(m_connected);
+  m_wizard.reset();
+  refreshSteps();
+  m_statusLabel->setText(status);
+  m_instructionText->setText(hint);
+  updateGate();
+}
+
+void CalibrationWidget::onCommandAck(quint32 command, quint8 /*reqSeq*/,
+                                     quint8 result) {
+  if (command != NAVLINK_MSGID_CMD_CALIBRATE_IMU ||
+      m_awaiting == Awaiting::None)
+    return;
+  if (result == NAVLINK_COMMAND_RESULT_IN_PROGRESS)
+    return; // not final: wait for the real result
+  const Awaiting what = m_awaiting;
+  m_ackTimer.stop();
+  if (result == NAVLINK_COMMAND_RESULT_ACCEPTED) {
+    m_awaiting = Awaiting::None;
+    if (what == Awaiting::Start) {
+      m_statusLabel->setText(tr("CALIBRATING..."));
+      m_instructionText->setText(tr("FC ACCEPTED — FOLLOW THE PROMPTS"));
+      updateGate();
+    } else {
+      resetToIdle(tr("READY"), tr("CALIBRATION CANCELED (FC acknowledged)"));
+    }
+    return;
+  }
+  QString why;
+  switch (result) {
+  case NAVLINK_COMMAND_RESULT_TEMPORARILY_REJECTED:
+    why = tr("not ready (time sync or vehicle busy)");
+    break;
+  case NAVLINK_COMMAND_RESULT_DENIED:
+    why = tr("denied (vehicle state does not allow it)");
+    break;
+  case NAVLINK_COMMAND_RESULT_UNSUPPORTED:
+    why = tr("unsupported by this firmware");
+    break;
+  default:
+    why = tr("failed (result %1)").arg(result);
+    break;
+  }
+  if (what == Awaiting::Start) {
+    resetToIdle(tr("REFUSED"), tr("FC REFUSED THE CALIBRATION: %1").arg(why));
+  } else {
+    // The cancel was refused: the routine may still be running.
+    m_awaiting = Awaiting::None;
+    m_statusLabel->setText(tr("CANCEL REFUSED"));
+    m_instructionText->setText(
+        tr("FC REFUSED THE CANCEL: %1 — CALIBRATION MAY STILL BE RUNNING").arg(why));
+    updateGate();
+  }
 }
 
 void CalibrationWidget::setProtocol(DroneProtocol *protocol) {
   m_protocol = protocol;
+  connect(m_protocol, &DroneProtocol::commandAckReceived, this,
+          &CalibrationWidget::onCommandAck);
+  m_ackTimer.setSingleShot(true);
+  m_ackTimer.setInterval(4000);
+  connect(&m_ackTimer, &QTimer::timeout, this, [this] {
+    const bool starting = m_awaiting == Awaiting::Start;
+    if (starting) {
+      resetToIdle(tr("NO ACK"), tr("THE FC DID NOT ANSWER THE START — CHECK THE LINK"));
+    } else if (m_awaiting == Awaiting::Cancel) {
+      m_awaiting = Awaiting::None;
+      m_statusLabel->setText(tr("NO ACK"));
+      m_instructionText->setText(
+          tr("THE FC DID NOT ANSWER THE CANCEL — CALIBRATION MAY STILL BE RUNNING"));
+      updateGate();
+    }
+  });
   connect(m_protocol, &DroneProtocol::statusReceived, this,
           &CalibrationWidget::onStatusReceived);
   connect(m_protocol, &DroneProtocol::calibrationUpdateReceived, this,
@@ -292,12 +408,23 @@ void CalibrationWidget::onSensorSelected(int id) {
 void CalibrationWidget::onStartClicked() {
   if (!m_protocol)
     return;
+  // The button is disabled outside STANDBY/PREARM; a stale click or a direct
+  // call must not get through either.
+  if (!m_connected || m_running || m_awaiting != Awaiting::None ||
+      !armgate::calibrationStartAllowed(m_vehicleState)) {
+    updateGate();
+    return;
+  }
 
-  m_startBtn->setEnabled(false);
+  m_running = true;
+  m_awaiting = Awaiting::Start;
+  m_ackTimer.start();
   m_cancelBtn->setVisible(true);
   m_sensorSelectArea->setEnabled(false);
   m_configGroup->setEnabled(false);
   m_progressBar->setValue(0);
+  m_statusLabel->setText(tr("START SENT — WAITING FOR THE FC"));
+  updateGate();
 
   // Clear axis statuses back to the muted idle look.
   const QString idle =
@@ -463,17 +590,19 @@ void CalibrationWidget::onInstructionReceived(int type) {
 }
 
 void CalibrationWidget::onCancelClicked() {
-  if (!m_protocol)
+  if (!m_protocol || m_awaiting == Awaiting::Cancel ||
+      !armgate::calibrationCancelAllowed(m_vehicleState)) {
+    updateGate();
     return;
+  }
 
   // Cancel: NavLink v2 CMD_CALIBRATE_IMU with the 0xFF sentinel (stop routine).
+  // "CANCELED" is shown when the FC ACKs it (onCommandAck), not on the click.
+  m_awaiting = Awaiting::Cancel;
+  m_ackTimer.start();
   emit commandRequested(CommandCodec::encodeCalibrate(0xFF));
-  m_startBtn->setEnabled(true);
-  m_cancelBtn->setVisible(false);
-  m_sensorSelectArea->setEnabled(true);
-  m_configGroup->setEnabled(true);
-  m_statusLabel->setText("READY");
-  m_instructionText->setText("CALIBRATION CANCELED");
+  m_statusLabel->setText(tr("CANCEL SENT — WAITING FOR THE FC"));
+  updateGate();
 }
 
 void CalibrationWidget::onStatusReceived(const QString &msg) {
@@ -490,8 +619,10 @@ void CalibrationWidget::finishCalibration(bool success) {
   // Terminal events only matter while a calibration is running. An enabled Start
   // button means idle / already finished, so a duplicate COMPLETE or the late
   // STANDBY fallback can't re-trigger (and can't overwrite a FAILED result).
-  if (m_startBtn->isEnabled())
+  if (!m_running)
     return;
+  m_ackTimer.stop();
+  m_awaiting = Awaiting::None;
 
   if (success) {
     m_statusLabel->setText("SUCCESSFUL");
@@ -518,9 +649,10 @@ void CalibrationWidget::finishCalibration(bool success) {
     // Leave the progress bar where it stopped so the failing step stays visible.
   }
 
-  m_startBtn->setEnabled(true);
+  m_running = false;
   m_cancelBtn->setVisible(false);
-  m_sensorSelectArea->setEnabled(true);
-  m_configGroup->setEnabled(true);
+  m_sensorSelectArea->setEnabled(m_connected);
+  m_configGroup->setEnabled(m_connected);
   refreshSteps();
+  updateGate();
 }

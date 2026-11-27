@@ -15,14 +15,15 @@
  * limitations under the License.
  */
 #include "ParamService.h"
+#include "../protocol/NavState.h"
 
 namespace params {
 
 namespace {
 constexpr int kTickMs = 50;
-// HEARTBEAT.nav_state: ARMED 4, IN_AIR 5, FAILSAFE 6 are armed; 0..3, 7 and 8
-// (CALIBRATING) are not. Anything above 8 is a state this build does not know.
-bool armedFor(quint8 navState) { return navState >= 4 && navState != 7 && navState != 8; }
+// Armed is derived once for everything (protocol/NavState.h); an unknown state
+// counts as armed.
+bool armedFor(quint8 navState) { return navstate::armed(navState); }
 } // namespace
 
 ParamService::ParamService(QObject *parent) : QObject(parent) {

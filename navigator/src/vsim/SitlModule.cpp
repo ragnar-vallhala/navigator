@@ -167,8 +167,13 @@ SitlModule::SitlModule() {
 bool SitlModule::send(const QByteArray &frame) const {
   if (!api_ || frame.isEmpty())
     return false;
-  api_->uart2_rx(reinterpret_cast<const uint8_t *>(frame.constData()),
-                 static_cast<size_t>(frame.size()));
+  // The bytes are copied: the action may run later, on the engine thread.
+  const auto *api = api_;
+  const QByteArray copy = frame;
+  router_.run([api, copy] {
+    api->uart2_rx(reinterpret_cast<const uint8_t *>(copy.constData()),
+                  static_cast<size_t>(copy.size()));
+  });
   return true;
 }
 

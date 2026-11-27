@@ -41,6 +41,9 @@ bool toWire(Type t, double v, quint8 out[8]);
 ValueMsg fromWire(const navlink_param_value_t &w);
 
 QByteArray encodeRequestList(quint8 devId = 42);
+// An id is at most 16 Latin-1 characters; a longer or non-Latin-1 one encodes to
+// an empty frame (it is never sent cut short, which would name another
+// parameter). Same for encodeSet.
 QByteArray encodeRequestReadById(const QString &id, quint8 devId = 42);
 QByteArray encodeRequestReadByIndex(quint16 index, quint8 devId = 42);
 // reqSeq must be non-zero: 0 means "no acknowledgement wanted".

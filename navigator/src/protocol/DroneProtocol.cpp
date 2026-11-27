@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 #include "DroneProtocol.h"
+#include "NavState.h"
 #include <QString>
 #include <cstdint>
 
@@ -65,13 +66,9 @@ DroneProtocol::DroneProtocol(QObject *parent) : QObject(parent) {
     emit flightModeReceived(mode, source);
   };
   m_v2Router.onHeartbeat = [this](uint8_t navState, uint64_t ts, uint8_t dev) {
-    // nav_state enum index -> the state name TelemetryEngine matches on (same
-    // order as the firmware's one-hot sys_state, folded into HEARTBEAT).
-    static const char *const kStateNames[] = {
-        "UNINITIALIZED", "INIT",     "STANDBY",    "PREARM",     "ARMED",
-        "IN_AIR",        "FAILSAFE", "TERMINATED", "CALIBRATING"};
-    if (navState < 9)
-      emit statusReceived(QString::fromLatin1(kStateNames[navState]));
+    // nav_state -> the state name TelemetryEngine matches on. A value this
+    // build does not know is shown as UNKNOWN (and counts as armed), not dropped.
+    emit statusReceived(QString::fromLatin1(navstate::name(navState)));
     emit heartbeatReceived(ts, dev);
   };
   m_v2Router.onHeartbeatCaps = [this](uint8_t navState, uint32_t caps) {
