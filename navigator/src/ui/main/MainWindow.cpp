@@ -1844,6 +1844,15 @@ void MainWindow::onUiTimer() {
     m_failsafeSeen = false;
     m_motorWidget->setFailsafe(tr("unknown"), false);
   }
+  // GPS_RAW: the receiver's fix and satellites; "no GPS" until one arrives, and
+  // the FC's own GPS_UNTRUSTED verdict (from FAILSAFE_STATUS) is added to it.
+  {
+    const bool gpsFresh =
+        s.lastGpsMs != 0 && (nowMs - s.lastGpsMs) < kTelemetryStaleMs;
+    const uint8_t fsFlags = fsFresh ? s.failsafe.flags : uint8_t(0);
+    m_motorWidget->setGps(gpsstatus::statusLine(gpsFresh, s.gps, fsFlags),
+                          gpsstatus::isAlarm(gpsFresh, s.gps, fsFlags));
+  }
 
   // Sparse pills + arm state — edge-guarded so we only restyle on change.
   if (feedActive) {

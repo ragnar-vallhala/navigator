@@ -842,6 +842,13 @@ navigator_test(tst_failsafe_decode
     ${SRC}/protocol/NavlinkRouter.cpp)
 target_link_libraries(tst_failsafe_decode PRIVATE navlink_codec)
 
+# ---- GPS_RAW: decode through the router and the status text ----------------
+navigator_test(tst_gps_raw
+    tst_gps_raw.cpp
+    ${SRC}/protocol/NavlinkRouter.cpp)
+target_include_directories(tst_gps_raw PRIVATE ${SRC}/core)
+target_link_libraries(tst_gps_raw PRIVATE navlink_codec)
+
 # ---- NavLink 3: COMMAND_ACK frame seq shares the GCS tx counter -----------
 navigator_test(tst_ack_seq
     tst_ack_seq.cpp

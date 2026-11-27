@@ -78,6 +78,27 @@ struct FailsafeStatusData {
 };
 
 // -----------------------------------------------------------
+// GPS receiver report – mirrors NavLink GPS_RAW (msgid 1052): the u-blox NAV-PVT
+// fields in the receiver's own units. It is what the receiver claims, not a
+// verdict (FAILSAFE_STATUS flags GPS_UNTRUSTED is the FC's). A GCS that has never
+// received one shows "no GPS": only an FC with a receiver sends it.
+// -----------------------------------------------------------
+struct GpsRawData {
+  uint64_t timeUs = 0;    // FC clock when the report was received
+  int32_t latE7 = 0;      // degrees * 1e7
+  int32_t lonE7 = 0;
+  int32_t altMm = 0;      // above mean sea level
+  int32_t velNedMmS[3] = {0, 0, 0};
+  uint32_t hAccMm = 0xFFFFFFFFu; // 0xFFFFFFFF = the receiver gave none
+  uint32_t vAccMm = 0xFFFFFFFFu;
+  uint32_t sAccMmS = 0xFFFFFFFFu;
+  uint16_t pdopX100 = 0;
+  uint8_t fixType = 0;    // NAVLINK_GPS_FIX_TYPE_*
+  uint8_t sats = 0;       // satellites used in the solution
+  uint8_t navFlags = 0;   // NAV-PVT flags byte (bit 0 gnssFixOK)
+};
+
+// -----------------------------------------------------------
 // Vertical state – mirrors NavLink VERTICAL_STATE (msgid 1040), the fused
 // 2-state baro+accel estimate (VERT). altitude/climbRate are the fused outputs;
 // baroAltitude is the raw sensor altitude carried alongside so the GCS can chart

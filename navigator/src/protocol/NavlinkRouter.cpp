@@ -183,6 +183,28 @@ void thunkFailsafeStatus(void *ctx, const navlink_frame_hdr_t *,
   r->onFailsafeStatus(d);
 }
 
+void thunkGpsRaw(void *ctx, const navlink_frame_hdr_t *,
+                 const navlink_gps_raw_t *m) {
+  auto *r = static_cast<NavlinkRouter *>(ctx);
+  if (!r->onGpsRaw)
+    return;
+  GpsRawData d;
+  d.timeUs = m->time_us;
+  d.latE7 = m->lat_e7;
+  d.lonE7 = m->lon_e7;
+  d.altMm = m->alt_mm;
+  for (int i = 0; i < 3; ++i)
+    d.velNedMmS[i] = m->vel_ned_mm_s[i];
+  d.hAccMm = m->h_acc_mm;
+  d.vAccMm = m->v_acc_mm;
+  d.sAccMmS = m->s_acc_mm_s;
+  d.pdopX100 = m->pdop_x100;
+  d.fixType = m->fix_type;
+  d.sats = m->sats;
+  d.navFlags = m->nav_flags;
+  r->onGpsRaw(d);
+}
+
 void thunkNotchStatus(void *ctx, const navlink_frame_hdr_t *,
                       const navlink_notch_status_t *m) {
   auto *r = static_cast<NavlinkRouter *>(ctx);
@@ -638,6 +660,7 @@ NavlinkRouter::NavlinkRouter() : d_(new Impl) {
   d_->handlers.on_baro = thunkBaro;
   d_->handlers.on_battery = thunkBattery;
   d_->handlers.on_failsafe_status = thunkFailsafeStatus;
+  d_->handlers.on_gps_raw = thunkGpsRaw;
   d_->handlers.on_vertical_state = thunkVerticalState;
   d_->handlers.on_notch_status = thunkNotchStatus;
   d_->handlers.on_hsl_status = thunkHslStatus;
