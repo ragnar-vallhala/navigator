@@ -1,0 +1,60 @@
+/*
+ * Copyright (C) 2026 NAVRobotec Pvt Ltd
+ * Author: Ragnar Vallhala
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#pragma once
+
+// Which in-flight commands the operator may send in which vehicle state.
+// Pure (state name in, answer out) so the rules are unit-testable without a
+// window. State names are the ones TelemetryEngine accepts from the HEARTBEAT
+// nav_state; an empty or unrecognised name means the state is unknown.
+#include <QString>
+
+namespace armgate {
+
+// How a DISARM request must be handled.
+enum class DisarmPolicy {
+  Send,    // motors are on the ground or already off: send at once
+  Confirm, // the vehicle may be flying: ask first, default Cancel
+};
+
+// Disarm cuts the motors. In IN_AIR or FAILSAFE (which can be airborne), or
+// when the state is unknown, that drops the aircraft, so it needs an explicit
+// confirmation; a single click or chord must never do it.
+inline DisarmPolicy disarmPolicy(const QString &state) {
+  static const char *const kSafe[] = {"UNINITIALIZED", "INIT",       "STANDBY",
+                                      "PREARM",        "ARMED",      "TERMINATED",
+                                      "CALIBRATING"};
+  for (const char *s : kSafe)
+    if (state == QLatin1String(s))
+      return DisarmPolicy::Send;
+  return DisarmPolicy::Confirm;
+}
+
+// Calibration moves the sensors' trims and the firmware reads its stop frame
+// (CMD_CALIBRATE_IMU which=0xFF) as a disarm on some builds (todo 36), so a
+// calibration may start only when the vehicle is idle on the ground.
+inline bool calibrationStartAllowed(const QString &state) {
+  return state == QLatin1String("STANDBY") || state == QLatin1String("PREARM");
+}
+
+// Cancel is also offered while the routine runs (state CALIBRATING), but never
+// while the vehicle is armed or flying.
+inline bool calibrationCancelAllowed(const QString &state) {
+  return calibrationStartAllowed(state) ||
+         state == QLatin1String("CALIBRATING");
+}
+
+} // namespace armgate

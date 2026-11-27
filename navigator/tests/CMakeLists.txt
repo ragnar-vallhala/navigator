@@ -154,6 +154,29 @@ target_include_directories(tst_gyro_notch_widget PRIVATE ${SRC}/params ${SRC}/pr
 target_link_libraries(tst_gyro_notch_widget PRIVATE navlink_codec)
 target_sources(tst_gyro_notch_widget PRIVATE ${PARAMS_CATALOG_QRC})
 
+navigator_test(tst_calibration_widget
+    tst_calibration_widget.cpp
+    ${SRC}/ui/widgets/CalibrationWidget.cpp
+    ${SRC}/core/ui/Buttons.h
+    ${SRC}/core/CalibrationWizard.cpp
+    ${SRC}/protocol/DroneProtocol.cpp
+    ${SRC}/protocol/NavlinkRouter.cpp
+    ${SRC}/protocol/TelemetryEngine.cpp
+    ${SRC}/protocol/CommandCodec.cpp
+    ${SRC}/params/ParamCatalog.cpp
+    ${SRC}/params/ParamCodec.cpp
+    ${SRC}/params/ParamClient.cpp
+    ${SRC}/params/ParamService.cpp
+    ${SRC}/params/ParamApplier.cpp
+    ${SRC}/core/Notify.cpp
+    ${SRC}/core/ToastOverlay.cpp
+    ${SRC}/replay/RecordSink.cpp
+    ${SRC}/comm/SerialManager.cpp
+    ${SRC}/comm/UdpManager.cpp)
+target_include_directories(tst_calibration_widget PRIVATE ${SRC}/params ${SRC}/protocol ${SRC}/ui/widgets ${SRC}/ui/main ${SRC}/core ${SRC}/replay ${SRC}/comm)
+target_link_libraries(tst_calibration_widget PRIVATE navlink_codec)
+target_sources(tst_calibration_widget PRIVATE ${PARAMS_CATALOG_QRC})
+
 navigator_test(tst_param_file
     tst_param_file.cpp
     ${SRC}/params/ParamCatalog.cpp
@@ -320,6 +343,10 @@ target_include_directories(tst_command_palette PRIVATE ${SRC}/ui/widgets)
 navigator_test(tst_view_history
     tst_view_history.cpp
     ${SRC}/core/ViewHistory.cpp)
+
+# ---- In-flight command gates (disarm confirm, calibration state) -----------
+navigator_test(tst_arm_gate tst_arm_gate.cpp)
+target_include_directories(tst_arm_gate PRIVATE ${SRC}/core)
 
 # ---- Calibration wizard step machine --------------------------------------
 navigator_test(tst_calibration_wizard

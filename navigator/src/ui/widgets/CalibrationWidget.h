@@ -28,6 +28,7 @@
 #include <QPushButton>
 #include <QRadioButton>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -45,6 +46,14 @@ public slots:
   // so the user doesn't trigger a no-op (FR-UX-18 / Phase-0 0o).
   void setConnected(bool connected);
 
+  // The vehicle's state name (STANDBY, ARMED, ...). Start is enabled only in
+  // STANDBY/PREARM, Cancel never while armed or flying (core/ArmGate.h).
+  void setVehicleState(const QString &state);
+
+  // COMMAND_ACK from the FC. The widget shows "started" / "canceled" only on
+  // the ACK of its own CMD_CALIBRATE_IMU, and the refusal if it is not accepted.
+  void onCommandAck(quint32 command, quint8 reqSeq, quint8 result);
+
 signals:
   void backToHomeRequested();
   void commandRequested(const QByteArray &data);
@@ -58,7 +67,14 @@ private slots:
   void onInstructionReceived(int type);
 
 private:
+  enum class Awaiting { None, Start, Cancel };
+  void updateGate();
+  void resetToIdle(const QString &status, const QString &hint);
   bool m_connected = false;
+  bool m_running = false; // a calibration was started and has not ended
+  QString m_vehicleState;
+  Awaiting m_awaiting = Awaiting::None;
+  QTimer m_ackTimer;
 
 private:
   DroneProtocol *m_protocol = nullptr;
