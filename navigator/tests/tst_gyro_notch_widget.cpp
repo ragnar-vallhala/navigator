@@ -24,6 +24,7 @@
 
 #include <QCheckBox>
 #include <QDoubleSpinBox>
+#include <QLabel>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QThread>
@@ -162,6 +163,22 @@ struct Panel {
   }
 };
 
+int g_abSeq = -1;
+navlink_ack_t onAutoband(void *, const navlink_frame_hdr_t *, const navlink_cmd_notch_autoband_t *m) {
+  g_abSeq = m->req_seq;
+  return navlink_ack_t{};
+}
+// The req_seq a CMD_NOTCH_AUTOBAND frame carries; -1 when it does not decode.
+int autobandSeqOf(const QByteArray &f) {
+  g_abSeq = -1;
+  navlink_handlers_t h{};
+  h.on_cmd_notch_autoband = onAutoband;
+  navlink_parser_t p;
+  navlink_parser_init(&p);
+  navlink_parser_push(&p, &h, reinterpret_cast<const uint8_t *>(f.constData()), size_t(f.size()));
+  return g_abSeq;
+}
+
 } // namespace
 
 class TstGyroNotchWidget : public QObject {
@@ -172,6 +189,7 @@ private slots:
   void applyWritesTheNotchGroupAsOneCommit();
   void theBoxesAreLockedWhileItRuns();
   void autobandIsArmedOnlyAfterTheSettingsAreIn();
+  void autobandSaysArmedOnlyWhenTheVehicleAcksIt();
   void aFailedApplyDoesNotArmAutoband();
   void aBandThatIsNotABandIsRefused();
   void olderFirmwareKeepsTheOldCommand();
@@ -272,6 +290,61 @@ void TstGyroNotchWidget::autobandIsArmedOnlyAfterTheSettingsAreIn() {
   QCOMPARE(cmd.count(), 1);
   QCOMPARE(msgidOf(cmd.at(0).at(0).toByteArray()), quint32(NAVLINK_MSGID_CMD_NOTCH_AUTOBAND));
   QVERIFY(!p.autoband->isChecked()); // a one-shot
+}
+
+void TstGyroNotchWidget::autobandSaysArmedOnlyWhenTheVehicleAcksIt() {
+  const auto statusOf = [](Panel &p) {
+    for (QLabel *l : p.w.findChildren<QLabel *>())
+      if (l->text().contains(QLatin1String("uto-band")))
+        return l->text();
+    return QString();
+  };
+  // Sends the settings and the command; returns the req_seq the command carried.
+  const auto arm = [&](Rig &r, Panel &p, QSignalSpy &cmd) -> int {
+    p.w.setParams(&r.svc);
+    r.up();
+    p.autoband->setChecked(true);
+    p.apply->click();
+    r.run(2500);
+    if (cmd.count() != 1)
+      return -1;
+    return autobandSeqOf(cmd.at(0).at(0).toByteArray());
+  };
+  { // accepted: armed
+    Rig r;
+    Panel p;
+    QSignalSpy cmd(&p.w, &GyroNotchWidget::commandRequested);
+    const int armed = arm(r, p, cmd);
+    QVERIFY(armed >= 0);
+    const quint8 seq = quint8(armed);
+    QVERIFY(!statusOf(p).contains(QLatin1String("armed")) || statusOf(p).contains(QLatin1String("Arming")));
+    p.w.onCommandAck(NAVLINK_MSGID_CMD_NOTCH_AUTOBAND, quint8(seq + 1), 0); // another request's ack
+    QVERIFY(statusOf(p).contains(QLatin1String("Arming")));
+    p.w.onCommandAck(NAVLINK_MSGID_CMD_PARAM_COMMIT, seq, 0); // another command's
+    QVERIFY(statusOf(p).contains(QLatin1String("Arming")));
+    p.w.onCommandAck(NAVLINK_MSGID_CMD_NOTCH_AUTOBAND, seq, 5); // in progress: keep waiting
+    QVERIFY(statusOf(p).contains(QLatin1String("Arming")));
+    p.w.onCommandAck(NAVLINK_MSGID_CMD_NOTCH_AUTOBAND, seq, 0);
+    QCOMPARE(statusOf(p), QStringLiteral("Auto-band armed"));
+  }
+  { // refused: not armed
+    Rig r;
+    Panel p;
+    QSignalSpy cmd(&p.w, &GyroNotchWidget::commandRequested);
+    const int armed = arm(r, p, cmd);
+    QVERIFY(armed >= 0);
+    const quint8 seq = quint8(armed);
+    p.w.onCommandAck(NAVLINK_MSGID_CMD_NOTCH_AUTOBAND, seq, 2);
+    QCOMPARE(statusOf(p), QStringLiteral("Auto-band not armed"));
+  }
+  { // no answer: said so, not "armed"
+    Rig r;
+    Panel p;
+    QSignalSpy cmd(&p.w, &GyroNotchWidget::commandRequested);
+    QVERIFY(arm(r, p, cmd) >= 0);
+    QTest::qWait(GyroNotchWidget::kAutobandAckMs + 300);
+    QCOMPARE(statusOf(p), QStringLiteral("Auto-band: no answer"));
+  }
 }
 
 void TstGyroNotchWidget::aFailedApplyDoesNotArmAutoband() {

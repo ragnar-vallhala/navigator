@@ -225,6 +225,12 @@ void TstCommandCodec::notchAutobandRoundTrip() {
   QCOMPARE(quint8(g_ab.target_sys), quint8(7));
   QCOMPARE(quint8(g_ab.target_comp), quint8(1));
   QCOMPARE(NAVLINK_MSGID_CMD_NOTCH_AUTOBAND, 8209u);
+  // The req_seq the caller is told is the one in the frame (the ack names it).
+  quint8 seq = 0;
+  g_abGot = false;
+  QVERIFY(decodesAs(CommandCodec::encodeNotchAutoband(7, &seq), NAVLINK_MSGID_CMD_NOTCH_AUTOBAND, h));
+  QVERIFY(g_abGot);
+  QCOMPARE(quint8(g_ab.req_seq), seq);
 }
 
 QTEST_APPLESS_MAIN(TstCommandCodec)

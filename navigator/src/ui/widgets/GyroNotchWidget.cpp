@@ -19,6 +19,7 @@
 #include "../../protocol/CommandCodec.h"
 #include "../core/Notify.h"
 #include "ParamApplier.h"
+#include "ParamClient.h"
 #include "ParamRoute.h"
 #include "ParamService.h"
 
@@ -27,6 +28,10 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
+
+extern "C" {
+#include "navlink_msgs.h"
+}
 
 namespace {
 // Compile-time firmware defaults (gyro_notch.c) so the panel opens on the values
@@ -120,14 +125,27 @@ GyroNotchWidget::GyroNotchWidget(QWidget *parent) : QWidget(parent) {
   for (QDoubleSpinBox *s : {m_q, m_fmin, m_fmax, m_minRatio})
     connect(s, qOverload<double>(&QDoubleSpinBox::valueChanged), this, edited);
 
+  m_autobandWait.setSingleShot(true);
+  m_autobandWait.setInterval(kAutobandAckMs);
+  connect(&m_autobandWait, &QTimer::timeout, this, [this] {
+    if (m_autobandSeq < 0)
+      return;
+    m_autobandSeq = -1;
+    m_statusLabel->setText(tr("Auto-band: no answer"));
+    Notify::warn(this, tr("The vehicle did not answer the auto-band command; it may or may not be armed"));
+  });
+
   setConnected(false);
 }
 
 void GyroNotchWidget::setProtocol(DroneProtocol *protocol) {
   m_protocol = protocol;
-  if (m_protocol)
+  if (m_protocol) {
     connect(m_protocol, &DroneProtocol::notchStatusReceived, this,
             &GyroNotchWidget::onNotchStatus);
+    connect(m_protocol, &DroneProtocol::commandAckReceived, this,
+            &GyroNotchWidget::onCommandAck);
+  }
 }
 
 void GyroNotchWidget::setParams(params::ParamService *svc) {
@@ -143,9 +161,13 @@ void GyroNotchWidget::setParams(params::ParamService *svc) {
               m_dirty = false;
               syncFromVehicle();
               if (m_wantAutoband) { // the settings are in: now learn the band
-                emit commandRequested(CommandCodec::encodeNotchAutoband());
+                quint8 seq = 0;
+                emit commandRequested(CommandCodec::encodeNotchAutoband(42, &seq));
                 m_autoband->setChecked(false);
-                m_statusLabel->setText(tr("Auto-band armed"));
+                // Armed only when the vehicle says so.
+                m_autobandSeq = seq;
+                m_autobandWait.start();
+                m_statusLabel->setText(tr("Arming auto-band…"));
               }
             } else if (r.unknown) {
               Notify::warn(this, tr("Lost the link while applying: the vehicle "
@@ -156,6 +178,24 @@ void GyroNotchWidget::setParams(params::ParamService *svc) {
             m_wantAutoband = false;
           });
   syncFromVehicle();
+}
+
+void GyroNotchWidget::onCommandAck(quint32 command, quint8 reqSeq, quint8 result) {
+  if (m_autobandSeq < 0 || command != NAVLINK_MSGID_CMD_NOTCH_AUTOBAND || reqSeq != m_autobandSeq)
+    return;
+  if (result == params::Client::kInProgress) { // alive: keep waiting
+    m_autobandWait.start();
+    return;
+  }
+  m_autobandSeq = -1;
+  m_autobandWait.stop();
+  if (result == params::Client::kAccepted) {
+    m_statusLabel->setText(tr("Auto-band armed"));
+    Notify::ok(this, tr("Auto-band armed: it learns the band on the next hover"));
+  } else {
+    m_statusLabel->setText(tr("Auto-band not armed"));
+    Notify::warn(this, tr("The vehicle did not arm auto-band (result %1)").arg(result));
+  }
 }
 
 void GyroNotchWidget::setBusy(bool busy) {

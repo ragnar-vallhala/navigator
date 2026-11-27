@@ -45,7 +45,7 @@ QByteArray encodeSetGyroNotch(bool enabled, float q, float fminHz, float fmaxHz,
 
 // CMD_NOTCH_AUTOBAND: arm the one-shot auto-band learn of the dynamic gyro notch
 // (live only, nothing is stored). The settings themselves are NOTCH_* parameters.
-QByteArray encodeNotchAutoband(quint8 devId = 42);
+QByteArray encodeNotchAutoband(quint8 devId = 42, quint8 *reqSeq = nullptr);
 
 // CMD_SET_FLIGHT_MODE: 0=angle, 1=acro, 2=release to RC (source = GCS).
 QByteArray encodeSetFlightMode(int mode, quint8 devId = 42, quint32 tsMs = 0);

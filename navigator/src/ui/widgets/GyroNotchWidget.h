@@ -22,6 +22,7 @@
 #include <QDoubleSpinBox>
 #include <QLabel>
 #include <QPushButton>
+#include <QTimer>
 #include <QWidget>
 
 namespace params {
@@ -48,11 +49,14 @@ class GyroNotchWidget : public QWidget {
   Q_OBJECT
 
 public:
+  static constexpr int kAutobandAckMs = 3000; // no ack for this long: "no answer"
   explicit GyroNotchWidget(QWidget *parent = nullptr);
   void setProtocol(DroneProtocol *protocol);
   void setParams(params::ParamService *svc);
 
 public slots:
+  // The vehicle's answer to a command; only the auto-band's is looked at.
+  void onCommandAck(quint32 command, quint8 reqSeq, quint8 result);
   // Gate the Apply control on the link state (same policy as CalibrationWidget).
   void setConnected(bool connected);
 
@@ -78,6 +82,8 @@ private:
   bool m_dirty = false;        // the user has edited a box since it was filled
   bool m_filling = false;      // the boxes are being set from code
   bool m_wantAutoband = false; // arm auto-band once the settings are in
+  int m_autobandSeq = -1;      // req_seq of the auto-band command awaiting its ack
+  QTimer m_autobandWait;
 
   QCheckBox *m_enable = nullptr;
   QCheckBox *m_autoband = nullptr;
