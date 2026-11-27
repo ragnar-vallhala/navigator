@@ -63,7 +63,7 @@ public:
   };
   static PondStyle pondStyle(int palette);
   // Whether the palette paints the scattered rock blobs into the ground colour
-  // (alpine and forest only; elsewhere the real rock meshes stand alone).
+  // (alpine, forest and endless; elsewhere the real rock meshes stand alone).
   static bool paintsRock(int palette);
 
   struct Sample {
