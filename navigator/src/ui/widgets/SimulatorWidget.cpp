@@ -1202,6 +1202,11 @@ void SimulatorWidget::onStreamTick() {
         vsim::procgen::vegParamsForPalette(
             m_chunkStreamer.config().field.palette));
     vp->seed = m_chunkStreamer.config().field.seed ^ 0x5bd1e995u;
+    // Both views draw the same rocks, so both get the world's tint flag.
+    const bool rockTint = vp->species[vsim::procgen::kVegRock].rockTint;
+    for (vsim::SimRendererWidget *r : {m_renderer, m_downRenderer})
+      if (r)
+        r->setVegetationRockTint(rockTint);
     vp->meshRes = m_chunkStreamer.config().resolution;
     // Trees are always scattered; the renderer hides them while they are off
     // (VegetationRenderer::setTreesEnabled), so the Trees checkbox can bring

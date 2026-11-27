@@ -181,6 +181,10 @@ public:
   // Trees have their own switch (QSettings sim/vegetationTrees, NAV_VEGETATION_TREES);
   // on by default.
   void setVegetationTreesEnabled(bool on);
+  void setVegetationRockTint(bool on) {
+    if (veg_)
+      veg_->setRockTint(on);
+  }
   bool vegetationTreesEnabled() const { return veg_ && veg_->treesEnabled(); }
   size_t vegetationInstanceCount(int species) const { return veg_ ? veg_->instanceCount(species) : 0; }
   size_t vegetationInstanceCount() const { return veg_ ? veg_->instanceCount() : 0; }
