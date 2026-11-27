@@ -367,7 +367,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
           &MainWindow::showHome);
   connect(m_calibrationWidget, &CalibrationWidget::commandRequested,
           [this](const QByteArray &data) {
-            if (m_source.txAllowed())
+            if (m_source.txAllowed() && !m_linkLost)
               sendToFc(data);
           });
 
@@ -463,6 +463,12 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
               // Legacy CMD_SET_PID: gains are locked while armed (as the
               // parameters are), and nothing that is not a gain goes out. The
               // whole batch is checked first, so a bad slot sends no slot.
+              if (m_linkLost) {
+                m_logPanel->appendLog(
+                    "[GCS] Apply gains refused — link lost (stale state)");
+                Notify::warn(this, tr("Link lost — gains not sent"));
+                return;
+              }
               if (m_armed) {
                 m_logPanel->appendLog(
                     "[GCS] Apply gains refused — the vehicle is armed");
@@ -1243,6 +1249,11 @@ void MainWindow::requestArm() {
     m_logPanel->appendLog("[GCS] ARM ignored — not connected");
     return;
   }
+  if (m_linkLost) {
+    m_logPanel->appendLog("[GCS] ARM refused — link lost (stale state)");
+    Notify::warn(this, tr("Link lost — ARM not sent"));
+    return;
+  }
   if (m_armed) {
     m_logPanel->appendLog("[GCS] ARM ignored — already armed");
     return;
@@ -1270,6 +1281,11 @@ void MainWindow::requestArm() {
 void MainWindow::requestDisarm() {
   if (!m_source.txAllowed()) {
     m_logPanel->appendLog("[GCS] DISARM ignored — not connected");
+    return;
+  }
+  if (m_linkLost) {
+    m_logPanel->appendLog("[GCS] DISARM refused — link lost (stale state)");
+    Notify::warn(this, tr("Link lost — DISARM not sent"));
     return;
   }
 
@@ -1921,6 +1937,16 @@ void MainWindow::updateLiveBlinker() {
       m_source.state() == SourceState::Fc && elapsed > m_linkLossTimeoutMs;
   if (lost != m_linkLost) {
     m_linkLost = lost;
+    // While the link is lost the last-known state (armed, in flight, ...) is
+    // stale and a command would go nowhere: disable ARM/DISARM and treat the
+    // vehicle state as unknown for calibration until heartbeats resume.
+    if (m_toolbar)
+      m_toolbar->setArmEnabled(!lost && m_source.txAllowed());
+    if (m_calibrationWidget)
+      m_calibrationWidget->setVehicleState(lost ? QString() : m_lastPushedState);
+    if (lost)
+      m_logPanel->appendLog("[GCS] Link lost — ARM/DISARM and calibration "
+                            "commands are disabled until the heartbeat returns");
     if (m_statusBar) {
       if (lost)
         m_statusBar->setError(
