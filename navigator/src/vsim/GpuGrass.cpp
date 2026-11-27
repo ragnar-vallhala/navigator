@@ -491,14 +491,6 @@ bool GpuGrass::init(QOpenGLExtraFunctions *gl) {
   gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
   gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
   gl->glTexStorage2D(GL_TEXTURE_2D, 1, GL_R32F, texSize_, texSize_);
-  // Node grids for the slope cap (ping-pong; the result of 6 passes is in [0]).
-  gl->glGenTextures(2, nodeTex_);
-  for (unsigned int t : nodeTex_) {
-    gl->glBindTexture(GL_TEXTURE_2D, t);
-    gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    gl->glTexStorage2D(GL_TEXTURE_2D, 1, GL_R32F, kNodeCap, kNodeCap);
-  }
   gl->glBindTexture(GL_TEXTURE_2D, 0);
 
   ready_ = true;
@@ -687,9 +679,11 @@ void GpuGrass::release(QOpenGLExtraFunctions *gl) {
   if (heightTex_)
     gl->glDeleteTextures(1, &heightTex_);
   heightTex_ = 0;
-  if (nodeTex_[0])
-    gl->glDeleteTextures(2, nodeTex_);
-  nodeTex_[0] = nodeTex_[1] = 0;
+  for (NodeGrid &g : nodeGrid_) {
+    if (g.tex[0])
+      gl->glDeleteTextures(2, g.tex);
+    g = NodeGrid();
+  }
   for (MaskTile &m : mask_) {
     if (m.pending.valid())
       m.pending.wait(); // the worker only touches its own copy
@@ -922,7 +916,25 @@ void GpuGrass::render(QOpenGLExtraFunctions *gl, const QMatrix4x4 &proj,
       if (nodeN > kNodeCap)
         nodeN = 0;
     }
-    if (nodeN > 0) {
+    NodeGrid &ng_ = nodeGrid_[i];
+    // Same window and params as the last build: the eroded grid is still right.
+    const bool cached = nodeN > 0 && ng_.valid && ng_.ox == nodeOx &&
+                        ng_.oy == nodeOy && ng_.n == nodeN && ng_.gen == maskGen_;
+    if (nodeN > 0 && ng_.size != nodeN) { // (re)allocate to this ring's window
+      if (ng_.tex[0])
+        gl->glDeleteTextures(2, ng_.tex);
+      gl->glGenTextures(2, ng_.tex);
+      for (unsigned int t : ng_.tex) {
+        gl->glBindTexture(GL_TEXTURE_2D, t);
+        gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        gl->glTexStorage2D(GL_TEXTURE_2D, 1, GL_R32F, nodeN, nodeN);
+      }
+      gl->glBindTexture(GL_TEXTURE_2D, 0);
+      ng_.size = nodeN;
+      ng_.valid = false;
+    }
+    if (nodeN > 0 && !cached) {
       const int ng = (nodeN + 15) / 16;
       nodes_->bind();
       setTerrain(nodes_.get());
@@ -930,7 +942,7 @@ void GpuGrass::render(QOpenGLExtraFunctions *gl, const QMatrix4x4 &proj,
       gl->glUniform2i(nodes_->uniformLocation("u_nodeOrigin"), nodeOx, nodeOy);
       nodes_->setUniformValue("u_nodeStep", step);
       nodes_->setUniformValue("u_nodeN", nodeN);
-      gl->glBindImageTexture(0, nodeTex_[0], 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R32F);
+      gl->glBindImageTexture(0, ng_.tex[0], 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R32F);
       gl->glDispatchCompute(ng, ng, 1);
       gl->glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
       nodes_->release();
@@ -938,12 +950,18 @@ void GpuGrass::render(QOpenGLExtraFunctions *gl, const QMatrix4x4 &proj,
       erode_->setUniformValue("u_nodeN", nodeN);
       erode_->setUniformValue("u_maxStep", ms * step);
       for (int k = 0; k < kErodeIters; ++k) {
-        gl->glBindImageTexture(0, nodeTex_[k & 1], 0, GL_FALSE, 0, GL_READ_ONLY, GL_R32F);
-        gl->glBindImageTexture(1, nodeTex_[(k + 1) & 1], 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R32F);
+        gl->glBindImageTexture(0, ng_.tex[k & 1], 0, GL_FALSE, 0, GL_READ_ONLY, GL_R32F);
+        gl->glBindImageTexture(1, ng_.tex[(k + 1) & 1], 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R32F);
         gl->glDispatchCompute(ng, ng, 1);
         gl->glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
       }
       erode_->release();
+      ng_.ox = nodeOx;
+      ng_.oy = nodeOy;
+      ng_.n = nodeN;
+      ng_.gen = maskGen_;
+      ng_.valid = true;
+      ++nodeBuilds_;
     }
 
     // --- pass 1: fill the height texture (terrain noise once per texel) ---
@@ -957,7 +975,7 @@ void GpuGrass::render(QOpenGLExtraFunctions *gl, const QMatrix4x4 &proj,
     fill_->setUniformValue("u_nodeStep", step);
     gl->glBindImageTexture(0, heightTex_, 0, GL_FALSE, 0, GL_WRITE_ONLY,
                            GL_R32F);
-    gl->glBindImageTexture(1, nodeTex_[0], 0, GL_FALSE, 0, GL_READ_ONLY, GL_R32F);
+    gl->glBindImageTexture(1, nodeN > 0 ? ng_.tex[0] : 0u, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R32F);
     const int fg = (texSize_ + 15) / 16;
     gl->glDispatchCompute(fg, fg, 1);
     gl->glMemoryBarrier(GL_ALL_BARRIER_BITS);

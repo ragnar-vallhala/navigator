@@ -440,6 +440,42 @@ private slots:
       QVERIFY2(sSum / sN < 0.05, names[vi]); // the mesh the player sees
     }
 
+    // The node grids are cached per ring: rendering again from the same camera
+    // rebuilds none, nudging the camera a few cm keeps the blades on the capped
+    // mesh, and a params change (new generation) rebuilds them.
+    {
+      QMatrix4x4 proj, view;
+      proj.ortho(-25.0f, 25.0f, -25.0f, 25.0f, -1000.0f, 1000.0f);
+      auto renderAt = [&](float cx, float cy) {
+        view.setToIdentity();
+        view.translate(-cx, -cy);
+        g.render(&gl, proj, view, QVector3D(cx, cy, 0.0f),
+                 QVector3D(0.3f, 0.3f, -1.0f), 0.0f);
+        gl.glFinish();
+      };
+      renderAt(views[1][0], views[1][1]);
+      const int before = g.nodeGridBuilds();
+      renderAt(views[1][0], views[1][1]);
+      QCOMPARE(g.nodeGridBuilds(), before); // same window: every ring hits
+      const float cx = views[1][0] + 0.05f, cy = views[1][1] + 0.03f;
+      renderAt(cx, cy);
+      const std::vector<GpuGrass::Blade> blades = g.readBlades(&gl, 0);
+      QVERIFY(blades.size() > 500);
+      double sum = 0.0;
+      int n = 0;
+      for (std::size_t k = 0; k < blades.size(); k += 97, ++n)
+        sum += std::fabs(double(-blades[k].negH) -
+                         double(procgen::surfaceHeight(cpu, blades[k].x, blades[k].y,
+                                                       procgen::kStreamChunkM,
+                                                       procgen::kStreamChunkRes)));
+      qInfo("cached grids, camera moved: mean %.4f m", sum / n);
+      QVERIFY2(sum / n < 0.05, "cached node grid");
+      const int mid = g.nodeGridBuilds();
+      g.setParams(p); // same params, new generation: everything rebuilds
+      renderAt(cx, cy);
+      QVERIFY(g.nodeGridBuilds() >= mid + 4); // one per ring
+    }
+
     // Without the cap lattice (meshStepM 0) the shader is the bare field again:
     // the three terms stay exact against TerrainField::height.
     p.meshStepM = 0.0f;
