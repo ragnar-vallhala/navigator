@@ -72,6 +72,15 @@ public:
   void releaseStreamedWorld() { w_.releaseStreamedWorld(); }
   // The camera: the free-roam eye when stopped in World mode, else the vehicle.
   QVector3D cameraPos() const { return w_.m_renderer->streamCenter(); }
+  // Where the eye really is: the orbit camera's eye is a vehicle-relative offset.
+  QVector3D eyePos() const { return w_.m_renderer->eyePos(); }
+  // The Vehicle tab: the third-person orbit camera on the parked vehicle.
+  // The orbit camera over the visible world, as while a sim runs.
+  void orbitInWorld() { w_.m_renderer->setFreeFly(false); }
+  void setOrbit(float radius, float pitch) { w_.m_renderer->setOrbitForTest(radius, pitch); }
+  QVector3D drawnEye() const { return w_.m_renderer->drawnEye(); }
+  void setOrbitYaw(float yaw) { w_.m_renderer->setOrbitYawForTest(yaw); }
+  float orbitMax() const { return w_.m_renderer->orbitMaxRadius(); }
   bool hasGround() const { return bool(w_.m_terrainHeightAt); }
   float groundAt(float x, float y) const { return w_.m_terrainHeightAt(x, y); }
   // Where the vehicle is, as the product decides it (lift, stream arrival,
@@ -485,6 +494,60 @@ private slots:
     for (int i = 0; i < cs.size(); ++i)
       QTest::newRow(cs[i].name) << i;
   }
+  // The third-person camera's EYE (not the vehicle: streamCenter() is the
+  // vehicle for the orbit camera) must stay above the new ground however the
+  // user has zoomed and tilted it, all round the vehicle.
+  void orbitEyeStaysAboveTheGround_data() {
+    QTest::addColumn<int>("idx");
+    const QVector<Change> cs = changes();
+    for (int i = 0; i < cs.size(); ++i)
+      QTest::newRow(cs[i].name) << i;
+  }
+  void orbitEyeStaysAboveTheGround() {
+    if (!gl_)
+      QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");
+    QFETCH(int, idx);
+    a_->changeWorld(changes()[idx].edit);
+    pump(300);
+    a_->orbitInWorld(); // the camera a running sim has, on the parked vehicle
+    const float rmax = a_->orbitMax();
+    float worst = 1e9f, worstRadius = 0.0f, worstPitch = 0.0f;
+    int worstAz = 0;
+    QString where;
+    for (float pitch : {0.5f, 0.2f, 0.0f})
+      for (float k : {0.25f, 0.5f, 1.0f}) {
+        a_->setOrbit(rmax * k, pitch);
+        for (int az = 0; az < 360; az += 15) {
+          a_->setOrbitYaw(float(az) * 3.14159265f / 180.0f);
+          const QVector3D p = a_->eyePos();
+          const float g = a_->hasGround() ? a_->groundAt(p.x(), p.y()) : 0.0f;
+          if (-p.z() - g < worst) {
+            worst = -p.z() - g;
+            worstRadius = rmax * k;
+            worstPitch = pitch;
+            worstAz = az;
+            where = QStringLiteral("radius %1 pitch %2 azimuth %3").arg(rmax * k).arg(pitch).arg(az);
+          }
+        }
+      }
+    qInfo("%s: lowest eye above the ground %.2f m (%s)", changes()[idx].name, worst,
+          qPrintable(where));
+    // The frame is drawn from that same eye, not from the unclamped one: put the
+    // camera at the lowest setting found and read back what the renderer drew.
+    a_->setOrbit(worstRadius, worstPitch);
+    a_->setOrbitYaw(worstAz * 3.14159265f / 180.0f);
+    pump(300);
+    const QVector3D want = a_->eyePos(), drawn = a_->drawnEye();
+    QVERIFY2((want - drawn).length() < 0.05f,
+             qPrintable(QStringLiteral("drawn from (%1 %2 %3), not the clamped eye (%4 %5 %6)")
+                            .arg(drawn.x()).arg(drawn.y()).arg(drawn.z())
+                            .arg(want.x()).arg(want.y()).arg(want.z())));
+    // Over terrain the eye keeps a margin; with no world there is only the flat
+    // z=0 plane (no sampler to clamp with), and it must not go under that.
+    QVERIFY2(worst >= (a_->hasGround() ? 0.25f : 0.0f), qPrintable(QStringLiteral("eye under the ground: %1 m at %2").arg(worst).arg(where)));
+    a_->worldMode();
+  }
+
   void stoppedChangesPlaceVehicleOnGround() {
     if (!gl_)
       QSKIP("needs a GL platform plugin (QT_QPA_PLATFORM=xcb on Xvfb)");

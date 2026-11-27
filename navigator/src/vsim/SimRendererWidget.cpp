@@ -38,6 +38,7 @@
 #include <atomic>
 #include <climits>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 namespace vsim {
@@ -1272,6 +1273,31 @@ QVector3D SimRendererWidget::orbitOffset() const {
                    -cam_radius_ * std::sin(cam_pitch_));
 }
 
+QVector3D SimRendererWidget::orbitEye() const {
+  QVector3D eye = snap_.pos_w + orbitOffset();
+  if (!groundAt_ || !worldVisible_)
+    return eye;
+  // Highest finite sample; a NaN (no ground there) must not hide the others,
+  // and std::max(NaN, x) would return the NaN.
+  float h = -std::numeric_limits<float>::infinity();
+  const auto take = [&](float x, float y) {
+    const float v = groundAt_(x, y);
+    if (std::isfinite(v))
+      h = std::max(h, v);
+  };
+  take(eye.x(), eye.y());
+  for (const float d : {kEyeGroundProbeM, -kEyeGroundProbeM}) {
+    take(eye.x() + d, eye.y());
+    take(eye.x(), eye.y() + d);
+  }
+  if (!std::isfinite(h))
+    return eye;
+  const float minUp = h + kEyeAboveGroundM; // NED: up is -z
+  if (-eye.z() < minUp)
+    eye.setZ(-minUp);
+  return eye;
+}
+
 void SimRendererWidget::setFreeFly(bool on) {
   if (on && !freeFly_) {
     // Seed the free camera at the current orbit eye for a seamless handoff.
@@ -1330,7 +1356,7 @@ QMatrix4x4 SimRendererWidget::cameraView() const {
   // vehicle so it never spins out of frame. The world up (-Z) stays fixed so
   // the horizon doesn't tilt; only a mouse drag re-aims the relative offset.
   const auto &tgt = snap_.pos_w;
-  QVector3D eye = tgt + orbitOffset();
+  const QVector3D eye = orbitEye();
   QMatrix4x4 view;
   view.lookAt(eye, tgt, QVector3D(0.0f, 0.0f, -1.0f)); // NED up = -Z
   return view;

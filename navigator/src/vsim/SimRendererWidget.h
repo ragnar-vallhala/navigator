@@ -22,6 +22,7 @@
 // the SITL view renders terrain without grass. The code is retained in-tree for
 // later re-enable (cmake -DNAVIGATOR_SIM_GRASS=ON).
 #include "Atmosphere.h"
+#include <functional>
 #include "TerrainTextures.h"
 #include "ShadowCascades.h"
 #ifdef VAYU_SIM_GRASS
@@ -423,6 +424,37 @@ public:
   // Test hook: stop the wind / wave / cloud clock so two frames of the same
   // scene are identical and a feature toggle can be compared pixel for pixel.
   void freezeAnimationForTest(bool on) { animFrozenForTest_ = on; }
+  // Where the eye is now (NED): the free-roam camera, the onboard / belly
+  // camera on the airframe, else the third-person orbit eye (kept above the
+  // ground, see orbitEye()).
+  QVector3D eyePos() const {
+    if (downCam_ || (fpv_ && !freeFly_))
+      return snap_.pos_w;
+    return freeFly_ ? camPos_ : orbitEye();
+  }
+  // Elevation of the terrain [m, up] at world (x, y), for keeping the orbit
+  // camera out of the ground. Empty: no ground to keep it above (imported mesh,
+  // no world). Called on the GUI thread, every frame: it must be cheap.
+  using GroundFn = std::function<float(float, float)>;
+  void setGroundSampler(GroundFn f) { groundAt_ = std::move(f); }
+  // The orbit eye stays at least this far above the ground, and the ground is
+  // sampled this far around it (the highest of five), so rough ground does not
+  // make the camera jitter.
+  static constexpr float kEyeAboveGroundM = 0.75f;
+  static constexpr float kEyeGroundProbeM = 1.5f;
+  // Test hook: the orbit camera at `radius` m and `pitch` rad above the horizon.
+  void setOrbitForTest(float radius, float pitch) {
+    cam_radius_ = radius;
+    cam_pitch_ = pitch;
+    update();
+  }
+  // Test hook: the eye the last frame was drawn from (world, NED).
+  QVector3D drawnEye() const { return camEye_; }
+  void setOrbitYawForTest(float yaw) {
+    cam_yaw_ = yaw;
+    update();
+  }
+  float orbitMaxRadius() const { return camMaxRadius_; }
   // Test/tool hook: the free-roam camera at `pos` (NED) looking along compass
   // `heading` [rad, 0 = north, clockwise] tilted `down` [rad] below the horizon.
   void setCameraPoseForTest(const QVector3D &pos, float heading, float down) {
@@ -612,6 +644,12 @@ private:
   // drone's heading (cam_yaw_ is the offset RELATIVE to the body, changed only
   // by mouse drag) so the camera yaws with the vehicle and stays easy to track.
   QVector3D orbitOffset() const;
+  // The third-person eye: the vehicle plus the orbit offset, raised (never
+  // moved sideways) when that is under the ground, so the look-at stays on the
+  // vehicle. Not applied while the world is hidden (the Vehicle tab draws the
+  // airframe alone) or when there is no ground sampler.
+  QVector3D orbitEye() const;
+  GroundFn groundAt_;
   bool freeFlyMove(int key, bool fast); // WASD/QE → move camPos_; true if used
 
   // Flat shader: vec3 position + uniform color + MVP (grid/axes/markers).

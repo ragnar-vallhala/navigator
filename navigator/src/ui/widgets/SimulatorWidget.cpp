@@ -18,6 +18,7 @@
 #include <QThread>
 #include <array>
 #include <cmath>
+#include <limits>
 #include "GlAvailability.h"
 #include "SimPanelsCommon.h"
 #include "../../autotune/BackendLocator.h"
@@ -348,6 +349,13 @@ void SimulatorWidget::buildUi() {
 
   auto *viewPanel = new SimViewPanel(*this, splitter);
   splitter->addWidget(viewPanel);
+  // The third-person camera keeps its eye above the ground. The raw field is
+  // cheap (a few samples every frame) and a metre of error is harmless there;
+  // NaN: no ground (imported mesh, no world), nothing to keep it above.
+  m_renderer->setGroundSampler([this](float x, float y) {
+    return m_terrainRawHeightAt ? m_terrainRawHeightAt(x, y)
+                                : std::numeric_limits<float>::quiet_NaN();
+  });
   applyTerrainQuality();
   applyWaterQuality();
   applyVegetationTrees();
