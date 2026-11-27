@@ -78,6 +78,7 @@ private slots:
   void slopeCapIsTheSameInEveryDirection();
   void parcelBordersAreBlendedNotHardSteps();
   void parcelBordersAreRaggedButResolved();
+  void rockPaintOnlyWhereItReadsAsScree();
   void groundCoverDeterministicAndBounded();
   void groundCoverGivesVarietyInEveryPalette();
   void groundCoverPondsAndTracksExist();
@@ -299,6 +300,35 @@ void TstProcgen::parcelBordersAreBlendedNotHardSteps() {
       QVERIFY2(mx <= kMaxStep, qPrintable(QStringLiteral("palette %1 seed %2: step %3 between two vertices").arg(palette).arg(seed).arg(double(mx))));
       QVERIFY2(sum / double(n) > 0.003, "the parcels must actually differ in colour");
     }
+}
+
+void TstProcgen::rockPaintOnlyWhereItReadsAsScree() {
+  // The scattered rock blobs painted into the ground colour read as dark
+  // smudges with no rock on them wherever the real rock meshes stand on their
+  // own (dunes, grass, lawn). Only alpine, forest and the endless world's dark
+  // canopy floor keep the paint (without it the endless ground loses its variety).
+  QVERIFY(GroundCover::paintsRock(kPalAlpine));
+  QVERIFY(GroundCover::paintsRock(kPalForest));
+  QVERIFY(GroundCover::paintsRock(kPalEndless));
+  for (int pal : {kPalDesert, kPalPasture, kPalYard, kPalMeadow, kPalHills, kPalFlat, kPalRacing})
+    QVERIFY2(!GroundCover::paintsRock(pal), qPrintable(QStringLiteral("palette %1 paints rocks").arg(pal)));
+  // And it is the ground colour that changes: desert has rockAmt > 0 in its
+  // style, yet no block of its ground has the dark blob spread.
+  const float h = kStreamChunkM / float(kStreamChunkRes);
+  const PgVec3 kBase{0.62f, 0.50f, 0.30f};
+  GroundCover gc(7u, kPalDesert);
+  float darkest = 1.0f, mean = 0.0f;
+  int n = 0;
+  for (int j = 0; j < 200; ++j)
+    for (int i = 0; i < 200; ++i) {
+      const float y = gc.sample(-200.0f + h * float(i), 100.0f + h * float(j), kBase, 0.05f, 1.0f).split.y;
+      darkest = std::min(darkest, y);
+      mean += y;
+      ++n;
+    }
+  mean /= float(n);
+  QVERIFY2(darkest > 0.6f * mean,
+           qPrintable(QStringLiteral("a desert spot is %1 against a mean of %2").arg(double(darkest)).arg(double(mean))));
 }
 
 void TstProcgen::parcelBordersAreRaggedButResolved() {
