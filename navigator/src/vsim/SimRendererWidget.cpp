@@ -1272,6 +1272,23 @@ QVector3D SimRendererWidget::orbitOffset() const {
                    -cam_radius_ * std::sin(cam_pitch_));
 }
 
+QVector3D SimRendererWidget::orbitEye() const {
+  QVector3D eye = snap_.pos_w + orbitOffset();
+  if (!groundAt_ || !worldVisible_)
+    return eye;
+  float h = groundAt_(eye.x(), eye.y());
+  for (const float d : {kEyeGroundProbeM, -kEyeGroundProbeM}) {
+    h = std::max(h, groundAt_(eye.x() + d, eye.y()));
+    h = std::max(h, groundAt_(eye.x(), eye.y() + d));
+  }
+  if (!std::isfinite(h))
+    return eye;
+  const float minUp = h + kEyeAboveGroundM; // NED: up is -z
+  if (-eye.z() < minUp)
+    eye.setZ(-minUp);
+  return eye;
+}
+
 void SimRendererWidget::setFreeFly(bool on) {
   if (on && !freeFly_) {
     // Seed the free camera at the current orbit eye for a seamless handoff.
@@ -1330,7 +1347,7 @@ QMatrix4x4 SimRendererWidget::cameraView() const {
   // vehicle so it never spins out of frame. The world up (-Z) stays fixed so
   // the horizon doesn't tilt; only a mouse drag re-aims the relative offset.
   const auto &tgt = snap_.pos_w;
-  QVector3D eye = tgt + orbitOffset();
+  const QVector3D eye = orbitEye();
   QMatrix4x4 view;
   view.lookAt(eye, tgt, QVector3D(0.0f, 0.0f, -1.0f)); // NED up = -Z
   return view;
