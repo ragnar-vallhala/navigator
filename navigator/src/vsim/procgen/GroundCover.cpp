@@ -24,6 +24,9 @@
 namespace vsim::procgen {
 namespace {
 
+// Width [m] of the colour ramp between two neighbouring field parcels.
+constexpr float kParcelBlendM = 10.0f;
+
 inline float clamp01(float v) {
   return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
 }
@@ -167,6 +170,62 @@ const CoverStyle &styleFor(int pal) {
   return kStyles[pal < 0 || pal >= n ? 0 : pal];
 }
 
+// Where a point sits on the (wandering) parcel grid: parcel indices and the
+// position inside the parcel, 0..1 per axis.
+struct ParcelCoords {
+  int iu, iv;
+  float fu, fv;
+};
+
+// Wander the parcel borders: two noise scales, a separate field per axis (one
+// shared offset only shears the grid), amplitude a fraction of the parcel size
+// so borders bend instead of staying straight lines of a grid.
+ParcelCoords parcelCoords(const CoverStyle &s, float rot, const Noise &patch,
+                          float wx, float wy) {
+  const float c = std::cos(rot), sn = std::sin(rot);
+  const float pm = std::min(s.fieldW, s.fieldH);
+  const float wobU = pm * (0.30f * patch.fbm(wx / 150.0f + 3.0f, wy / 150.0f, 2, 2.0f, 0.5f) +
+                           0.10f * patch.fbm(wx / 47.0f + 9.0f, wy / 47.0f + 4.0f, 2, 2.0f, 0.5f));
+  const float wobV = pm * (0.30f * patch.fbm(wx / 150.0f + 21.0f, wy / 150.0f + 17.0f, 2, 2.0f, 0.5f) +
+                           0.10f * patch.fbm(wx / 47.0f + 33.0f, wy / 47.0f + 28.0f, 2, 2.0f, 0.5f));
+  const float u = ((wx * c + wy * sn) + wobU) / s.fieldW;
+  const float v = ((-wx * sn + wy * c) + wobV) / s.fieldH;
+  ParcelCoords o;
+  o.iu = static_cast<int>(std::floor(u));
+  o.iv = static_cast<int>(std::floor(v));
+  o.fu = u - static_cast<float>(o.iu);
+  o.fv = v - static_cast<float>(o.iv);
+  return o;
+}
+
+// Colour of the field parcel under a point, before it is mixed over the base.
+PgVec3 parcelColourAt(const CoverStyle &s, const ParcelCoords &pc, const Noise &fine,
+                    float wx, float wy) {
+  // One parcel's colour: its crop, with a per-parcel brightness so neighbours of
+  // one crop still differ.
+  const auto parcel = [&](int pu, int pv) {
+    const uint32_t h = hash2(pu, pv, 77u);
+    return scale(s.crops[h % static_cast<uint32_t>(s.nCrops)], 0.9f + 0.2f * u01(h >> 8));
+  };
+  // Blend into the neighbouring parcel across the nearer border: half and half
+  // on the border line, own colour alone kParcelBlendM away from it. Vertices are
+  // ~2 m apart, so the ramp has to be several metres wide to be resolved.
+  const float du = std::min(pc.fu, 1.0f - pc.fu) * s.fieldW;
+  const float dv = std::min(pc.fv, 1.0f - pc.fv) * s.fieldH;
+  const int nu = pc.fu < 0.5f ? pc.iu - 1 : pc.iu + 1;
+  const int nv = pc.fv < 0.5f ? pc.iv - 1 : pc.iv + 1;
+  const float wu = 0.5f * (1.0f - smoothstep(0.0f, kParcelBlendM, du));
+  const float wv = 0.5f * (1.0f - smoothstep(0.0f, kParcelBlendM, dv));
+  const PgVec3 a = mix(parcel(pc.iu, pc.iv), parcel(nu, pc.iv), wu);
+  const PgVec3 b = mix(parcel(pc.iu, nv), parcel(nu, nv), wu);
+  PgVec3 crop = mix(a, b, wv);
+  // Inside a parcel: slow brightness and warm/cool drift, so a field is not one
+  // flat colour.
+  const float vary = fine.fbm(wx / 26.0f + 5.0f, wy / 26.0f, 2, 2.0f, 0.5f);
+  return mul(scale(crop, 1.0f + 0.10f * vary),
+             {1.0f + 0.06f * vary, 1.0f, 1.0f - 0.06f * vary});
+}
+
 } // namespace
 
 GroundCover::PondStyle GroundCover::pondStyle(int palette) {
@@ -179,6 +238,13 @@ GroundCover::GroundCover(uint32_t seed, int palette)
       tint_(seed ^ 0x1f123bb5u), patch_(seed ^ 0x2545f491u),
       fine_(seed ^ 0x6c8e9cf5u), path_(seed ^ 0x3c6ef372u),
       rock_(seed ^ 0x9b05688cu) {}
+
+PgVec3 GroundCover::parcelColour(float wx, float wy) const {
+  const CoverStyle &s = styleFor(pal_);
+  if (s.fieldsAmt <= 0.0f || s.nCrops <= 0)
+    return {0.0f, 0.0f, 0.0f};
+  return parcelColourAt(s, parcelCoords(s, rot_, patch_, wx, wy), fine_, wx, wy);
+}
 
 GroundCover::Sample GroundCover::sample(float wx, float wy, const PgVec3 &base,
                                         float h01, float flatness) const {
@@ -215,17 +281,10 @@ GroundCover::Sample GroundCover::sampleImpl(float wx, float wy, const PgVec3 &ba
   float edgeTrack = 0.0f;
   float edgeS = kEdgeFar; // signed distance to the nearest tracked border
   if (s.fieldsAmt > 0.0f && s.nCrops > 0) {
-    const float c = std::cos(rot_), sn = std::sin(rot_);
-    const float wob = 14.0f * patch_.fbm(wx / 90.0f + 3.0f, wy / 90.0f, 2, 2.0f, 0.5f);
-    const float u = ((wx * c + wy * sn) + wob) / s.fieldW;
-    const float v = ((-wx * sn + wy * c) + wob * 0.7f) / s.fieldH;
-    const int iu = static_cast<int>(std::floor(u)), iv = static_cast<int>(std::floor(v));
-    const float fu = u - static_cast<float>(iu), fv = v - static_cast<float>(iv);
-    const uint32_t hc = hash2(iu, iv, 77u);
-    PgVec3 crop = s.crops[hc % static_cast<uint32_t>(s.nCrops)];
-    // Per-parcel brightness so neighbours of one crop still differ.
-    crop = scale(crop, 0.9f + 0.2f * u01(hc >> 8));
-    col = mix(col, crop, s.fieldsAmt * alt);
+    const ParcelCoords pc = parcelCoords(s, rot_, patch_, wx, wy);
+    const int iu = pc.iu, iv = pc.iv;
+    const float fu = pc.fu, fv = pc.fv;
+    col = mix(col, parcelColourAt(s, pc, fine_, wx, wy), s.fieldsAmt * alt);
     // A track runs along some parcel borders (the left/bottom border of a parcel).
     const float du = std::min(fu, 1.0f - fu) * s.fieldW;
     const float dv = std::min(fv, 1.0f - fv) * s.fieldH;

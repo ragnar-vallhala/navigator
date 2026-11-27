@@ -22,6 +22,7 @@
 // the bilinear sampler agrees with the lattice it was built from.
 #include <QtTest/QtTest>
 
+#include "vsim/procgen/GroundCover.h"
 #include "ChunkStreamer.h"
 #include "ChunkWorkQueue.h"
 #include "procgen/Flora.h"
@@ -75,6 +76,7 @@ private slots:
   void differentSeedDiffersMesh();
   void fieldIsDeterministicAndBounded();
   void slopeCapIsTheSameInEveryDirection();
+  void parcelBordersAreBlendedNotHardSteps();
   void groundCoverDeterministicAndBounded();
   void groundCoverGivesVarietyInEveryPalette();
   void groundCoverPondsAndTracksExist();
@@ -265,6 +267,37 @@ void TstProcgen::slopeCapIsTheSameInEveryDirection() {
     }
   QCOMPARE(axisCut, 0);                   // k < maxStep: a gentle axis ramp stays
   QCOMPARE(diagCut, (gn - 2) * (gn - 2)); // the steeper diagonal ramp is cut
+}
+
+void TstProcgen::parcelBordersAreBlendedNotHardSteps() {
+  // Walk lines across many parcels at the chunk mesh's vertex spacing. The field
+  // parcels used to switch colour on a hard border (a step of 0.5 in one vertex);
+  // warped borders blended over several metres must stay under kMaxStep per
+  // vertex. The mean step guards against a test that sees one flat colour.
+  constexpr float kMaxStep = 0.12f;
+  const float vertexM = kStreamChunkM / float(kStreamChunkRes);
+  for (int palette : {7, 8})
+    for (uint32_t seed : {3u, 11u, 99u}) {
+      GroundCover gc(seed, palette);
+      float mx = 0.0f;
+      double sum = 0.0;
+      long n = 0;
+      for (int row = 0; row < 12; ++row) {
+        PgVec3 prev{};
+        for (int i = 0; i < 3000; ++i) {
+          const PgVec3 c = gc.parcelColour(-3000.0f + vertexM * float(i), -900.0f + 163.0f * float(row));
+          if (i > 0) {
+            const float d = std::max({std::fabs(c.x - prev.x), std::fabs(c.y - prev.y), std::fabs(c.z - prev.z)});
+            mx = std::max(mx, d);
+            sum += double(d);
+            ++n;
+          }
+          prev = c;
+        }
+      }
+      QVERIFY2(mx <= kMaxStep, qPrintable(QStringLiteral("palette %1 seed %2: step %3 between two vertices").arg(palette).arg(seed).arg(double(mx))));
+      QVERIFY2(sum / double(n) > 0.003, "the parcels must actually differ in colour");
+    }
 }
 
 void TstProcgen::fieldChunksTileSeamlessly() {

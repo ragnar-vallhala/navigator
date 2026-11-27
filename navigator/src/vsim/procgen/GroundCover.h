@@ -91,6 +91,12 @@ public:
   Sample sampleSplit(float wx, float wy, const PgVec3 &base, float h01,
                      float flatness) const;
 
+  // The field-parcel colour at a point on its own (no base, patches, rocks or
+  // tracks): the parcel grid's warp, the blend between parcels and the variation
+  // inside one. Black for a palette without field parcels. Exposed so a test can
+  // check that no parcel border is a hard colour step.
+  PgVec3 parcelColour(float wx, float wy) const;
+
 private:
   Sample sampleImpl(float wx, float wy, const PgVec3 &base, float h01,
                     float flatness, bool split) const;
