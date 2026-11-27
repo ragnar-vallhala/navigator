@@ -92,6 +92,7 @@ layout(local_size_x=16, local_size_y=16) in;
 layout(r32f, binding=0) writeonly uniform image2D heightImg;
 uniform uint u_seed;
 uniform float u_heightM, u_featureM, u_macroM, u_lacunarity, u_gain, u_mountainMix, u_ridgeSoft;
+uniform float u_mountainBias, u_flatR, u_padH, u_reliefM;
 uniform int u_octaves, u_texSize;
 uniform vec2 u_regionMin; uniform float u_regionSize;
 uint hash32(uint x){ x^=x>>16; x*=0x7feb352du; x^=x>>15; x*=0x846ca68bu; x^=x>>16; return x; }
@@ -105,16 +106,30 @@ float grad(float x,float y,uint seed){ int x0=int(floor(x)),y0=int(floor(y)),x1=
 float fbm(float x,float y,uint s,int o,float l,float gn){ float su=0.,a=1.,fr=1.,n=0.; for(int i=0;i<o;++i){su+=a*grad(x*fr,y*fr,s);n+=a;a*=gn;fr*=l;} return n>0.?su/n:0.; }
 float ridged(float x,float y,uint s,int o,float l,float gn){ float su=0.,a=1.,fr=1.,n=0.; for(int i=0;i<o;++i){float gv=grad(x*fr,y*fr,s);float r=1.-(u_ridgeSoft>0.?sqrt(gv*gv+u_ridgeSoft*u_ridgeSoft)-u_ridgeSoft:abs(gv));r*=r;su+=a*r;n+=a;a*=gn;fr*=l;} return n>0.?su/n:0.; }
 float ss(float e0,float e1,float x){ float t=clamp((x-e0)/(e1-e0),0.,1.); return t*t*(3.-2.*t); }
-float terrainHeight(float wx,float wy){
+float rawHeight(float wx,float wy){
   uint sM=u_seed^0x68bc21ebu,sW=u_seed^0xb5297a4du,sH=u_seed,sN=u_seed^0x9e3779b9u;
   float mF=1.0/u_macroM,bF=1.0/u_featureM;
-  float ma=ss(0.40,0.68,fbm(wx*mF,wy*mF,sM,3,2.0,0.5)*0.5+0.5);
+  float ma=ss(0.40,0.68,clamp(fbm(wx*mF,wy*mF,sM,3,2.0,0.5)*0.5+0.5+u_mountainBias,0.,1.));
   float nx=wx*bF,ny=wy*bF;
   float wxw=nx+0.9*fbm(nx*0.5,ny*0.5,sW,3,2.0,0.5);
   float wyw=ny+0.9*fbm(nx*0.5+5.2,ny*0.5+1.3,sW,3,2.0,0.5);
   float ru=fbm(wxw,wyw,sH,u_octaves,u_lacunarity,u_gain)*0.5+0.5;
   float mu=pow(clamp(ridged(wxw,wyw,sN,min(u_octaves,4),u_lacunarity,0.55),0.,1.),0.7);
   return clamp(0.10*ru+ma*(u_mountainMix*mu+0.35*ru),0.,1.)*u_heightM;
+}
+// Mirrors TerrainField::reliefHeight / withRelief / baseHeight: hummocks and the
+// flattened spawn pad, which the mesh has and a bare rawHeight does not.
+float reliefHeight(float wx,float wy){
+  if(u_reliefM<=0.) return 0.;
+  float n=fbm(wx/30.,wy/30.,u_seed^0x7f4a7c15u,2,2.0,0.5);
+  return u_reliefM*clamp(0.5+0.6*n,0.,1.);
+}
+float withRelief(float h,float r){ return min(h+r,max(h,u_heightM)); }
+float terrainHeight(float wx,float wy){
+  float h=rawHeight(wx,wy);
+  if(u_flatR<=0.) return withRelief(h,reliefHeight(wx,wy));
+  float t=ss(u_flatR,2.5*u_flatR,length(vec2(wx,wy)));
+  return withRelief(u_padH+(h-u_padH)*t,t*reliefHeight(wx,wy));
 }
 void main(){
   ivec2 id=ivec2(gl_GlobalInvocationID.xy);
@@ -423,6 +438,10 @@ bool GpuGrass::init(QOpenGLExtraFunctions *gl) {
 
 void GpuGrass::setParams(const Params &p) {
   params_ = p;
+  // Spawn-pad level the fill shader flattens toward: the mesh's own height at
+  // the origin (ponds keep clear of it, so no basin is in it).
+  const procgen::FieldParams f = maskField();
+  padH_ = procgen::TerrainField(f).height(0.0f, 0.0f);
   ++maskGen_; // field / palette may have changed: rebuild the cover tiles
 }
 
@@ -805,6 +824,10 @@ void GpuGrass::render(QOpenGLExtraFunctions *gl, const QMatrix4x4 &proj,
     fill_->setUniformValue("u_octaves", params_.octaves);
     fill_->setUniformValue("u_lacunarity", params_.lacunarity);
     fill_->setUniformValue("u_ridgeSoft", params_.ridgeSoft);
+    fill_->setUniformValue("u_mountainBias", params_.field.mountainBias);
+    fill_->setUniformValue("u_flatR", params_.field.flatRadiusM);
+    fill_->setUniformValue("u_padH", padH_);
+    fill_->setUniformValue("u_reliefM", params_.field.shape == 1 ? 0.0f : params_.field.reliefM);
     fill_->setUniformValue("u_gain", params_.gain);
     fill_->setUniformValue("u_mountainMix", params_.mountainMix);
     fill_->setUniformValue("u_texSize", texSize_);

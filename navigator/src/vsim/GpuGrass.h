@@ -150,6 +150,7 @@ private:
   bool ready_ = false;
   MaskTile mask_[kRings];
   unsigned int maskGen_ = 1; // bumped by setParams: tiles older than it rebuild
+  float padH_ = 0.0f;        // mesh height at the origin (fill shader pad level)
   Params params_;
   // Heap-held so release() can drop them and init() build fresh ones in a new
   // context (a linked program cannot take shaders again, nor change context).

@@ -567,7 +567,7 @@ if(NAVIGATOR_SIM_GRASS)
       ${SRC}/vsim/GpuGrass.cpp
       ${SRC}/vsim/procgen/Noise.cpp
       ${SRC}/vsim/procgen/TerrainField.cpp ${SRC}/vsim/procgen/WaterField.cpp
-      ${SRC}/vsim/procgen/GroundCover.cpp)
+      ${SRC}/vsim/procgen/GroundCover.cpp ${SRC}/vsim/procgen/WorldPresets.cpp)
   target_include_directories(tst_gpu_grass PRIVATE ${SRC}/vsim)
   target_link_libraries(tst_gpu_grass PRIVATE Qt6::OpenGL)
 endif()
