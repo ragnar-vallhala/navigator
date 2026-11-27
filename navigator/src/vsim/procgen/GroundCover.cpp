@@ -24,8 +24,19 @@
 namespace vsim::procgen {
 namespace {
 
-// Width [m] of the colour ramp between two neighbouring field parcels.
-constexpr float kParcelBlendM = 10.0f;
+// Width [m] of the colour ramp on each side of a border between two
+// neighbouring field parcels.
+constexpr float kParcelBlendM = 13.0f;
+// How far [m] the fine breakup noise pushes a parcel border to either side. The
+// warp alone bends a border only at 47 m and up, so close up it was one smooth
+// curve; this rags it at the noise's 3.5 to 7 m scales, like soil showing
+// through grass. Where the noise pushes hardest it squeezes the ramp on one
+// side, so the two go together: 4 m on a 13 m ramp keeps the steepest stretch
+// several vertices wide (~1.9 m apart) and still visibly ragged.
+// kParcelBlendM + kParcelRagM (the noise stays within +-1) is under half the
+// smallest parcel side (34 m), so a point never blends towards the far border
+// of its parcel. The yard's paving zones keep a clean edge.
+constexpr float kParcelRagM = 4.0f;
 
 inline float clamp01(float v) {
   return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
@@ -55,6 +66,11 @@ inline uint32_t hash2(int x, int y, uint32_t salt) {
 inline float u01(uint32_t h) { return (h & 0xffffffu) / 16777216.0f; }
 
 constexpr int kMaxCrops = 6;
+
+// Fine breakup noise used to rag the edges of patches and parcel borders.
+inline float ragAt(const Noise &fine, float wx, float wy) {
+  return fine.fbm(wx / 7.0f, wy / 7.0f, 2, 2.0f, 0.5f);
+}
 
 // One row per palette id. Amounts are rough coverage fractions (0 = none).
 struct CoverStyle {
@@ -200,7 +216,7 @@ ParcelCoords parcelCoords(const CoverStyle &s, float rot, const Noise &patch,
 
 // Colour of the field parcel under a point, before it is mixed over the base.
 PgVec3 parcelColourAt(const CoverStyle &s, const ParcelCoords &pc, const Noise &fine,
-                    float wx, float wy) {
+                      float wx, float wy, float rag) {
   // One parcel's colour: its crop, with a per-parcel brightness so neighbours of
   // one crop still differ.
   const auto parcel = [&](int pu, int pv) {
@@ -210,12 +226,24 @@ PgVec3 parcelColourAt(const CoverStyle &s, const ParcelCoords &pc, const Noise &
   // Blend into the neighbouring parcel across the nearer border: half and half
   // on the border line, own colour alone kParcelBlendM away from it. Vertices are
   // ~2 m apart, so the ramp has to be several metres wide to be resolved.
-  const float du = std::min(pc.fu, 1.0f - pc.fu) * s.fieldW;
-  const float dv = std::min(pc.fv, 1.0f - pc.fv) * s.fieldH;
+  // The border line itself is pushed by the rag noise. The push is along +u
+  // (+v) in world terms, so it lengthens the distance on one side of a border
+  // and shortens it on the other: both parcels see the same moved line and the
+  // blend stays continuous. Past the moved line the distance turns negative and
+  // the neighbour takes over more than half.
+  const float push = kParcelRagM * rag;
+  const float du = std::min(pc.fu, 1.0f - pc.fu) * s.fieldW + (pc.fu < 0.5f ? -push : push);
+  const float dv = std::min(pc.fv, 1.0f - pc.fv) * s.fieldH + (pc.fv < 0.5f ? -push : push);
   const int nu = pc.fu < 0.5f ? pc.iu - 1 : pc.iu + 1;
   const int nv = pc.fv < 0.5f ? pc.iv - 1 : pc.iv + 1;
-  const float wu = 0.5f * (1.0f - smoothstep(0.0f, kParcelBlendM, du));
-  const float wv = 0.5f * (1.0f - smoothstep(0.0f, kParcelBlendM, dv));
+  // Neighbour weight from the signed distance: 0.5 on the line, 0 kParcelBlendM
+  // inside, 1 kParcelBlendM beyond it.
+  const auto other = [](float d) {
+    const float k = smoothstep(0.0f, kParcelBlendM, std::fabs(d));
+    return 0.5f * (1.0f - (d < 0.0f ? -k : k));
+  };
+  const float wu = other(du);
+  const float wv = other(dv);
   const PgVec3 a = mix(parcel(pc.iu, pc.iv), parcel(nu, pc.iv), wu);
   const PgVec3 b = mix(parcel(pc.iu, nv), parcel(nu, nv), wu);
   PgVec3 crop = mix(a, b, wv);
@@ -243,7 +271,8 @@ PgVec3 GroundCover::parcelColour(float wx, float wy) const {
   const CoverStyle &s = styleFor(pal_);
   if (s.fieldsAmt <= 0.0f || s.nCrops <= 0)
     return {0.0f, 0.0f, 0.0f};
-  return parcelColourAt(s, parcelCoords(s, rot_, patch_, wx, wy), fine_, wx, wy);
+  return parcelColourAt(s, parcelCoords(s, rot_, patch_, wx, wy), fine_, wx, wy,
+                        pal_ == kPalYard ? 0.0f : ragAt(fine_, wx, wy));
 }
 
 GroundCover::Sample GroundCover::sample(float wx, float wy, const PgVec3 &base,
@@ -275,7 +304,7 @@ GroundCover::Sample GroundCover::sampleImpl(float wx, float wy, const PgVec3 &ba
   col = scale(col, 0.93f + 0.14f * (0.5f + 0.5f * tint_.gradient(wx / 31.0f + 7.1f, wy / 31.0f)));
 
   // Fine breakup used to rag the edges of every patch.
-  const float rag = fine_.fbm(wx / 7.0f, wy / 7.0f, 2, 2.0f, 0.5f);
+  const float rag = ragAt(fine_, wx, wy);
 
   // Parcels of fields / paving zones on a rotated grid with wobbly edges.
   float edgeTrack = 0.0f;
@@ -284,7 +313,8 @@ GroundCover::Sample GroundCover::sampleImpl(float wx, float wy, const PgVec3 &ba
     const ParcelCoords pc = parcelCoords(s, rot_, patch_, wx, wy);
     const int iu = pc.iu, iv = pc.iv;
     const float fu = pc.fu, fv = pc.fv;
-    col = mix(col, parcelColourAt(s, pc, fine_, wx, wy), s.fieldsAmt * alt);
+    col = mix(col, parcelColourAt(s, pc, fine_, wx, wy, pal_ == kPalYard ? 0.0f : rag),
+              s.fieldsAmt * alt);
     // A track runs along some parcel borders (the left/bottom border of a parcel).
     const float du = std::min(fu, 1.0f - fu) * s.fieldW;
     const float dv = std::min(fv, 1.0f - fv) * s.fieldH;

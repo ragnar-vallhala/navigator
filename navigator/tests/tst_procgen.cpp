@@ -77,6 +77,7 @@ private slots:
   void fieldIsDeterministicAndBounded();
   void slopeCapIsTheSameInEveryDirection();
   void parcelBordersAreBlendedNotHardSteps();
+  void parcelBordersAreRaggedButResolved();
   void groundCoverDeterministicAndBounded();
   void groundCoverGivesVarietyInEveryPalette();
   void groundCoverPondsAndTracksExist();
@@ -297,6 +298,79 @@ void TstProcgen::parcelBordersAreBlendedNotHardSteps() {
       }
       QVERIFY2(mx <= kMaxStep, qPrintable(QStringLiteral("palette %1 seed %2: step %3 between two vertices").arg(palette).arg(seed).arg(double(mx))));
       QVERIFY2(sum / double(n) > 0.003, "the parcels must actually differ in colour");
+    }
+}
+
+void TstProcgen::parcelBordersAreRaggedButResolved() {
+  // Close up a parcel border used to be one smooth curve (the warp bends it only
+  // at 47 m and up), so a brown field read as a cut-out shape against the grass.
+  // The fine breakup noise now rags the border at a few metres. Over a grid at
+  // the chunk mesh's vertex spacing:
+  //  - no step between two neighbouring vertices exceeds kMaxStep. The ragging
+  //    squeezes the ramp in places; 0.15 is the strongest crop contrast (~0.5)
+  //    spread over ~6 m, the narrowest ramp the ~1.9 m vertex spacing resolves
+  //    without aliasing (a hard border steps ~0.5 in one vertex);
+  //  - the colour is not flat (mean step);
+  //  - the borders are ragged: on the ramps, the direction of the colour
+  //    gradient changes over two vertices (~4 m). A smooth border keeps it
+  //    (mean 1 - cos about 0.05); the ragged one is about 0.14.
+  constexpr float kMaxStep = 0.15f;
+  constexpr double kMinTurn = 0.09;
+  const float h = kStreamChunkM / float(kStreamChunkRes);
+  constexpr int kN = 400; // ~770 m square
+  for (int palette : {7, 8})
+    for (uint32_t seed : {3u, 11u, 99u}) {
+      GroundCover gc(seed, palette);
+      std::vector<PgVec3> c(static_cast<size_t>(kN) * kN);
+      for (int j = 0; j < kN; ++j)
+        for (int i = 0; i < kN; ++i)
+          c[size_t(j) * kN + i] = gc.parcelColour(-400.0f + h * float(i), 250.0f + h * float(j));
+      const auto at = [&](int i, int j) -> const PgVec3 & { return c[size_t(j) * kN + i]; };
+      const auto step = [](const PgVec3 &a, const PgVec3 &b) {
+        return std::max({std::fabs(a.x - b.x), std::fabs(a.y - b.y), std::fabs(a.z - b.z)});
+      };
+      float mx = 0.0f;
+      double sum = 0.0;
+      long n = 0;
+      for (int j = 0; j < kN; ++j)
+        for (int i = 0; i < kN; ++i) {
+          for (const float d : {i > 0 ? step(at(i, j), at(i - 1, j)) : -1.0f,
+                                j > 0 ? step(at(i, j), at(i, j - 1)) : -1.0f})
+            if (d >= 0.0f) {
+              mx = std::max(mx, d);
+              sum += double(d);
+              ++n;
+            }
+        }
+      // Gradient of the green channel (the one brown and green fields differ
+      // in most), central differences, per metre.
+      const auto grad = [&](int i, int j) {
+        return std::pair<float, float>{(at(i + 1, j).y - at(i - 1, j).y) / (2.0f * h),
+                                       (at(i, j + 1).y - at(i, j - 1).y) / (2.0f * h)};
+      };
+      constexpr float kRamp = 0.003f; // per metre: on a border ramp
+      double turn = 0.0;
+      long m = 0;
+      for (int j = 1; j < kN - 3; ++j)
+        for (int i = 1; i < kN - 3; ++i) {
+          const auto [ax, ay] = grad(i, j);
+          const float a = std::hypot(ax, ay);
+          if (a < kRamp)
+            continue;
+          for (const auto &[bx, by] : {grad(i + 2, j), grad(i, j + 2)}) {
+            const float b = std::hypot(bx, by);
+            if (b < kRamp)
+              continue;
+            turn += 1.0 - double((ax * bx + ay * by) / (a * b));
+            ++m;
+          }
+        }
+      const QString where = QStringLiteral("palette %1 seed %2").arg(palette).arg(seed);
+      QVERIFY2(mx <= kMaxStep, qPrintable(where + QStringLiteral(": step %1 between two vertices").arg(double(mx))));
+      QVERIFY2(sum / double(n) > 0.003, qPrintable(where + ": the parcels must actually differ in colour"));
+      QVERIFY2(m > 1000, qPrintable(where + ": too few border ramps in the window"));
+      QVERIFY2(turn / double(m) > kMinTurn,
+               qPrintable(where + QStringLiteral(": borders are smooth curves (gradient turn %1)").arg(turn / double(m))));
     }
 }
 
