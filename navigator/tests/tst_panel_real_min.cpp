@@ -249,6 +249,24 @@ private slots:
     // what each float had when the app quit.
     const QRect imuAsk(40, 60, 300, 220), logsAsk(380, 150, 320, 240);
     QRect imuAt, logsAt;
+    // A float's geometry has settled once two reads 100 ms apart agree.
+    const auto settled = [](ws::DockBackend *b, const char *id) {
+      QRect prev = b->panelState(id).floatGeometry;
+      for (int i = 0; i < 100; ++i) {
+        QTest::qWait(100);
+        const QRect now = b->panelState(id).floatGeometry;
+        if (now == prev)
+          return now;
+        prev = now;
+      }
+      return prev;
+    };
+    const auto anyPanelVisible = [](DockShell *sh) {
+      for (const DockShell::PanelInfo &p : DockShell::panelInfos())
+        if (sh->hasPanel(p.id) && sh->workspaces()->backend()->panelState(p.id).visible)
+          return true;
+      return false;
+    };
     const auto shellOf = [](MainWindow &w) { return w.findChild<DockShell *>(); };
     const auto floatsShown = [] {
       int n = 0;
@@ -263,36 +281,41 @@ private slots:
       w.resize(1200, 800);
       w.show();
       QVERIFY(QTest::qWaitForWindowExposed(&w));
-      QTest::qWait(600); // the queued startup restore
       DockShell *sh = shellOf(w);
       QVERIFY(sh);
       auto *b = sh->workspaces()->backend();
+      // The queued startup restore has run once a layout shows some panel.
+      QTRY_VERIFY_WITH_TIMEOUT(anyPanelVisible(sh), 10000);
       b->floatPanel("imu");
       b->floatPanel("logs");
       b->floatPanel("rc");
-      QTest::qWait(400);
+      QTRY_VERIFY_WITH_TIMEOUT(b->panelState("imu").floating && b->panelState("logs").floating, 10000);
       for (QWidget *tw : QApplication::topLevelWidgets())
         if (QByteArray(tw->metaObject()->className()).contains("Floating"))
           tw->show();
       b->setFloatGeometry("imu", imuAsk);
       b->setFloatGeometry("logs", logsAsk);
       b->hidePanel("rc"); // floated, then closed: stays closed
-      QTest::qWait(400);
+      QTRY_VERIFY_WITH_TIMEOUT(!b->panelState("rc").visible, 10000);
       QVERIFY(b->panelState("imu").floating);
       QVERIFY(b->panelState("logs").floating);
-      imuAt = b->panelState("imu").floatGeometry;
-      logsAt = b->panelState("logs").floatGeometry;
+      imuAt = settled(b, "imu");
+      logsAt = settled(b, "logs");
       w.close(); // MainWindow::closeEvent: save, then close the floats
+      // Nothing to poll: closing is not an edit, so no autosave may fire; give one the time to.
       QTest::qWait(900);
     }
     MainWindow w2;
     w2.resize(1200, 800);
     w2.show();
     QVERIFY(QTest::qWaitForWindowExposed(&w2));
-    QTest::qWait(1200);
     DockShell *sh2 = shellOf(w2);
     QVERIFY(sh2);
     auto *b2 = sh2->workspaces()->backend();
+    QTRY_VERIFY_WITH_TIMEOUT(b2->panelState("imu").floating && b2->panelState("imu").visible, 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(b2->panelState("logs").floating && b2->panelState("logs").visible, 10000);
+    settled(b2, "imu");
+    settled(b2, "logs");
     const auto near = [](const QRect &a, const QRect &e) {
       return qAbs(a.x() - e.x()) <= 4 && qAbs(a.y() - e.y()) <= 4 &&
              qAbs(a.width() - e.width()) <= 4 && qAbs(a.height() - e.height()) <= 4;
