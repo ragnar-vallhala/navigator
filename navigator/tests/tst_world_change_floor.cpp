@@ -496,7 +496,7 @@ private slots:
   }
   // The third-person camera's EYE (not the vehicle: streamCenter() is the
   // vehicle for the orbit camera) must stay above the new ground however the
-  // user has zoomed and tilted it, all round the vehicle. todo #247.
+  // user has zoomed and tilted it, all round the vehicle.
   void orbitEyeStaysAboveTheGround_data() {
     QTest::addColumn<int>("idx");
     const QVector<Change> cs = changes();

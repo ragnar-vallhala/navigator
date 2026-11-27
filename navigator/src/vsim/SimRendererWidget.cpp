@@ -38,6 +38,7 @@
 #include <atomic>
 #include <climits>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 namespace vsim {
@@ -1276,10 +1277,18 @@ QVector3D SimRendererWidget::orbitEye() const {
   QVector3D eye = snap_.pos_w + orbitOffset();
   if (!groundAt_ || !worldVisible_)
     return eye;
-  float h = groundAt_(eye.x(), eye.y());
+  // Highest finite sample; a NaN (no ground there) must not hide the others,
+  // and std::max(NaN, x) would return the NaN.
+  float h = -std::numeric_limits<float>::infinity();
+  const auto take = [&](float x, float y) {
+    const float v = groundAt_(x, y);
+    if (std::isfinite(v))
+      h = std::max(h, v);
+  };
+  take(eye.x(), eye.y());
   for (const float d : {kEyeGroundProbeM, -kEyeGroundProbeM}) {
-    h = std::max(h, groundAt_(eye.x() + d, eye.y()));
-    h = std::max(h, groundAt_(eye.x(), eye.y() + d));
+    take(eye.x() + d, eye.y());
+    take(eye.x(), eye.y() + d);
   }
   if (!std::isfinite(h))
     return eye;
