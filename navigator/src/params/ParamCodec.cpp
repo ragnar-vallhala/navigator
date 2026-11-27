@@ -17,6 +17,7 @@
 #include "ParamCodec.h"
 
 #include "TxSeq.h"
+#include "../protocol/NavlinkText.h"
 
 #include <cmath>
 #include <cstring>
@@ -31,10 +32,19 @@ namespace {
 QByteArray frame(const uint8_t *buf, size_t n) {
   return QByteArray(reinterpret_cast<const char *>(buf), static_cast<int>(n));
 }
-void putId(char dst[16], const QString &id) {
-  std::memset(dst, 0, 16);
+// Writes the id into the 16-byte field, NUL-padded. False (nothing usable
+// written) if it does not fit or is not Latin-1: truncating it would address a
+// different parameter, so the caller sends nothing instead.
+bool putId(char (&dst)[16], const QString &id) {
+  std::memset(dst, 0, sizeof dst);
   const QByteArray b = id.toLatin1();
-  std::memcpy(dst, b.constData(), size_t(qMin(b.size(), 16)));
+  if (id.isEmpty() || size_t(b.size()) > sizeof dst ||
+      QString::fromLatin1(b) != id) {
+    std::memset(dst, 0, sizeof dst);
+    return false;
+  }
+  std::memcpy(dst, b.constData(), size_t(b.size()));
+  return true;
 }
 } // namespace
 
@@ -99,7 +109,7 @@ bool valueOf(const ValueMsg &m, double &out) {
 
 ValueMsg fromWire(const navlink_param_value_t &w) {
   ValueMsg m;
-  m.id = QString::fromLatin1(w.param_id, int(qstrnlen(w.param_id, 16)));
+  m.id = navtext::fieldLatin1(w.param_id);
   m.index = w.index;
   m.count = w.count;
   m.generation = w.generation;
@@ -121,7 +131,8 @@ QByteArray encodeRequestReadById(const QString &id, quint8 devId) {
   navlink_param_request_read_t m{};
   m.target_sys = devId;
   m.target_comp = 1;
-  putId(m.param_id, id);
+  if (!putId(m.param_id, id))
+    return {}; // an id that does not fit 16 bytes is never sent cut short
   m.index = -1;
   uint8_t buf[NAVLINK_MAX_FRAME];
   return frame(buf, navlink_param_request_read_encode(buf, &m, TxSeq::next(), 0xFF, 1));
@@ -141,7 +152,8 @@ QByteArray encodeSet(const QString &id, Type t, double v, quint8 reqSeq,
   navlink_param_set_t m{};
   m.target_sys = devId;
   m.target_comp = 1;
-  putId(m.param_id, id);
+  if (!putId(m.param_id, id))
+    return {}; // an id that does not fit 16 bytes is never sent cut short
   m.type = quint8(t);
   if (!toWire(t, v, m.value) || reqSeq == 0)
     return {}; // never put a value on the wire that the type cannot hold
