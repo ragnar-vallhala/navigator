@@ -95,6 +95,10 @@ uniform float u_heightM, u_featureM, u_macroM, u_lacunarity, u_gain, u_mountainM
 uniform float u_mountainBias, u_flatR, u_padH, u_reliefM;
 uniform int u_octaves, u_texSize;
 uniform vec2 u_regionMin; uniform float u_regionSize;
+// Slope-capped mesh surface (see kErode): the eroded node grid, sampled with the
+// mesh's own two-triangle interpolation. u_capOn=0 -> the bare field.
+layout(r32f, binding=1) readonly uniform image2D nodeImg;
+uniform int u_capOn; uniform ivec2 u_nodeOrigin; uniform float u_nodeStep;
 uint hash32(uint x){ x^=x>>16; x*=0x7feb352du; x^=x>>15; x*=0x846ca68bu; x^=x>>16; return x; }
 uint hash2(int ix,int iy,uint seed){ uint h=uint(ix)*0x9e3779b1u; h^=uint(iy)*0x85ebca77u; h^=seed*0xc2b2ae3du; return hash32(h); }
 void cg(int ix,int iy,uint seed,out float gx,out float gy){ uint h=hash2(ix,iy,seed); float a=(float(h)/4294967296.0)*6.2831853; gx=cos(a); gy=sin(a); }
@@ -135,7 +139,49 @@ void main(){
   ivec2 id=ivec2(gl_GlobalInvocationID.xy);
   if(id.x>=u_texSize||id.y>=u_texSize) return;
   vec2 wp=u_regionMin+((vec2(id)+0.5)/float(u_texSize))*u_regionSize;
+  float h;
+  if(u_capOn!=0){
+    vec2 q=wp/u_nodeStep; ivec2 c=ivec2(floor(q)); vec2 f=q-vec2(c); ivec2 l=c-u_nodeOrigin;
+    float h00=imageLoad(nodeImg,l).r, h10=imageLoad(nodeImg,l+ivec2(1,0)).r;
+    float h01=imageLoad(nodeImg,l+ivec2(0,1)).r, h11=imageLoad(nodeImg,l+ivec2(1,1)).r;
+    h=(f.x>=f.y)?h00+(h10-h00)*f.x+(h11-h10)*f.y:h00+(h11-h01)*f.x+(h01-h00)*f.y;
+  } else h=terrainHeight(wp.x,wp.y);
+  imageStore(heightImg, id, vec4(h));
+}
+)GLSL";
+
+// Raw field height at the mesh's node lattice (global multiples of u_nodeStep,
+// the same nodes meshFieldChunk samples), into heightImg. Built from kFill's
+// terrain functions at init (see nodesSource()).
+const char *kNodesMain = R"GLSL(
+uniform int u_nodeN; // (u_nodeOrigin / u_nodeStep come from kFill)
+void main(){
+  ivec2 id=ivec2(gl_GlobalInvocationID.xy);
+  if(id.x>=u_nodeN||id.y>=u_nodeN) return;
+  vec2 wp=vec2(u_nodeOrigin+id)*u_nodeStep;
   imageStore(heightImg, id, vec4(terrainHeight(wp.x,wp.y)));
+}
+)GLSL";
+
+// One pass of procgen::erodeSlopeCap on the node grid: a node drops to at most
+// maxStep above its lowest axis neighbour (sqrt(2) maxStep above its lowest
+// diagonal one). Border nodes pass through, as on the CPU.
+const char *kErode = R"GLSL(
+#version 430 core
+layout(local_size_x=16, local_size_y=16) in;
+layout(r32f, binding=0) readonly uniform image2D src;
+layout(r32f, binding=1) writeonly uniform image2D dst;
+uniform int u_nodeN; uniform float u_maxStep;
+void main(){
+  ivec2 id=ivec2(gl_GlobalInvocationID.xy);
+  if(id.x>=u_nodeN||id.y>=u_nodeN) return;
+  float c=imageLoad(src,id).r;
+  if(id.x<1||id.y<1||id.x>=u_nodeN-1||id.y>=u_nodeN-1){ imageStore(dst,id,vec4(c)); return; }
+  float lo=min(min(imageLoad(src,id+ivec2(-1,0)).r,imageLoad(src,id+ivec2(1,0)).r),
+               min(imageLoad(src,id+ivec2(0,-1)).r,imageLoad(src,id+ivec2(0,1)).r));
+  float dg=min(min(imageLoad(src,id+ivec2(-1,-1)).r,imageLoad(src,id+ivec2(1,-1)).r),
+               min(imageLoad(src,id+ivec2(-1,1)).r,imageLoad(src,id+ivec2(1,1)).r));
+  imageStore(dst,id,vec4(min(c,min(lo+u_maxStep,dg+1.41421356*u_maxStep))));
 }
 )GLSL";
 
@@ -366,6 +412,11 @@ QByteArray fragmentSource() {
 // density contrast at each crossover is far smaller, so the dense->sparse
 // handoff no longer reads as a tonal band/seam, while still reaching the horizon.
 static constexpr int kNumRings = GpuGrass::kRings;
+// Slope-cap node grid: erosion iterations (= procgen kErodeIters), the apron
+// that keeps the nodes in use exact (> iterations), and the largest side.
+static constexpr int kErodeIters = 6;
+static constexpr int kNodeApron = 8;
+static constexpr int kNodeCap = 1024;
 static constexpr float kRingMul[kNumRings] = {1.0f, 2.5f, 6.0f, 14.0f};
 // Blade segment count per ring (LOD): near rings get a smooth arch, far rings a
 // coarse 2-quad blade — far blades are tiny on screen so the silhouette holds.
@@ -378,12 +429,22 @@ bool GpuGrass::init(QOpenGLExtraFunctions *gl) {
   fill_ = std::make_unique<QOpenGLShaderProgram>();
   comp_ = std::make_unique<QOpenGLShaderProgram>();
   draw_ = std::make_unique<QOpenGLShaderProgram>();
-  if (!fill_->addShaderFromSourceCode(QOpenGLShader::Compute, kFill) ||
+  // The node pass shares kFill's terrain functions (everything before main()).
+  const QByteArray fillSrc(kFill);
+  const QByteArray nodesSrc =
+      fillSrc.left(fillSrc.indexOf("void main(){")) + QByteArray(kNodesMain);
+  nodes_ = std::make_unique<QOpenGLShaderProgram>();
+  erode_ = std::make_unique<QOpenGLShaderProgram>();
+  if (!fill_->addShaderFromSourceCode(QOpenGLShader::Compute, fillSrc) ||
       !fill_->link() ||
+      !nodes_->addShaderFromSourceCode(QOpenGLShader::Compute, nodesSrc) ||
+      !nodes_->link() ||
+      !erode_->addShaderFromSourceCode(QOpenGLShader::Compute, kErode) ||
+      !erode_->link() ||
       !comp_->addShaderFromSourceCode(QOpenGLShader::Compute, kCompute) ||
       !comp_->link()) {
     qInfo("[GpuGrass] compute unavailable -> CPU flora fallback. log:\n%s%s",
-          fill_->log().toLocal8Bit().constData(),
+          (fill_->log() + nodes_->log() + erode_->log()).toLocal8Bit().constData(),
           comp_->log().toLocal8Bit().constData());
     release(gl);
     return false; // compute unsupported -> caller falls back to CPU flora
@@ -430,6 +491,14 @@ bool GpuGrass::init(QOpenGLExtraFunctions *gl) {
   gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
   gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
   gl->glTexStorage2D(GL_TEXTURE_2D, 1, GL_R32F, texSize_, texSize_);
+  // Node grids for the slope cap (ping-pong; the result of 6 passes is in [0]).
+  gl->glGenTextures(2, nodeTex_);
+  for (unsigned int t : nodeTex_) {
+    gl->glBindTexture(GL_TEXTURE_2D, t);
+    gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    gl->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    gl->glTexStorage2D(GL_TEXTURE_2D, 1, GL_R32F, kNodeCap, kNodeCap);
+  }
   gl->glBindTexture(GL_TEXTURE_2D, 0);
 
   ready_ = true;
@@ -598,6 +667,8 @@ std::vector<GpuGrass::Blade> GpuGrass::readBlades(QOpenGLExtraFunctions *gl,
 void GpuGrass::release(QOpenGLExtraFunctions *gl) {
   ready_ = false;
   fill_.reset();
+  nodes_.reset();
+  erode_.reset();
   comp_.reset();
   draw_.reset();
   csmLocs_ = CascadeUniforms();
@@ -616,6 +687,9 @@ void GpuGrass::release(QOpenGLExtraFunctions *gl) {
   if (heightTex_)
     gl->glDeleteTextures(1, &heightTex_);
   heightTex_ = 0;
+  if (nodeTex_[0])
+    gl->glDeleteTextures(2, nodeTex_);
+  nodeTex_[0] = nodeTex_[1] = 0;
   for (MaskTile &m : mask_) {
     if (m.pending.valid())
       m.pending.wait(); // the worker only touches its own copy
@@ -815,26 +889,75 @@ void GpuGrass::render(QOpenGLExtraFunctions *gl, const QMatrix4x4 &proj,
       continue;
     const MaskTile &mk = mask_[i];
 
+    // The terrain-field uniforms both the node pass and the fill pass read.
+    auto setTerrain = [&](QOpenGLShaderProgram *pr) {
+      gl->glUniform1ui(pr->uniformLocation("u_seed"), params_.seed);
+      pr->setUniformValue("u_heightM", params_.heightM);
+      pr->setUniformValue("u_featureM", params_.featureM);
+      pr->setUniformValue("u_macroM", params_.macroM);
+      pr->setUniformValue("u_octaves", params_.octaves);
+      pr->setUniformValue("u_lacunarity", params_.lacunarity);
+      pr->setUniformValue("u_ridgeSoft", params_.ridgeSoft);
+      pr->setUniformValue("u_mountainBias", params_.field.mountainBias);
+      pr->setUniformValue("u_flatR", params_.field.flatRadiusM);
+      pr->setUniformValue("u_padH", padH_);
+      pr->setUniformValue("u_reliefM", params_.field.shape == 1 ? 0.0f : params_.field.reliefM);
+      pr->setUniformValue("u_gain", params_.gain);
+      pr->setUniformValue("u_mountainMix", params_.mountainMix);
+    };
+
+    // --- pass 0: the slope-capped mesh surface on its own node lattice ---
+    // The mesh is the field with procgen::erodeSlopeCap applied on a lattice of
+    // meshStepM; erosion reaches 6 nodes, so the nodes cover the region plus an
+    // 8-node apron and the cap is exact where the blades are. Skipped (bare
+    // field) when the world has no cap or the lattice would not fit.
+    const float ms = params_.field.maxSlope;
+    const float step = params_.meshStepM;
+    int nodeN = 0;
+    int nodeOx = 0, nodeOy = 0;
+    if (step > 0.0f && ms > 0.0f && ms < 8.0f) {
+      nodeOx = int(std::floor(regionMin.x() / step)) - kNodeApron;
+      nodeOy = int(std::floor(regionMin.y() / step)) - kNodeApron;
+      nodeN = int(std::ceil(regionSize / step)) + 3 + 2 * kNodeApron;
+      if (nodeN > kNodeCap)
+        nodeN = 0;
+    }
+    if (nodeN > 0) {
+      const int ng = (nodeN + 15) / 16;
+      nodes_->bind();
+      setTerrain(nodes_.get());
+      // (Qt's QPoint overload sets a vec2, not the ivec2 the shader has.)
+      gl->glUniform2i(nodes_->uniformLocation("u_nodeOrigin"), nodeOx, nodeOy);
+      nodes_->setUniformValue("u_nodeStep", step);
+      nodes_->setUniformValue("u_nodeN", nodeN);
+      gl->glBindImageTexture(0, nodeTex_[0], 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R32F);
+      gl->glDispatchCompute(ng, ng, 1);
+      gl->glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+      nodes_->release();
+      erode_->bind();
+      erode_->setUniformValue("u_nodeN", nodeN);
+      erode_->setUniformValue("u_maxStep", ms * step);
+      for (int k = 0; k < kErodeIters; ++k) {
+        gl->glBindImageTexture(0, nodeTex_[k & 1], 0, GL_FALSE, 0, GL_READ_ONLY, GL_R32F);
+        gl->glBindImageTexture(1, nodeTex_[(k + 1) & 1], 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R32F);
+        gl->glDispatchCompute(ng, ng, 1);
+        gl->glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+      }
+      erode_->release();
+    }
+
     // --- pass 1: fill the height texture (terrain noise once per texel) ---
     fill_->bind();
-    gl->glUniform1ui(fill_->uniformLocation("u_seed"), params_.seed);
-    fill_->setUniformValue("u_heightM", params_.heightM);
-    fill_->setUniformValue("u_featureM", params_.featureM);
-    fill_->setUniformValue("u_macroM", params_.macroM);
-    fill_->setUniformValue("u_octaves", params_.octaves);
-    fill_->setUniformValue("u_lacunarity", params_.lacunarity);
-    fill_->setUniformValue("u_ridgeSoft", params_.ridgeSoft);
-    fill_->setUniformValue("u_mountainBias", params_.field.mountainBias);
-    fill_->setUniformValue("u_flatR", params_.field.flatRadiusM);
-    fill_->setUniformValue("u_padH", padH_);
-    fill_->setUniformValue("u_reliefM", params_.field.shape == 1 ? 0.0f : params_.field.reliefM);
-    fill_->setUniformValue("u_gain", params_.gain);
-    fill_->setUniformValue("u_mountainMix", params_.mountainMix);
+    setTerrain(fill_.get());
     fill_->setUniformValue("u_texSize", texSize_);
     fill_->setUniformValue("u_regionMin", regionMin);
     fill_->setUniformValue("u_regionSize", regionSize);
+    fill_->setUniformValue("u_capOn", nodeN > 0 ? 1 : 0);
+    gl->glUniform2i(fill_->uniformLocation("u_nodeOrigin"), nodeOx, nodeOy);
+    fill_->setUniformValue("u_nodeStep", step);
     gl->glBindImageTexture(0, heightTex_, 0, GL_FALSE, 0, GL_WRITE_ONLY,
                            GL_R32F);
+    gl->glBindImageTexture(1, nodeTex_[0], 0, GL_FALSE, 0, GL_READ_ONLY, GL_R32F);
     const int fg = (texSize_ + 15) / 16;
     gl->glDispatchCompute(fg, fg, 1);
     gl->glMemoryBarrier(GL_ALL_BARRIER_BITS);
