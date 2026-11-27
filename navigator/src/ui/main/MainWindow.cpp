@@ -1289,8 +1289,8 @@ void MainWindow::requestDisarm() {
     return;
   }
 
-  // On the ground (or already off) disarm goes at once. In IN_AIR / FAILSAFE or
-  // an unknown state it cuts the motors of a possibly flying aircraft, so it
+  // On the ground (or already off) disarm goes at once. In ARMED (still
+  // climbing or hovering low), IN_AIR / FAILSAFE or an unknown state it cuts the motors of a possibly flying aircraft, so it
   // needs an explicit Yes; Cancel is the default and Enter does not confirm.
   if (armgate::disarmPolicy(m_lastPushedState) == armgate::DisarmPolicy::Confirm) {
     QMessageBox box(QMessageBox::Warning, tr("Confirm DISARM"),

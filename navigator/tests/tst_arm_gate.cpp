@@ -7,13 +7,13 @@ using namespace armgate;
 class TstArmGate : public QObject {
   Q_OBJECT
 private slots:
-  void disarmNeedsConfirmWhenFlyingOrUnknown() {
-    for (const char *s : {"IN_AIR", "FAILSAFE", "", "NOPE", "in_air"})
+  void disarmNeedsConfirmWhenArmedFlyingOrUnknown() {
+    for (const char *s : {"ARMED", "IN_AIR", "FAILSAFE", "", "NOPE", "in_air"})
       QCOMPARE(int(disarmPolicy(QString::fromLatin1(s))), int(DisarmPolicy::Confirm));
   }
   void disarmSendsAtOnceOnTheGround() {
-    for (const char *s : {"UNINITIALIZED", "INIT", "STANDBY", "PREARM", "ARMED",
-                          "TERMINATED", "CALIBRATING"})
+    for (const char *s : {"UNINITIALIZED", "INIT", "STANDBY", "PREARM", "TERMINATED",
+                          "CALIBRATING"})
       QCOMPARE(int(disarmPolicy(QString::fromLatin1(s))), int(DisarmPolicy::Send));
   }
   void calibrationStartOnlyWhenIdle() {

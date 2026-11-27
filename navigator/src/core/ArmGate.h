@@ -27,17 +27,17 @@ namespace armgate {
 
 // How a DISARM request must be handled.
 enum class DisarmPolicy {
-  Send,    // motors are on the ground or already off: send at once
+  Send,    // on the ground with motors off or idle: send at once
   Confirm, // the vehicle may be flying: ask first, default Cancel
 };
 
-// Disarm cuts the motors. In IN_AIR or FAILSAFE (which can be airborne), or
-// when the state is unknown, that drops the aircraft, so it needs an explicit
+// Disarm cuts the motors. In ARMED (the firmware stays there for the first
+// second of a climb or a slow low hover), IN_AIR or FAILSAFE, or when the state
+// is unknown, that can drop the aircraft, so it needs an explicit
 // confirmation; a single click or chord must never do it.
 inline DisarmPolicy disarmPolicy(const QString &state) {
   static const char *const kSafe[] = {"UNINITIALIZED", "INIT",       "STANDBY",
-                                      "PREARM",        "ARMED",      "TERMINATED",
-                                      "CALIBRATING"};
+                                      "PREARM",        "TERMINATED", "CALIBRATING"};
   for (const char *s : kSafe)
     if (state == QLatin1String(s))
       return DisarmPolicy::Send;
