@@ -16,6 +16,7 @@
  */
 #pragma once
 
+#include "EngineRouter.h"
 #include <QByteArray>
 #include <QString>
 #include <QStringList>
@@ -70,6 +71,11 @@ public:
   // command once looked applied while the firmware flew the default mix.
   bool send(const QByteArray &frame) const;
 
+  // Where send() runs the injection. SimWorker installs its enqueue while the
+  // engine loop runs, so the frame reaches the UART on the stepping thread
+  // instead of racing run_step() from the GUI thread; empty = run at once.
+  vsim::EngineRouter &router() const { return router_; }
+
   // The paths that were tried, in order, for a "why can't it find it" message.
   static QStringList searchPaths();
 
@@ -88,4 +94,5 @@ private:
   QString error_;
   QString path_;
   QString buildId_;
+  mutable vsim::EngineRouter router_;
 };

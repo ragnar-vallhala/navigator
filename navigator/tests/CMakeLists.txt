@@ -348,6 +348,10 @@ navigator_test(tst_view_history
 navigator_test(tst_arm_gate tst_arm_gate.cpp)
 target_include_directories(tst_arm_gate PRIVATE ${SRC}/core)
 
+# ---- Host -> engine actions run on the stepping thread -----------------------
+navigator_test(tst_engine_router tst_engine_router.cpp)
+target_include_directories(tst_engine_router PRIVATE ${SRC}/vsim)
+
 # ---- Calibration wizard step machine --------------------------------------
 navigator_test(tst_calibration_wizard
     tst_calibration_wizard.cpp
