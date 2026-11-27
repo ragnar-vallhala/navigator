@@ -29,15 +29,16 @@ static quint8 targetOf(const QByteArray &f) { return f.size() > 10 ? quint8(f[10
 class TstGcsTargets : public QObject {
   Q_OBJECT
 private slots:
-  void init() { CommandCodec::setTargetSys(42); }
-  void cleanup() { CommandCodec::setTargetSys(42); }
+  void init() { CommandCodec::resetTarget(); }
+  void cleanup() { CommandCodec::resetTarget(); }
 
   void defaultsTo42UntilAHeartbeat() {
     QCOMPARE(CommandCodec::targetSys(), quint8(42));
     QCOMPARE(targetOf(CommandCodec::encodeArm()), quint8(42));
   }
-  void commandsFollowTheHeartbeatSysid() {
-    CommandCodec::setTargetSys(7);
+  void commandsFollowTheFirstHeartbeat() {
+    using E = CommandCodec::TargetEvent;
+    QCOMPARE(int(CommandCodec::observeHeartbeat(7)), int(E::Latched));
     QCOMPARE(targetOf(CommandCodec::encodeArm()), quint8(7));
     QCOMPARE(targetOf(CommandCodec::encodeDisarm()), quint8(7));
     QCOMPARE(targetOf(CommandCodec::encodeSetFlightMode(2)), quint8(7));
@@ -45,10 +46,33 @@ private slots:
     // An explicit target still wins.
     QCOMPARE(targetOf(CommandCodec::encodeArm(9)), quint8(9));
   }
+  void anotherVehicleNeverRetargets() {
+    using E = CommandCodec::TargetEvent;
+    // Interleaved heartbeats from two crafts: the first one keeps the commands.
+    QCOMPARE(int(CommandCodec::observeHeartbeat(7)), int(E::Latched));
+    for (int k = 0; k < 3; ++k) {
+      QCOMPARE(int(CommandCodec::observeHeartbeat(9)), int(E::Conflict));
+      QCOMPARE(targetOf(CommandCodec::encodeDisarm()), quint8(7));
+      QCOMPARE(int(CommandCodec::observeHeartbeat(7)), int(E::Same));
+      QCOMPARE(targetOf(CommandCodec::encodeDisarm()), quint8(7));
+    }
+    QCOMPARE(CommandCodec::targetSys(), quint8(7));
+  }
+  void resetLetsTheNextHeartbeatLatch() {
+    using E = CommandCodec::TargetEvent;
+    CommandCodec::observeHeartbeat(7);
+    CommandCodec::resetTarget();
+    QCOMPARE(CommandCodec::targetSys(), quint8(42)); // back to the default
+    QCOMPARE(int(CommandCodec::observeHeartbeat(9)), int(E::Latched));
+    QCOMPARE(targetOf(CommandCodec::encodeArm()), quint8(9));
+  }
   void unsetAndBroadcastAreNotAVehicle() {
-    CommandCodec::setTargetSys(7);
-    CommandCodec::setTargetSys(0);
-    CommandCodec::setTargetSys(0xFF);
+    using E = CommandCodec::TargetEvent;
+    QCOMPARE(int(CommandCodec::observeHeartbeat(0)), int(E::Ignored));
+    QCOMPARE(int(CommandCodec::observeHeartbeat(0xFF)), int(E::Ignored));
+    QCOMPARE(CommandCodec::targetSys(), quint8(42)); // nothing latched
+    CommandCodec::observeHeartbeat(7);
+    QCOMPARE(int(CommandCodec::observeHeartbeat(0xFF)), int(E::Ignored));
     QCOMPARE(CommandCodec::targetSys(), quint8(7));
   }
 

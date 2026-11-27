@@ -26,13 +26,25 @@
 // frames carry no header timestamp) and kept only for call-site compatibility.
 namespace CommandCodec {
 
-// The vehicle the commands are addressed to: the sysid of the heartbeats it
-// sends (MainWindow::onHeartbeatReceived), 42 until the first one. Every encoder
-// below defaults its `devId` to this, so a vehicle with another sysid is
-// addressed correctly instead of being sent frames it ignores. Thread-safe.
+// The vehicle the commands are addressed to: 42 until a heartbeat arrives, then
+// the sysid of the FIRST heartbeat after connect (observeHeartbeat), kept until
+// resetTarget(). Every encoder below defaults its `devId` to it, so a vehicle
+// with another sysid is addressed correctly instead of being sent frames it
+// ignores. It never moves to a second sysid while connected: a heartbeat from
+// another craft must not redirect an ARM or DISARM. Thread-safe.
 quint8 targetSys();
-// 0 (unset) and 0xFF (broadcast) are not a vehicle and are ignored.
-void setTargetSys(quint8 sysid);
+
+enum class TargetEvent {
+  Ignored,  // sysid 0 (unset) or 0xFF (broadcast): not a vehicle
+  Latched,  // first vehicle seen since the reset: now the target
+  Same,     // the latched vehicle again
+  Conflict, // another vehicle's heartbeat: the target is NOT changed
+};
+TargetEvent observeHeartbeat(quint8 sysid);
+
+// Forget the latched vehicle (the link went down or came up): back to 42 and
+// the next heartbeat latches.
+void resetTarget();
 
 // CMD_SET_PID: controller 0=angle / 1=rate, axis 0=roll / 1=pitch / 2=yaw.
 QByteArray encodeSetPid(int controller, int axis, float kp, float ki, float kd,
