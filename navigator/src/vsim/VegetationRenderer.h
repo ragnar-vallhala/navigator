@@ -137,6 +137,12 @@ struct VegContactBlob {
 // camera moves, so what it holds must not depend on the camera.
 constexpr float kVegCasterMaxTexelM = 0.3f;
 constexpr int kVegCasterLod = 2;
+// Beyond this horizontal distance from the camera trees and rocks no longer cast
+// into the cascades coarser than the finest (the finest keeps every one near the
+// camera). A tree 150-200 m away throws a shadow a few pixels wide under fog, and
+// drawing the ~260 trees of that band cost about as much as the rest of the
+// shadow pass; with the range the band holds a quarter of them.
+constexpr float kVegCasterFarRangeM = 150.0f;
 // The casters are pulled this far [m] away from the sun in depth (the drone's
 // caster is pulled toward it), in full from kVegCasterRampM1 above the instance
 // base and not at all below kVegCasterRampM0 (a smoothstep between). A crown
@@ -299,7 +305,10 @@ public:
   // in clip z. The shadow framebuffer is bound, its viewport and scissor set.
   // `cascade` only labels the statistics. Returns the instances drawn. Not for
   // frame-rate use: the caller redraws a cascade only when its tile is stale.
-  int drawShadowCasters(const QMatrix4x4 &lightVP, int cascade, float push);
+  // `eye` is the camera position; instances farther than `farRangeM` from it
+  // horizontally are skipped in cascades >= 1 (farRangeM <= 0: no limit).
+  int drawShadowCasters(const QMatrix4x4 &lightVP, int cascade, float push,
+                        const QVector3D &eye, float farRangeM);
   // Changes whenever what drawShadowCasters would draw changes (chunks, trees
   // flag, assets or species turning ready, GL rebuilt): the renderer redraws the
   // shadow tiles on a new value.
