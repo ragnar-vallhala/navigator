@@ -90,6 +90,8 @@ public:
   struct Blade {
     float x, y, negH, yaw, height, flower, bend, pad0, r, g, b, pad1;
   };
+  // How many slope-cap node grids have been built (cache misses): tests.
+  int nodeGridBuilds() const { return nodeBuilds_; }
   // Blades the last render() put in `ring`'s buffer (debug readback, stalls the
   // GPU: tests only). Empty if not ready.
   std::vector<Blade> readBlades(QOpenGLExtraFunctions *gl, int ring) const;
@@ -164,7 +166,19 @@ private:
   std::unique_ptr<QOpenGLShaderProgram> comp_; // generation (samples it)
   std::unique_ptr<QOpenGLShaderProgram> draw_; // render
   CascadeUniforms csmLocs_;                    // shadow uniforms of draw_
-  unsigned int nodeTex_[2] = {0, 0}; // slope-cap node grid, ping-pong
+  // Slope-cap node grid of each ring, kept between renders: it only depends on
+  // the lattice window (origin, size) and the params (maskGen_), so it is rebuilt
+  // when the camera moves a node, not every frame. tex[0] holds the eroded grid
+  // (tex[1] is the ping-pong scratch).
+  struct NodeGrid {
+    unsigned int tex[2] = {0, 0};
+    int size = 0; // allocated side
+    int ox = 0, oy = 0, n = 0;
+    unsigned int gen = 0;
+    bool valid = false;
+  };
+  NodeGrid nodeGrid_[kRings];
+  int nodeBuilds_ = 0; // slope-cap grids built so far (tests)
   unsigned int heightTex_ = 0; // R32F terrain-height image around the camera
   int texSize_ = 512;
   int maskSize_ = 512; // texels per mask tile side
