@@ -63,6 +63,10 @@ public:
     float heightM = 70.0f, featureM = 220.0f, macroM = 1400.0f;
     int octaves = 6;
     float lacunarity = 2.0f, gain = 0.5f, mountainMix = 0.55f;
+    // Node spacing [m] of the mesh the blades sit on (chunkM / resolution). > 0
+    // applies FieldParams::maxSlope to the grass height like the mesh does; 0 =
+    // the bare field (no cap).
+    float meshStepM = 0.0f;
     float ridgeSoft = 0.0f; // FieldParams::ridgeSoft (the fill shader must match the mesh)
     // Grass placement (mirrors procgen::FloraParams).
     float grassMaxFrac = 0.5f, slopeLo = 0.80f, slopeHi = 0.93f;
@@ -155,9 +159,12 @@ private:
   // Heap-held so release() can drop them and init() build fresh ones in a new
   // context (a linked program cannot take shaders again, nor change context).
   std::unique_ptr<QOpenGLShaderProgram> fill_; // fill the height texture
+  std::unique_ptr<QOpenGLShaderProgram> nodes_; // raw heights on the mesh lattice
+  std::unique_ptr<QOpenGLShaderProgram> erode_; // one slope-cap pass
   std::unique_ptr<QOpenGLShaderProgram> comp_; // generation (samples it)
   std::unique_ptr<QOpenGLShaderProgram> draw_; // render
   CascadeUniforms csmLocs_;                    // shadow uniforms of draw_
+  unsigned int nodeTex_[2] = {0, 0}; // slope-cap node grid, ping-pong
   unsigned int heightTex_ = 0; // R32F terrain-height image around the camera
   int texSize_ = 512;
   int maskSize_ = 512; // texels per mask tile side

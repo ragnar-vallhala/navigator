@@ -368,6 +368,7 @@ private slots:
     p.gain = fp.gain;
     p.mountainMix = fp.mountainMix;
     p.ridgeSoft = fp.ridgeSoft;
+    p.meshStepM = procgen::kStreamChunkM / float(procgen::kStreamChunkRes);
     p.cell = 0.2f;
     p.grid = 256;
     p.asyncMask = false;
@@ -419,8 +420,9 @@ private slots:
         worst = std::max(worst, d);
       }
       const double mean = sum / double(blades.size());
-      qInfo("%s: %zu blades, mean |GPU - CPU| %.4f m, worst %.3f m", names[vi],
-            blades.size(), mean, worst);
+      qInfo("%s: %zu blades, against the uncapped field: mean %.4f m, worst %.3f m "
+            "(the cap is what moves them)",
+            names[vi], blades.size(), mean, worst);
       // Against the mesh the player sees (slope-capped), on a subsample: each
       // surfaceHeight() builds and erodes its own window.
       double sSum = 0.0, sWorst = 0.0;
@@ -435,7 +437,28 @@ private slots:
       }
       qInfo("%s: against the slope-capped mesh (%d samples) mean %.4f m, worst %.3f m",
             names[vi], sN, sSum / sN, sWorst);
-      QVERIFY2(mean < 0.05, names[vi]);
+      QVERIFY2(sSum / sN < 0.05, names[vi]); // the mesh the player sees
+    }
+
+    // Without the cap lattice (meshStepM 0) the shader is the bare field again:
+    // the three terms stay exact against TerrainField::height.
+    p.meshStepM = 0.0f;
+    g.setParams(p);
+    for (int vi = 0; vi < 2; ++vi) {
+      const float cx = views[vi][0], cy = views[vi][1];
+      QMatrix4x4 proj, view;
+      view.translate(-cx, -cy);
+      proj.ortho(-25.0f, 25.0f, -25.0f, 25.0f, -1000.0f, 1000.0f);
+      g.render(&gl, proj, view, QVector3D(cx, cy, 0.0f),
+               QVector3D(0.3f, 0.3f, -1.0f), 0.0f);
+      gl.glFinish();
+      const std::vector<GpuGrass::Blade> blades = g.readBlades(&gl, 0);
+      QVERIFY2(blades.size() > 500, names[vi]);
+      double sum = 0.0;
+      for (const GpuGrass::Blade &b : blades)
+        sum += std::fabs(double(-b.negH) - double(cpu.height(b.x, b.y)));
+      qInfo("%s, no cap: mean |GPU - height()| %.4f m", names[vi], sum / double(blades.size()));
+      QVERIFY2(sum / double(blades.size()) < 0.05, names[vi]);
     }
     g.release(&gl);
     ctx.doneCurrent();
