@@ -336,7 +336,7 @@ void main(){
 QByteArray fragmentSource() {
   QByteArray src(kFrag);
   src.replace("//@ATMOSPHERE@", kAtmosphereGLSL);
-  src.replace("//@CASCADES@", kCascadeShadowGLSL);
+  src.replace("//@CASCADES@", cascadeShadowSource());
   return src;
 }
 

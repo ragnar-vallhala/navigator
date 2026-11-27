@@ -1760,7 +1760,8 @@ void VegetationRenderer::drawBlobInstances(const VegFrame &f, const float *data,
   ++stats_.drawCalls;
 }
 
-int VegetationRenderer::drawShadowCasters(const QMatrix4x4 &lightVP, int cascade, float push) {
+int VegetationRenderer::drawShadowCasters(const QMatrix4x4 &lightVP, int cascade, float push,
+                                          const QVector3D &eye, float farRangeM) {
   const int ci = std::clamp(cascade, 0, 2);
   casterStats_.instances[ci] = 0;
   casterStats_.triangles[ci] = 0;
@@ -1772,6 +1773,8 @@ int VegetationRenderer::drawShadowCasters(const QMatrix4x4 &lightVP, int cascade
   const QVector4D r0 = lightVP.row(0), r1 = lightVP.row(1);
   const float sx = QVector3D(r0.x(), r0.y(), r0.z()).length();
   const float sy = QVector3D(r1.x(), r1.y(), r1.z()).length();
+  // Squared horizontal range; the finest cascade (0) is never limited.
+  const float rangeSq = (cascade >= 1 && farRangeM > 0.0f) ? farRangeM * farRangeM : -1.0f;
   casterBuckets_.resize(var_.size());
   for (std::vector<float> &b : casterBuckets_)
     b.clear();
@@ -1796,6 +1799,11 @@ int VegetationRenderer::drawShadowCasters(const QMatrix4x4 &lightVP, int cascade
       const VegSpeciesInfo &info = kTable[r.info];
       if (info.cat != procgen::kVegTree && info.cat != procgen::kVegRock)
         continue;
+      if (rangeSq > 0.0f) {
+        const float dx = r.x - eye.x(), dy = r.y - eye.y();
+        if (dx * dx + dy * dy > rangeSq)
+          continue;
+      }
       const VariantGpu &v = var_[r.variant];
       if (sp_[size_t(v.species)].state != SpState::Ready)
         continue; // not uploaded yet: the colour pass starts it, casterVer_ moves on

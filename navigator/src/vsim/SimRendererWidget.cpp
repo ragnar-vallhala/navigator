@@ -1151,7 +1151,7 @@ void SimRendererWidget::initResources() {
 
   {
     const QByteArray fsBody = QByteArray(kLitFragmentHead) + kAtmosphereGLSL + kFogGLSL +
-                              kLightingGLSL + kCascadeShadowGLSL + kShadowGLSL +
+                              kLightingGLSL + vsim::cascadeShadowSource() + kShadowGLSL +
                               vsim::terrain::terrainMaterialGLSL() + kLitFragmentMain;
     // The edge build is the same source with TERRAIN_EDGE defined after #version.
     auto withEdge = [](QByteArray src) {
@@ -1927,7 +1927,8 @@ void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks,
     if (veg_ && !vegCast[ci])
       veg_->clearCasterStats(ci);
     if (vegCast[ci]) {
-      veg_->drawShadowCasters(lightVP, ci, 2.0f * vegCasterPushM_ / csm_.info[ci].y());
+      veg_->drawShadowCasters(lightVP, ci, 2.0f * vegCasterPushM_ / csm_.info[ci].y(),
+                              view.inverted().map(QVector3D(0, 0, 0)), vegCasterFarRangeM_);
       progDepth_->bind(); // the vegetation drew with its own program
     }
     if (droneIn[ci] && !noCasterForTest_) {
@@ -2556,7 +2557,7 @@ void SimRendererWidget::drawDroneBlob(const QMatrix4x4 &view) {
 void SimRendererWidget::drawVegetation(const QMatrix4x4 &view) {
   if (!veg_->glReady() &&
       !veg_->initGL({QByteArray(kAtmosphereGLSL) + kFogGLSL,
-                     QByteArray(kCascadeShadowGLSL) + kShadowGLSL, kLightingGLSL}))
+                     vsim::cascadeShadowSource() + kShadowGLSL, kLightingGLSL}))
     return;
   VegFrame f;
   f.proj = proj_;

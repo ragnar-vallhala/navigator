@@ -458,6 +458,10 @@ namespace {
   // strength) and the unit direction the border runs in, found from the signed
   // distance's gradient.
   struct BorderPoint { float x = 0, y = 0, tx = 1, ty = 0; bool ok = false; };
+// The tracked border with the longest straight run, picked by geometry alone (never by how
+  // well the test's own measurement comes out on it): every clean candidate is walked along its
+  // tangent in 3 m steps up to 45 m each way while it stays a tracked line, and the longest
+  // run wins (the first of equals). A run of at least 12 m (4 steps each way, as before) is required.
 BorderPoint findBorder(const TerrainField &f, float x0, float x1, float y0, float y1) {
     const float step = kChunkM / float(kRes);
     auto at = [&](float x, float y) {
@@ -465,8 +469,13 @@ BorderPoint findBorder(const TerrainField &f, float x0, float x1, float y0, floa
       const PgVec3 n = f.normal(x, y, step);
       return f.colorAtSplit(x, y, h, n.z < 0.0f ? -n.z : 0.0f);
     };
+    auto tracked = [&](float x, float y) {
+      const auto q = at(x, y);
+      return q.edgeA < 0.35f && q.edgeK > 0.9f;
+    };
     BorderPoint b;
-    for (int iy = 0; float(iy) * 2.0f < y1 - y0 && !b.ok; ++iy)
+    int bestRun = 0;
+    for (int iy = 0; float(iy) * 2.0f < y1 - y0; ++iy)
       for (int ix = 0; float(ix) * 0.5f < x1 - x0; ++ix) {
         const float x = x0 + float(ix) * 0.5f, y = y0 + float(iy) * 2.0f;
         const auto s = at(x, y);
@@ -478,18 +487,18 @@ BorderPoint findBorder(const TerrainField &f, float x0, float x1, float y0, floa
         const float gl = std::hypot(gx, gy);
         if (gl < 0.5f || gl > 2.0f)
           continue; // not a clean single border (corner or jump)
-        // the border must stay a straight, tracked line for 12 m either way
         const float tx = -gy / gl, ty = gx / gl;
-        bool good = true;
-        for (int k = -4; k <= 4 && good; ++k) {
+        int run = 0; // steps of 3 m kept in both directions
+        for (int k = 1; k <= 15; ++k) {
           const float t = float(k) * 3.0f;
-          const auto q = at(x + tx * t, y + ty * t);
-          good = q.edgeA < 0.35f && q.edgeK > 0.9f;
+          if (!tracked(x + tx * t, y + ty * t) || !tracked(x - tx * t, y - ty * t))
+            break;
+          run = k;
         }
-        if (!good)
-          continue;
-        b = {x, y, tx, ty, true};
-        break;
+        if (run >= 4 && run > bestRun) {
+          bestRun = run;
+          b = {x, y, tx, ty, true};
+        }
       }
     return b;
   }
@@ -497,7 +506,7 @@ BorderPoint findBorder(const TerrainField &f, float x0, float x1, float y0, floa
   // Left and right edge of the dirt band down the middle of a frame whose camera
   // looks along the border: per row where redness (r - g) crosses the middle
   // between the band and the grass at the image sides. Returns the RMS of each
-  // edge about its best straight line (pixels, averaged) and the mean 25-75 %
+  // edge about its best smooth (quadratic) curve (pixels, averaged) and the mean 25-75 %
   // transition width.
   struct BandEdges { double rms = 0, width = 0; int rows = 0; };
 BandEdges bandEdges(const QImage &imgIn) {
@@ -533,20 +542,42 @@ BandEdges bandEdges(const QImage &imgIn) {
         continue;
       ys.push_back(y); xl.push_back(l50); xr.push_back(r50); wl.push_back(std::fabs(l25 - l75));
     }
-    auto rmsLine = [&](const std::vector<double> &x) {
+    // RMS of an edge about its best-fit quadratic in the row. The parcel borders curve on
+    // purpose (a two-scale warp), so a straight line would count the intended bend as
+    // jaggedness in both samplings; what is measured here is the departure from a smooth
+    // curve. Normal equations on the row centred at its middle, solved by Cramer's rule.
+    auto rmsSmooth = [&](const std::vector<double> &x) {
       const size_t n = ys.size();
-      double sy = 0, sx = 0, syy = 0, sxy = 0;
-      for (size_t i = 0; i < n; ++i) { sy += ys[i]; sx += x[i]; syy += ys[i] * ys[i]; sxy += ys[i] * x[i]; }
-      const double d = double(n) * syy - sy * sy;
-      const double b = d != 0 ? (double(n) * sxy - sy * sx) / d : 0, a = (sx - b * sy) / double(n);
+      const double y0 = 0.5 * (ys.front() + ys.back()), sc = 0.5 * (ys.back() - ys.front());
+      double s1 = 0, s2 = 0, s3 = 0, s4 = 0, t0 = 0, t1 = 0, t2 = 0;
+      for (size_t i = 0; i < n; ++i) {
+        const double u = (ys[i] - y0) / sc, u2 = u * u;
+        s1 += u; s2 += u2; s3 += u2 * u; s4 += u2 * u2;
+        t0 += x[i]; t1 += u * x[i]; t2 += u2 * x[i];
+      }
+      const double N = double(n);
+      auto det3 = [](double a11, double a12, double a13, double a21, double a22, double a23,
+                     double a31, double a32, double a33) {
+        return a11 * (a22 * a33 - a23 * a32) - a12 * (a21 * a33 - a23 * a31) + a13 * (a21 * a32 - a22 * a31);
+      };
+      const double D = det3(N, s1, s2, s1, s2, s3, s2, s3, s4);
+      double c0 = 0, c1 = 0, c2 = 0;
+      if (D != 0) {
+        c0 = det3(t0, s1, s2, t1, s2, s3, t2, s3, s4) / D;
+        c1 = det3(N, t0, s2, s1, t1, s3, s2, t2, s4) / D;
+        c2 = det3(N, s1, t0, s1, s2, t1, s2, s3, t2) / D;
+      }
       double r = 0;
-      for (size_t i = 0; i < n; ++i) r += (x[i] - (a + b * ys[i])) * (x[i] - (a + b * ys[i]));
-      return std::sqrt(r / double(n));
+      for (size_t i = 0; i < n; ++i) {
+        const double u = (ys[i] - y0) / sc, e = x[i] - (c0 + c1 * u + c2 * u * u);
+        r += e * e;
+      }
+      return std::sqrt(r / N);
     };
     out.rows = int(ys.size());
     if (out.rows < 40)
       return out;
-    out.rms = 0.5 * (rmsLine(xl) + rmsLine(xr));
+    out.rms = 0.5 * (rmsSmooth(xl) + rmsSmooth(xr));
     out.width = std::accumulate(wl.begin(), wl.end(), 0.0) / double(wl.size());
     return out;
   }
@@ -1322,14 +1353,14 @@ private slots:
     QVERIFY2(failures.isEmpty(), qPrintable("impostor crown luminance vs mesh, outside 0.75..1.25: " + failures));
   }
 
-  void borderTrackIsStraightAndCrisp_data() {
+  void borderTrackIsSmoothAndCrisp_data() {
     QTest::addColumn<float>("aboveM");
     QTest::addColumn<float>("downRad");
     QTest::addColumn<bool>("high");
     QTest::newRow("High h6") << 6.0f << 0.8f << true;
     QTest::newRow("High h10") << 10.0f << 0.9f << true;
   }
-  void borderTrackIsStraightAndCrisp() {
+  void borderTrackIsSmoothAndCrisp() {
     QFETCH(float, aboveM);
     QFETCH(float, downRad);
     QFETCH(bool, high);
@@ -1364,11 +1395,18 @@ private slots:
           double(b.x), double(b.y), res[0].rms, res[0].width, res[0].rows, res[1].rms, res[1].width, res[1].rows);
     // The band must exist in both frames (a missing track would measure as 0),
     // and drawn per pixel it is much straighter and its edge much sharper than
-    // the node-sampled one: measured about 4x on rms and 2x on width at High.
+    // the node-sampled one: measured about 1.8x (h6) to 2.4x (h10) on the smooth-curve rms
+    // and 2.4x on width at High.
     QVERIFY2(res[0].rows >= 40 && res[1].rows >= 40, "no dirt band in the frame");
-    QVERIFY(res[1].rms < 0.6 * res[0].rms);
-    QVERIFY(res[1].rms < 3.5);
-    QVERIFY(res[1].width < 0.75 * res[0].width);
+    const QByteArray where = QByteArray("border at (") + QByteArray::number(double(b.x), 'f', 1) + ", " +
+                             QByteArray::number(double(b.y), 'f', 1) + "): rms old " +
+                             QByteArray::number(res[0].rms, 'f', 2) + " px, new " +
+                             QByteArray::number(res[1].rms, 'f', 2) + " px; width old " +
+                             QByteArray::number(res[0].width, 'f', 1) + " px, new " +
+                             QByteArray::number(res[1].width, 'f', 1) + " px";
+    QVERIFY2(res[1].rms < 0.6 * res[0].rms, where.constData());
+    QVERIFY2(res[1].rms < 3.5, where.constData());
+    QVERIFY2(res[1].width < 0.75 * res[0].width, where.constData());
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
 
@@ -2001,6 +2039,41 @@ private slots:
     QVERIFY2(r1 > 0.97, "without the finest cascade the near ground is not shadowed");
     QVERIFY2(r0 < 0.9, "with it, it is");
     QVERIFY2(rc > 0.97, "ground beside it is not");
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
+  // Beyond kVegCasterFarRangeM trees stop casting into the coarser cascades (a
+  // 150-200 m tree is a few fogged pixels and its band was most of the caster
+  // cost); the finest cascade keeps every tree near the camera, whatever the range.
+  void farCastersAreCulledOnlyBeyondTheRange() {
+    World w = loneWorld(kVegTree, 2);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    rig.r->setVegCastersOffForTest(false);
+    rig.r->setVegCasterFirstCascadeForTest(0);
+    const auto &cs = rig.r->vegCasterStatsForTest();
+    // The tree is 100 m ahead: cascade 1, inside the range.
+    casterScene(rig.r, w, 100.0f);
+    settledFrame(rig.r);
+    QVERIFY2(cs.instances[1] >= 1, "100 m: inside the range, drawn");
+    // 180 m ahead: still cascade 1's slice, beyond the range.
+    casterScene(rig.r, w, 180.0f);
+    settledFrame(rig.r);
+    const int beyond = cs.instances[1];
+    rig.r->setVegCasterFarRangeForTest(0.0f); // no limit
+    casterScene(rig.r, w, 181.0f);            // a different pose, so the tile is redrawn
+    settledFrame(rig.r);
+    const int unlimited = cs.instances[1];
+    qInfo("180 m: %d with the range, %d without", beyond, unlimited);
+    QVERIFY2(unlimited >= 1, "the tree is in cascade 1's window, so without the range it is drawn");
+    QCOMPARE(beyond, 0);
+    // The finest cascade is never limited, even by a tiny range.
+    rig.r->setVegCasterFarRangeForTest(5.0f);
+    casterScene(rig.r, w, 24.0f);
+    settledFrame(rig.r);
+    QVERIFY2(cs.instances[0] >= 1, "cascade 0 ignores the range");
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
 
