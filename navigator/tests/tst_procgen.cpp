@@ -79,6 +79,7 @@ private slots:
   void parcelBordersAreBlendedNotHardSteps();
   void parcelBordersAreRaggedButResolved();
   void rockPaintOnlyWhereItReadsAsScree();
+  void racingLawnIsMownInPatchesNotEverywhere();
   void groundCoverDeterministicAndBounded();
   void groundCoverGivesVarietyInEveryPalette();
   void groundCoverPondsAndTracksExist();
@@ -329,6 +330,47 @@ void TstProcgen::rockPaintOnlyWhereItReadsAsScree() {
   mean /= float(n);
   QVERIFY2(darkest > 0.6f * mean,
            qPrintable(QStringLiteral("a desert spot is %1 against a mean of %2").arg(double(darkest)).arg(double(mean))));
+}
+
+void TstProcgen::racingLawnIsMownInPatchesNotEverywhere() {
+  // The racing lawn's mown stripes used to run over the whole world at one
+  // strength with hard edges, which read as one regular banding out to the
+  // horizon. Now a sine in patches of the lawn: some ~15 m blocks carry the
+  // stripes, others are plain grass. Over a grid at the chunk mesh's vertex
+  // spacing, the spread of the colour inside each 8 x 8 block (stripes show as
+  // spread; the rest of the ground varies slowly) must be:
+  //  - strong in some blocks (the lawn is still striped), and
+  //  - weak in a good share of them (the stripes are not everywhere).
+  const float h = kStreamChunkM / float(kStreamChunkRes);
+  constexpr int kN = 360, kB = 8;
+  const PgVec3 kBase{0.30f, 0.45f, 0.20f};
+  for (uint32_t seed : {3u, 11u, 99u}) {
+    GroundCover gc(seed, 9);
+    std::vector<float> lum(static_cast<size_t>(kN) * kN);
+    for (int j = 0; j < kN; ++j)
+      for (int i = 0; i < kN; ++i)
+        lum[size_t(j) * kN + i] = gc.sample(-300.0f + h * float(i), 100.0f + h * float(j), kBase, 0.05f, 1.0f).split.y;
+    std::vector<float> spread;
+    for (int bj = 0; bj + kB <= kN; bj += kB)
+      for (int bi = 0; bi + kB <= kN; bi += kB) {
+        double sum = 0.0, sq = 0.0;
+        for (int j = 0; j < kB; ++j)
+          for (int i = 0; i < kB; ++i) {
+            const double v = double(lum[size_t(bj + j) * kN + bi + i]);
+            sum += v;
+            sq += v * v;
+          }
+        const double mean = sum / (kB * kB);
+        spread.push_back(float(std::sqrt(std::max(0.0, sq / (kB * kB) - mean * mean))));
+      }
+    std::sort(spread.begin(), spread.end());
+    const float lo = spread[spread.size() / 5], hi = spread[spread.size() * 9 / 10];
+    // Measured: before, every block had 0.047 to 0.054 (stripes everywhere);
+    // now the 20th percentile is ~0.006 and the 90th ~0.036.
+    const QString where = QStringLiteral("seed %1: p20 %2, p90 %3").arg(seed).arg(double(lo)).arg(double(hi));
+    QVERIFY2(hi > 0.025f, qPrintable(where + QStringLiteral(": the lawn is not striped any more")));
+    QVERIFY2(lo < 0.02f, qPrintable(where + QStringLiteral(": the stripes cover the whole lawn")));
+  }
 }
 
 void TstProcgen::parcelBordersAreRaggedButResolved() {
