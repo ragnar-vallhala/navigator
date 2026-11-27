@@ -2042,6 +2042,41 @@ private slots:
     QCOMPARE(rig.r->glErrorCount(), 0);
   }
 
+  // Beyond kVegCasterFarRangeM trees stop casting into the coarser cascades (a
+  // 150-200 m tree is a few fogged pixels and its band was most of the caster
+  // cost); the finest cascade keeps every tree near the camera, whatever the range.
+  void farCastersAreCulledOnlyBeyondTheRange() {
+    World w = loneWorld(kVegTree, 2);
+    Rig rig(true);
+    loadTerrain(rig.r, w);
+    loadVegetation(rig.r, w);
+    QVERIFY(rig.show());
+    rig.r->setVegCastersOffForTest(false);
+    rig.r->setVegCasterFirstCascadeForTest(0);
+    const auto &cs = rig.r->vegCasterStatsForTest();
+    // The tree is 100 m ahead: cascade 1, inside the range.
+    casterScene(rig.r, w, 100.0f);
+    settledFrame(rig.r);
+    QVERIFY2(cs.instances[1] >= 1, "100 m: inside the range, drawn");
+    // 180 m ahead: still cascade 1's slice, beyond the range.
+    casterScene(rig.r, w, 180.0f);
+    settledFrame(rig.r);
+    const int beyond = cs.instances[1];
+    rig.r->setVegCasterFarRangeForTest(0.0f); // no limit
+    casterScene(rig.r, w, 181.0f);            // a different pose, so the tile is redrawn
+    settledFrame(rig.r);
+    const int unlimited = cs.instances[1];
+    qInfo("180 m: %d with the range, %d without", beyond, unlimited);
+    QVERIFY2(unlimited >= 1, "the tree is in cascade 1's window, so without the range it is drawn");
+    QCOMPARE(beyond, 0);
+    // The finest cascade is never limited, even by a tiny range.
+    rig.r->setVegCasterFarRangeForTest(5.0f);
+    casterScene(rig.r, w, 24.0f);
+    settledFrame(rig.r);
+    QVERIFY2(cs.instances[0] >= 1, "cascade 0 ignores the range");
+    QCOMPARE(rig.r->glErrorCount(), 0);
+  }
+
   // The casters are culled to the light window: a forest seen from its corner
   // draws far fewer than the forest holds.
   void casterListIsCulledToTheLightWindow() {

@@ -1927,7 +1927,8 @@ void SimRendererWidget::renderShadowPass(bool showWorld, bool showChunks,
     if (veg_ && !vegCast[ci])
       veg_->clearCasterStats(ci);
     if (vegCast[ci]) {
-      veg_->drawShadowCasters(lightVP, ci, 2.0f * vegCasterPushM_ / csm_.info[ci].y());
+      veg_->drawShadowCasters(lightVP, ci, 2.0f * vegCasterPushM_ / csm_.info[ci].y(),
+                              view.inverted().map(QVector3D(0, 0, 0)), vegCasterFarRangeM_);
       progDepth_->bind(); // the vegetation drew with its own program
     }
     if (droneIn[ci] && !noCasterForTest_) {
