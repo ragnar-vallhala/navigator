@@ -38,6 +38,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -79,6 +80,7 @@ private slots:
   void parcelBordersAreBlendedNotHardSteps();
   void parcelBordersAreRaggedButResolved();
   void rockPaintOnlyWhereItReadsAsScree();
+  void chunkKeysKeepTheirLayoutForNegativeCells();
   void racingLawnIsMownInPatchesNotEverywhere();
   void groundCoverDeterministicAndBounded();
   void groundCoverGivesVarietyInEveryPalette();
@@ -330,6 +332,26 @@ void TstProcgen::rockPaintOnlyWhereItReadsAsScree() {
   mean /= float(n);
   QVERIFY2(darkest > 0.6f * mean,
            qPrintable(QStringLiteral("a desert spot is %1 against a mean of %2").arg(double(darkest)).arg(double(mean))));
+}
+
+void TstProcgen::chunkKeysKeepTheirLayoutForNegativeCells() {
+  // keyOf packs (cx, cy) into one 64-bit key: cx in the high half, cy in the
+  // low half as raw bits. Negative cells (any world west or south of the
+  // origin) must round-trip, stay distinct, and keep exactly that bit layout.
+  std::set<qint64> seen;
+  int n = 0;
+  for (int cx = -40; cx <= 40; cx += 3)
+    for (int cy = -40; cy <= 40; cy += 3) {
+      const qint64 k = vsim::ChunkStreamer::keyOf(cx, cy);
+      QCOMPARE(vsim::ChunkStreamer::cxOf(k), cx);
+      QCOMPARE(vsim::ChunkStreamer::cyOf(k), cy);
+      const quint64 expect = (quint64(qint64(cx)) << 32) | quint64(quint32(cy));
+      QCOMPARE(quint64(k), expect);
+      seen.insert(k);
+      ++n;
+    }
+  QCOMPARE(int(seen.size()), n);
+  QCOMPARE(quint64(vsim::ChunkStreamer::keyOf(-3, 5)), quint64(0xFFFFFFFD00000005ull));
 }
 
 void TstProcgen::racingLawnIsMownInPatchesNotEverywhere() {

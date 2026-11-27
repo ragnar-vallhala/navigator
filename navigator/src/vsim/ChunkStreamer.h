@@ -150,7 +150,9 @@ public:
   std::vector<ChunkReq> collisionChunks(int cx, int cy) const;
 
   static qint64 keyOf(int cx, int cy) {
-    return (static_cast<qint64>(cx) << 32) |
+    // The shift is done unsigned: a negative cell shifted as a signed value is
+    // undefined before C++20. The bits are the same.
+    return static_cast<qint64>(static_cast<quint64>(static_cast<qint64>(cx)) << 32) |
            static_cast<qint64>(static_cast<uint32_t>(cy));
   }
   static int cxOf(qint64 k) { return static_cast<int>(k >> 32); }
