@@ -123,7 +123,9 @@ FarTerrain::Built FarTerrain::build(const procgen::TerrainField &f,
 
     std::unordered_map<std::int64_t, Vert> cache;
     auto key = [](int i, int j) {
-      return (static_cast<std::int64_t>(i) << 32) ^
+      // Shifted unsigned: a negative node index shifted as a signed value is
+      // undefined before C++20. The bits are the same.
+      return static_cast<std::int64_t>(static_cast<std::uint64_t>(static_cast<std::int64_t>(i)) << 32) ^
              static_cast<std::int64_t>(static_cast<std::uint32_t>(j));
     };
     // Heights are cached per lattice node: each node's normal reuses its
