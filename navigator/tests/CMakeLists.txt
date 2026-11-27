@@ -768,6 +768,15 @@ navigator_test(tst_statustext
     ${SRC}/protocol/NavlinkRouter.cpp)
 target_link_libraries(tst_statustext PRIVATE navlink_codec)
 
+# ---- NavLink char[N] fields: NUL-padded, never read past their array -------
+navigator_test(tst_navlink_text
+    tst_navlink_text.cpp
+    ${SRC}/protocol/NavlinkRouter.cpp
+    ${SRC}/params/ParamCatalog.cpp
+    ${SRC}/params/ParamCodec.cpp)
+target_include_directories(tst_navlink_text PRIVATE ${SRC}/params ${SRC}/protocol)
+target_link_libraries(tst_navlink_text PRIVATE navlink_codec)
+
 # ---- FAILSAFE_STATUS decode: a real frame through the router ---------------
 navigator_test(tst_failsafe_decode
     tst_failsafe_decode.cpp
