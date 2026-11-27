@@ -38,6 +38,11 @@ constexpr float kParcelBlendM = 13.0f;
 // of its parcel. The yard's paving zones keep a clean edge.
 constexpr float kParcelRagM = 4.0f;
 
+// Racing lawn: the distance [m] between two mown stripes, and the scale [m] of
+// the patches of lawn that are mown at all.
+constexpr float kStripeM = 7.0f;
+constexpr float kMownPatchM = 80.0f;
+
 inline float clamp01(float v) {
   return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
 }
@@ -395,13 +400,19 @@ GroundCover::Sample GroundCover::sampleImpl(float wx, float wy, const PgVec3 &ba
     edge.edgePc = pc;
   }
 
-  // Mown stripes (racing lawn).
+  // Mown stripes (racing lawn): a smooth sine across the stripes, in patches of
+  // the lawn. The stripes used to run over the whole world at one strength with
+  // hard edges (1.1 m wide against ~1.9 m between vertices), which read as one
+  // regular banding to the horizon; a sine has no edge to alias and the patches
+  // leave stretches of plain grass between mown ones.
   if (s.stripeAmt > 0.0f) {
     const float c = std::cos(rot_), sn = std::sin(rot_);
-    const float u = (wx * c + wy * sn) / 7.0f;
-    const float band = smoothstep(0.42f, 0.58f, u - std::floor(u));
-    col = scale(col, 1.0f + s.stripeAmt * (band * 2.0f - 1.0f));
-    colS = scale(colS, 1.0f + s.stripeAmt * (band * 2.0f - 1.0f));
+    const float u = (wx * c + wy * sn) / kStripeM;
+    const float band = 0.5f - 0.5f * std::cos(6.2831853f * u);
+    const float mown = smoothstep(0.0f, 0.25f, patch_.fbm(wx / kMownPatchM + 3.0f, wy / kMownPatchM, 2, 2.0f, 0.5f));
+    const float k = 1.0f + s.stripeAmt * mown * (band * 2.0f - 1.0f);
+    col = scale(col, k);
+    colS = scale(colS, k);
   }
 
   col.x = clamp01(col.x);
