@@ -197,6 +197,27 @@ private slots:
     QCOMPARE(old.field.reliefM, 0.0f);
   }
 
+  // The crest softening survives a save and a restart; an old file without it
+  // loads sharp, so a world saved before the knob existed keeps its terrain.
+  void ridgeSoftSurvivesSerialization() {
+    vsim::WorldConfig w;
+    QVERIFY(vsim::applyWorldPreset(w, "alpine", 5));
+    QVERIFY(w.field.ridgeSoft > 0.0f);
+    const QString json = WorldEditorWidget::serializeProcedural(w);
+    vsim::WorldConfig back;
+    QVERIFY(WorldEditorWidget::deserializeProcedural(back, json));
+    QCOMPARE(back.field.ridgeSoft, w.field.ridgeSoft);
+    vsim::WorldConfig old;
+    old.field.ridgeSoft = 0.2f; // stale value must not leak into an old file
+    QVERIFY(WorldEditorWidget::deserializeProcedural(
+        old, QStringLiteral("{\"biome\":\"alpine\",\"seed\":5}")));
+    QCOMPARE(old.field.ridgeSoft, 0.0f);
+    // Every other preset keeps the sharp ridges.
+    vsim::WorldConfig h;
+    QVERIFY(vsim::applyWorldPreset(h, "hills", 5));
+    QCOMPARE(h.field.ridgeSoft, 0.0f);
+  }
+
   void legacyFiniteMeadowLoadsAsEndless() {
     WorldEditorWidget we;
     // No finite arena entry and no size/resolution controls any more.

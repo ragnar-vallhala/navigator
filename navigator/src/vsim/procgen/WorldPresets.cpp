@@ -374,6 +374,7 @@ bool buildWorldPreset(const std::string &id, uint32_t seed, PresetData &out) {
     f.mountainMix = 0.85f;
     f.mountainBias = 0.15f;
     f.maxSlope = 0.9f;
+    f.ridgeSoft = 0.1f; // round the crests the slope cap would cut into facets
     f.palette = kPalAlpine;
     f.reliefM = 0.3f;
     f.colBrownT = 0.28f;
