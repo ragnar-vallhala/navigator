@@ -16,6 +16,7 @@
 // Pure maths (no GL) in fitShadowCascades(); the shader side is kCascadeShadowGLSL.
 #pragma once
 
+#include <QByteArray>
 #include <QMatrix4x4>
 #include <QVector2D>
 #include <QVector3D>
@@ -161,6 +162,25 @@ struct CascadeUniforms {
   }
 };
 
+// The receiver bias of the LAST cascade (the one that covers distant slopes at
+// 0.4-0.8 m per texel) is multiplied by a factor that grows with the sun's height:
+// 1 at or below kFarBiasSunLo, kFarBiasMul at or above kFarBiasSunHi, smoothstep in
+// between, on sin(elevation) = the sun direction's height. At a high sun the shadow
+// edge of a steep hollow on a distant slope crosses the texels as a saw-tooth (a row
+// of dark stair steps); a larger bias there hides it. At a low sun the same bias
+// would thin real cast shadows (measured: 6-9 % of the pixels of an alpine view
+// change at 20-35 deg), so the factor stays 1 there. 36-42 deg are only partly
+// improved: the saw-tooth is there and the factor is still on its way up. The nearer
+// cascades (the drone's own shadow, trees) are never touched.
+inline constexpr float kFarBiasMul = 2.0f;
+inline constexpr float kFarBiasSunLo = 0.57f; // sin(35 deg) ~ 0.574
+inline constexpr float kFarBiasSunHi = 0.72f; // sin(46 deg) ~ 0.719
+// Same formula as the shader's mix(1, kFarBiasMul, smoothstep(lo, hi, sinElev)).
+inline float farCascadeBiasFactor(float sinElev) {
+  const float t = std::min(std::max((sinElev - kFarBiasSunLo) / (kFarBiasSunHi - kFarBiasSunLo), 0.0f), 1.0f);
+  return 1.0f + (kFarBiasMul - 1.0f) * (t * t * (3.0f - 2.0f * t));
+}
+
 // Shader side. Needs u_campos (the eye) in the including program. The atlas is
 // a depth texture with hardware compare + linear filtering, so every tap is
 // already a bilinear 2x2 PCF; four taps give a smooth ~3 texel penumbra whose
@@ -187,6 +207,10 @@ const float kCsmBlend = 0.12;
 const float kCsmBiasConst = 4.7;    // flat part
 const float kCsmBiasGrazing = 11.0; // extra toward a grazing sun
 const float kCsmBiasThin = 14.0;    // flat bias for thin geometry (no plane term)
+// The last cascade's bias factor with the sun height: see farCascadeBiasFactor().
+const float kCsmFarBiasMul = @FARMUL@;
+const float kCsmFarSunLo = @FARLO@;
+const float kCsmFarSunHi = @FARHI@;
 
 float csmTap(int ci, vec3 wpos, vec3 ng, vec3 L, vec3 dWx, vec3 dWy,
              bool usePlane) {
@@ -213,7 +237,8 @@ float csmTap(int ci, vec3 wpos, vec3 ng, vec3 L, vec3 dWx, vec3 dWy,
     dz *= u_csmtexel.y; // per texel step: 1 / tile size in tile uv
     float lim = 60.0 * texelM / range;               // slope <= 60
     dz = clamp(dz, vec2(-lim), vec2(lim));
-    bias = (kCsmBiasConst + kCsmBiasGrazing * (1.0 - ndg)) * texelM / range;
+    float farMul = (ci >= 2) ? mix(1.0, kCsmFarBiasMul, smoothstep(kCsmFarSunLo, kCsmFarSunHi, -L.z)) : 1.0;
+    bias = (kCsmBiasConst + kCsmBiasGrazing * (1.0 - ndg)) * texelM / range * farMul;
   } else {
     bias = kCsmBiasThin * texelM / range;
   }
@@ -253,5 +278,15 @@ float csmVisibility(vec3 wpos, vec3 ng, vec3 L, bool usePlane) {
   return mix(s, 1.0, smoothstep(0.9 * last, last, z));
 }
 )GLSL";
+
+// The cascade GLSL with its constants filled in from the C++ ones above, so the shader and
+// farCascadeBiasFactor() cannot drift apart. Use this, not kCascadeShadowGLSL, to build a program.
+inline QByteArray cascadeShadowSource() {
+  QByteArray s(kCascadeShadowGLSL);
+  s.replace("@FARMUL@", QByteArray::number(double(kFarBiasMul), 'f', 3));
+  s.replace("@FARLO@", QByteArray::number(double(kFarBiasSunLo), 'f', 3));
+  s.replace("@FARHI@", QByteArray::number(double(kFarBiasSunHi), 'f', 3));
+  return s;
+}
 
 } // namespace vsim

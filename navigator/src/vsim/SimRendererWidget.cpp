@@ -1151,7 +1151,7 @@ void SimRendererWidget::initResources() {
 
   {
     const QByteArray fsBody = QByteArray(kLitFragmentHead) + kAtmosphereGLSL + kFogGLSL +
-                              kLightingGLSL + kCascadeShadowGLSL + kShadowGLSL +
+                              kLightingGLSL + vsim::cascadeShadowSource() + kShadowGLSL +
                               vsim::terrain::terrainMaterialGLSL() + kLitFragmentMain;
     // The edge build is the same source with TERRAIN_EDGE defined after #version.
     auto withEdge = [](QByteArray src) {
@@ -2557,7 +2557,7 @@ void SimRendererWidget::drawDroneBlob(const QMatrix4x4 &view) {
 void SimRendererWidget::drawVegetation(const QMatrix4x4 &view) {
   if (!veg_->glReady() &&
       !veg_->initGL({QByteArray(kAtmosphereGLSL) + kFogGLSL,
-                     QByteArray(kCascadeShadowGLSL) + kShadowGLSL, kLightingGLSL}))
+                     vsim::cascadeShadowSource() + kShadowGLSL, kLightingGLSL}))
     return;
   VegFrame f;
   f.proj = proj_;
