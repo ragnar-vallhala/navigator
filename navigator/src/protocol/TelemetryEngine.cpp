@@ -19,6 +19,7 @@
 #include "SerialManager.h"
 #include "UdpManager.h"
 
+#include "NavState.h"
 #include <QDateTime>
 #include <QMetaType>
 #include <QStringList>
@@ -175,18 +176,16 @@ TelemetryEngine::TelemetryEngine(QObject *parent)
             // SYS_STATE origin decodes to a real state name. Ignore anything
             // that isn't a recognised state (the binary HEALTH counters get
             // stringified to non-printable bytes upstream).
-            static const QStringList kStateNames = {
-                "UNINITIALIZED", "INIT",       "STANDBY",
-                "PREARM",        "ARMED",      "IN_AIR",
-                "FAILSAFE",      "TERMINATED", "CALIBRATING"};
-            if (!kStateNames.contains(msg))
+            bool isState = false;
+            const bool armed = navstate::armedByName(msg, &isState);
+            if (!isState)
               return;
             QMutexLocker lock(&m_mutex);
             m_state.vehicleState = msg;
-            // ARMED / IN_AIR / FAILSAFE all count as armed so the operator can
-            // always recover (DISARM stays available).
-            m_state.armed =
-                (msg == "ARMED" || msg == "IN_AIR" || msg == "FAILSAFE");
+            // ARMED / IN_AIR / FAILSAFE and UNKNOWN count as armed (one rule,
+            // protocol/NavState.h) so the operator can always recover (DISARM
+            // stays available) and locks stay on for a state we do not know.
+            m_state.armed = armed;
           });
 }
 

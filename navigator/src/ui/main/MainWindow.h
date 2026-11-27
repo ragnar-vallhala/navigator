@@ -98,6 +98,8 @@ private slots:
   void onConnectRequested(const QString &port, int baud);
   void onDisconnectRequested();
   void onArmClicked();
+  void requestArm();
+  void requestDisarm();
   void onToggle3d(bool checked);
 
   // Data callbacks. Per-packet telemetry (imu/attitude/rc/motor/status/flight-

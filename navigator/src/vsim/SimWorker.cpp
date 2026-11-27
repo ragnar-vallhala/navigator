@@ -579,6 +579,11 @@ void SimWorker::runEngine() {
   emit logLine("rtos engine: online");
   emit online();
 
+  // From here until the loop ends, host frames for the firmware UART are queued
+  // and applied below, between steps, not injected from the GUI thread.
+  SitlModule::instance().router().set(
+      [this](std::function<void()> op) { enqueue(std::move(op)); });
+
   vsim_pose_frame_t pose;
   int n = 0;
   while (!stop_flag_.load(std::memory_order_acquire)) {
@@ -603,6 +608,19 @@ void SimWorker::runEngine() {
           pose);
       emitFromFrame(&pose);
     }
+  }
+  // Stop routing first; set() waits out any dispatch in flight, so this last
+  // drain applies every frame queued for this run (none is left to replay at
+  // the next start).
+  SitlModule::instance().router().set({});
+  {
+    std::vector<std::function<void()>> batch;
+    {
+      std::lock_guard<std::mutex> lk(cmd_mtx_);
+      batch.swap(cmds_);
+    }
+    for (auto &op : batch)
+      op();
   }
   emit logLine("rtos engine: stopped");
   emit stoppedCleanly();

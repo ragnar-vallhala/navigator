@@ -24,6 +24,7 @@
 #include "DockPanelIds.h"
 #include "DockShell.h"
 #include "WindowFit.h"
+#include "../core/ArmGate.h"
 #include "../core/FaultsModel.h"
 #include "../core/Notify.h"
 #include "../core/SettingsManager.h"
@@ -366,7 +367,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
           &MainWindow::showHome);
   connect(m_calibrationWidget, &CalibrationWidget::commandRequested,
           [this](const QByteArray &data) {
-            if (m_source.txAllowed())
+            if (m_source.txAllowed() && !m_linkLost)
               sendToFc(data);
           });
 
@@ -458,6 +459,31 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
                 return;
               case autotune_params::Route::Legacy:
                 break;
+              }
+              // Legacy CMD_SET_PID: gains are locked while armed (as the
+              // parameters are), and nothing that is not a gain goes out. The
+              // whole batch is checked first, so a bad slot sends no slot.
+              if (m_linkLost) {
+                m_logPanel->appendLog(
+                    "[GCS] Apply gains refused — link lost (stale state)");
+                Notify::warn(this, tr("Link lost — gains not sent"));
+                return;
+              }
+              if (m_armed) {
+                m_logPanel->appendLog(
+                    "[GCS] Apply gains refused — the vehicle is armed");
+                Notify::warn(this, tr("Disarm before applying gains"));
+                return;
+              }
+              for (const PidSetCmd &c : cmds) {
+                if (!armgate::pidGainsValid(c.kp, c.ki, c.kd, c.kff)) {
+                  m_logPanel->appendLog(
+                      "[GCS] Apply gains refused — a gain is not a finite, "
+                      "non-negative number");
+                  Notify::error(this, tr("Invalid gain value — nothing was "
+                                         "sent"));
+                  return;
+                }
               }
               const uint32_t now =
                   static_cast<uint32_t>(QDateTime::currentMSecsSinceEpoch());
@@ -826,11 +852,20 @@ void MainWindow::buildMenuBar() {
   // ---- Flight ----
   QMenu *flightMenu = menu->addMenu("F&light");
   {
-    QAction *arm = m_cmds->add("flight.arm", "&Arm / Disarm", "Flight",
-                               QKeySequence("Ctrl+A"), CmdContext::Always,
-                               [this] { onArmClicked(); });
+    // ARM and DISARM are separate commands, neither on Ctrl+A (select-all, one
+    // stray chord must never cut the motors). Disarm in flight asks first
+    // (requestDisarm).
+    QAction *arm = m_cmds->add("flight.arm", "&Arm", "Flight",
+                               QKeySequence("Ctrl+Shift+A"), CmdContext::Always,
+                               [this] { requestArm(); });
     arm->setIcon(ui::svgIcon(ui::Icon::Arm));
     flightMenu->addAction(arm);
+    QAction *disarm = m_cmds->add("flight.disarm", "&Disarm", "Flight",
+                                  QKeySequence("Ctrl+Shift+D"),
+                                  CmdContext::Always,
+                                  [this] { requestDisarm(); });
+    disarm->setIcon(ui::svgIcon(ui::Icon::Arm));
+    flightMenu->addAction(disarm);
   }
   flightMenu->addSeparator();
   flightMenu->addAction(m_cmds->add(
@@ -1200,15 +1235,32 @@ void MainWindow::onExportLogToggle() {
   // (exportStateChanged), avoiding a race with the menu's missing-file prune.
 }
 
+// The toolbar button toggles on the last-known state; the menu/chords call the
+// two requests directly.
 void MainWindow::onArmClicked() {
+  if (m_armed)
+    requestDisarm();
+  else
+    requestArm();
+}
+
+void MainWindow::requestArm() {
   if (!m_source.txAllowed()) {
-    m_logPanel->appendLog("[GCS] ARM/DISARM ignored — not connected");
+    m_logPanel->appendLog("[GCS] ARM ignored — not connected");
+    return;
+  }
+  if (m_linkLost) {
+    m_logPanel->appendLog("[GCS] ARM refused — link lost (stale state)");
+    Notify::warn(this, tr("Link lost — ARM not sent"));
+    return;
+  }
+  if (m_armed) {
+    m_logPanel->appendLog("[GCS] ARM ignored — already armed");
     return;
   }
 
-  // Confirm before ARM (Settings ▸ Alerts & Audio). Gate arming only — disarm
-  // is always safe and should never be blocked behind a dialog.
-  if (m_confirmBeforeArm && !m_armed) {
+  // Confirm before ARM (Settings ▸ Alerts & Audio).
+  if (m_confirmBeforeArm) {
     const auto btn = QMessageBox::question(
         this, tr("Confirm ARM"),
         tr("Arm the airframe? The motors will spin up once the throttle is "
@@ -1220,14 +1272,47 @@ void MainWindow::onArmClicked() {
     }
   }
 
-  // Toggle on the last-known FC state (m_armed is synced from the engine
-  // snapshot by the render clock): armed/failsafe -> CMD_DISARM, else CMD_ARM.
-  // Both commands are idempotent on the firmware side, so a stale m_armed
-  // is harmless. The firmware checks the arm preconditions (throttle low,
-  // RC healthy, estimator OK) on its next RC frame. Framing lives in CommandCodec.
-  sendToFc(m_armed ? CommandCodec::encodeDisarm() : CommandCodec::encodeArm());
-  m_logPanel->appendLog(m_armed ? "[GCS] Sent CMD_DISARM"
-                                : "[GCS] Sent CMD_ARM (lower throttle to arm)");
+  // The firmware checks the arm preconditions (throttle low, RC healthy,
+  // estimator OK) on its next RC frame. Framing lives in CommandCodec.
+  sendToFc(CommandCodec::encodeArm());
+  m_logPanel->appendLog("[GCS] Sent CMD_ARM (lower throttle to arm)");
+}
+
+void MainWindow::requestDisarm() {
+  if (!m_source.txAllowed()) {
+    m_logPanel->appendLog("[GCS] DISARM ignored — not connected");
+    return;
+  }
+  if (m_linkLost) {
+    m_logPanel->appendLog("[GCS] DISARM refused — link lost (stale state)");
+    Notify::warn(this, tr("Link lost — DISARM not sent"));
+    return;
+  }
+
+  // On the ground (or already off) disarm goes at once. In ARMED (still
+  // climbing or hovering low), IN_AIR / FAILSAFE or an unknown state it cuts the motors of a possibly flying aircraft, so it
+  // needs an explicit Yes; Cancel is the default and Enter does not confirm.
+  if (armgate::disarmPolicy(m_lastPushedState) == armgate::DisarmPolicy::Confirm) {
+    QMessageBox box(QMessageBox::Warning, tr("Confirm DISARM"),
+                    tr("The vehicle may be in flight (state: %1).\n\nDISARM "
+                       "stops the motors immediately and the aircraft will "
+                       "fall.")
+                        .arg(m_lastPushedState.isEmpty() ? tr("unknown")
+                                                         : m_lastPushedState),
+                    QMessageBox::NoButton, this);
+    QPushButton *yes = box.addButton(tr("Stop motors"), QMessageBox::DestructiveRole);
+    QPushButton *no = box.addButton(tr("Cancel"), QMessageBox::RejectRole);
+    box.setDefaultButton(no);
+    box.setEscapeButton(no);
+    box.exec();
+    if (box.clickedButton() != yes) {
+      m_logPanel->appendLog("[GCS] DISARM cancelled");
+      return;
+    }
+  }
+
+  sendToFc(CommandCodec::encodeDisarm());
+  m_logPanel->appendLog("[GCS] Sent CMD_DISARM");
 }
 
 void MainWindow::onToggle3d(bool checked) {
@@ -1490,8 +1575,11 @@ void MainWindow::setConnected(bool on) {
   // live serial link is told to disable its action surface here.
   // Read-only display pages (Motor / ControlLoop) are intentionally
   // left interactive so the last known data stays visible.
-  if (m_calibrationWidget)
+  if (m_calibrationWidget) {
+    if (!on)
+      m_calibrationWidget->setVehicleState(QString()); // state unknown again
     m_calibrationWidget->setConnected(on);
+  }
   if (m_gyroNotchWidget)
     m_gyroNotchWidget->setConnected(on);
 
@@ -1752,6 +1840,8 @@ void MainWindow::onUiTimer() {
                                     !m_lastPushedState.contains("FAILSAFE");
       m_lastPushedState = s.vehicleState;
       applyVehicleStatePill(s.vehicleState);
+      if (m_calibrationWidget)
+        m_calibrationWidget->setVehicleState(s.vehicleState);
       if (enteringFailsafe) {
         m_chime.play(ChimeAudio::Kind::Failsafe);
         Notify::error(this, tr("FAILSAFE"));
@@ -1847,6 +1937,16 @@ void MainWindow::updateLiveBlinker() {
       m_source.state() == SourceState::Fc && elapsed > m_linkLossTimeoutMs;
   if (lost != m_linkLost) {
     m_linkLost = lost;
+    // While the link is lost the last-known state (armed, in flight, ...) is
+    // stale and a command would go nowhere: disable ARM/DISARM and treat the
+    // vehicle state as unknown for calibration until heartbeats resume.
+    if (m_toolbar)
+      m_toolbar->setArmEnabled(!lost && m_source.txAllowed());
+    if (m_calibrationWidget)
+      m_calibrationWidget->setVehicleState(lost ? QString() : m_lastPushedState);
+    if (lost)
+      m_logPanel->appendLog("[GCS] Link lost — ARM/DISARM and calibration "
+                            "commands are disabled until the heartbeat returns");
     if (m_statusBar) {
       if (lost)
         m_statusBar->setError(
