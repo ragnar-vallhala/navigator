@@ -96,6 +96,14 @@ target_include_directories(tst_command_codec PRIVATE ${SRC}/protocol ${SRC}/core
 # PUBLIC SYSTEM include carries navlink_msgs.h).
 target_link_libraries(tst_command_codec PRIVATE navlink_codec)
 
+# ---- Command target (heartbeat sysid), geometry validation, ACK text ------
+navigator_test(tst_gcs_targets
+    tst_gcs_targets.cpp
+    ${SRC}/protocol/CommandCodec.cpp
+    ${SRC}/core/crc.cpp)
+target_include_directories(tst_gcs_targets PRIVATE ${SRC}/protocol ${SRC}/core)
+target_link_libraries(tst_gcs_targets PRIVATE navlink_codec)
+
 # ---- Parameter service: catalog, codec and client against a fake FC -------
 navigator_test(tst_param_client
     tst_param_client.cpp

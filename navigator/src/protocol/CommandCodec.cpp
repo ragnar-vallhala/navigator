@@ -19,6 +19,8 @@
 #include "TxSeq.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <cstring>
 
 extern "C" {
@@ -31,6 +33,17 @@ extern "C" {
 // The generated *_encode() builds the whole frame (10-byte header + truncated
 // payload + CRC-16). tsMs is vestigial (v2 frames carry no header timestamp).
 namespace CommandCodec {
+
+namespace {
+std::atomic<quint8> g_targetSys{42};
+} // namespace
+
+quint8 targetSys() { return g_targetSys.load(std::memory_order_relaxed); }
+
+void setTargetSys(quint8 sysid) {
+  if (sysid != 0 && sysid != 0xFF)
+    g_targetSys.store(sysid, std::memory_order_relaxed);
+}
 namespace {
 // Command req_seq and every frame seq come from the one GCS counter (TxSeq),
 // shared with the COMMAND_ACK frames the parser emits (NavlinkRouter).
@@ -119,6 +132,12 @@ QByteArray encodeSetMotorGeometry(const float x[4], const float y[4],
                                   const float spin[4], quint8 devId,
                                   quint32 tsMs) {
   Q_UNUSED(tsMs);
+  // The spin is cast to int8: 0.5 would become 0 and NaN is undefined, so only
+  // exactly +-1 is a direction, and a position must be a real number.
+  for (int i = 0; i < 4; ++i)
+    if (!std::isfinite(x[i]) || !std::isfinite(y[i]) ||
+        (spin[i] != 1.0f && spin[i] != -1.0f))
+      return {};
   navlink_cmd_set_motor_geometry_t m{};
   m.target_sys = devId;
   m.target_comp = 1;

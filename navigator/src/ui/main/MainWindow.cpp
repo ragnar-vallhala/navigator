@@ -25,6 +25,7 @@
 #include "DockShell.h"
 #include "WindowFit.h"
 #include "../core/ArmGate.h"
+#include "../core/AckText.h"
 #include "../core/FaultsModel.h"
 #include "../core/Notify.h"
 #include "../core/SettingsManager.h"
@@ -279,6 +280,15 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
           &params::ParamService::onParamValue);
   connect(proto, &DroneProtocol::commandAckReceived, m_params,
           &params::ParamService::onCommandAck);
+  // A refused ARM / DISARM / flight-mode command is shown, not only logged.
+  connect(proto, &DroneProtocol::commandAckReceived, this,
+          [this](quint32 command, quint8 /*reqSeq*/, quint8 result) {
+            const QString why = acktext::ackFailure(command, result);
+            if (why.isEmpty())
+              return;
+            m_logPanel->appendLog(QStringLiteral("[GCS] ") + why);
+            Notify::warn(this, why);
+          });
   connect(proto, &DroneProtocol::timeSyncResponse, this,
           &MainWindow::onTimeSyncResponse);
   connect(proto, &DroneProtocol::timeSyncRequested, this,
@@ -1959,7 +1969,11 @@ void MainWindow::updateLiveBlinker() {
 
 void MainWindow::onHeartbeatReceived(uint64_t timestamp, uint8_t deviceId) {
   Q_UNUSED(timestamp);
-  Q_UNUSED(deviceId);
+  // Address commands to the vehicle that is actually sending heartbeats.
+  if (deviceId != 0 && deviceId != 0xFF && deviceId != CommandCodec::targetSys()) {
+    CommandCodec::setTargetSys(deviceId);
+    m_logPanel->appendLog(QStringLiteral("[GCS] commanding vehicle %1").arg(deviceId));
+  }
   // Heartbeat is liveness-only now; clock alignment moved to the time-sync
   // handshake (onTimeSyncResponse). The wire-packet counter lives in the engine.
   m_lastHbTime = QDateTime::currentMSecsSinceEpoch();
