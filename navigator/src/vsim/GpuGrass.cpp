@@ -91,7 +91,7 @@ const char *kFill = R"GLSL(
 layout(local_size_x=16, local_size_y=16) in;
 layout(r32f, binding=0) writeonly uniform image2D heightImg;
 uniform uint u_seed;
-uniform float u_heightM, u_featureM, u_macroM, u_lacunarity, u_gain, u_mountainMix;
+uniform float u_heightM, u_featureM, u_macroM, u_lacunarity, u_gain, u_mountainMix, u_ridgeSoft;
 uniform int u_octaves, u_texSize;
 uniform vec2 u_regionMin; uniform float u_regionSize;
 uint hash32(uint x){ x^=x>>16; x*=0x7feb352du; x^=x>>15; x*=0x846ca68bu; x^=x>>16; return x; }
@@ -103,7 +103,7 @@ float grad(float x,float y,uint seed){ int x0=int(floor(x)),y0=int(floor(y)),x1=
   float n00=a*fx+b*fy,n10=c*(fx-1.0)+d*fy,n01=e*fx+f*(fy-1.0),n11=g*(fx-1.0)+h2*(fy-1.0);
   float u=fade(fx),v=fade(fy); return mix(mix(n00,n10,u),mix(n01,n11,u),v)*1.4142136; }
 float fbm(float x,float y,uint s,int o,float l,float gn){ float su=0.,a=1.,fr=1.,n=0.; for(int i=0;i<o;++i){su+=a*grad(x*fr,y*fr,s);n+=a;a*=gn;fr*=l;} return n>0.?su/n:0.; }
-float ridged(float x,float y,uint s,int o,float l,float gn){ float su=0.,a=1.,fr=1.,n=0.; for(int i=0;i<o;++i){float r=1.-abs(grad(x*fr,y*fr,s));r*=r;su+=a*r;n+=a;a*=gn;fr*=l;} return n>0.?su/n:0.; }
+float ridged(float x,float y,uint s,int o,float l,float gn){ float su=0.,a=1.,fr=1.,n=0.; for(int i=0;i<o;++i){float gv=grad(x*fr,y*fr,s);float r=1.-(u_ridgeSoft>0.?sqrt(gv*gv+u_ridgeSoft*u_ridgeSoft)-u_ridgeSoft:abs(gv));r*=r;su+=a*r;n+=a;a*=gn;fr*=l;} return n>0.?su/n:0.; }
 float ss(float e0,float e1,float x){ float t=clamp((x-e0)/(e1-e0),0.,1.); return t*t*(3.-2.*t); }
 float terrainHeight(float wx,float wy){
   uint sM=u_seed^0x68bc21ebu,sW=u_seed^0xb5297a4du,sH=u_seed,sN=u_seed^0x9e3779b9u;
@@ -436,6 +436,7 @@ procgen::FieldParams GpuGrass::maskField() const {
   f.lacunarity = params_.lacunarity;
   f.gain = params_.gain;
   f.mountainMix = params_.mountainMix;
+  f.ridgeSoft = params_.ridgeSoft;
   return f;
 }
 
@@ -803,6 +804,7 @@ void GpuGrass::render(QOpenGLExtraFunctions *gl, const QMatrix4x4 &proj,
     fill_->setUniformValue("u_macroM", params_.macroM);
     fill_->setUniformValue("u_octaves", params_.octaves);
     fill_->setUniformValue("u_lacunarity", params_.lacunarity);
+    fill_->setUniformValue("u_ridgeSoft", params_.ridgeSoft);
     fill_->setUniformValue("u_gain", params_.gain);
     fill_->setUniformValue("u_mountainMix", params_.mountainMix);
     fill_->setUniformValue("u_texSize", texSize_);

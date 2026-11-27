@@ -44,8 +44,10 @@ public:
   // Ridged multifractal: per-octave (1 - |gradient|)^2, weighted by the running
   // amplitude. Produces sharp ridges and rounded valleys — the mountain look.
   // Range ~[0, 1].
-  float ridged(float x, float y, int octaves, float lacunarity,
-               float gain) const;
+  // `soft` > 0 rounds the crest: |n| becomes sqrt(n^2 + soft^2) - soft, so the
+  // ridge line has no kink (0 = the sharp original).
+  float ridged(float x, float y, int octaves, float lacunarity, float gain,
+               float soft = 0.0f) const;
 
 private:
   // 2D hash -> pseudo-random unit gradient at lattice corner (ix, iy).

@@ -231,6 +231,103 @@ private slots:
     QCOMPARE(g.liveObjects(), 0);
     ctx.doneCurrent();
   }
+
+  // The fill shader carries its own copy of ridged(). With ridgeSoft on, the
+  // heights it bakes must follow the softened CPU field, not the sharp one.
+  void gpuHeightFollowsRidgeSoft() {
+    if (QGuiApplication::platformName() == "offscreen")
+      QSKIP("needs a real GL platform: QT_QPA_PLATFORM=xcb on an Xvfb with "
+            "LIBGL_ALWAYS_SOFTWARE=1");
+    QSurfaceFormat fmt;
+    fmt.setVersion(4, 3);
+    fmt.setProfile(QSurfaceFormat::CoreProfile);
+    QOpenGLContext ctx;
+    ctx.setFormat(fmt);
+    if (!ctx.create())
+      QSKIP("no GL 4.3 context");
+    QOffscreenSurface surf;
+    surf.setFormat(ctx.format());
+    surf.create();
+    QVERIFY(ctx.makeCurrent(&surf));
+    QOpenGLExtraFunctions gl(&ctx);
+
+    FieldParams fp;
+    fp.seed = 5u;
+    fp.palette = procgen::kPalMeadow; // grass grows here; heights ignore the palette
+    fp.heightM = 110.0f;
+    fp.featureM = 200.0f;
+    fp.mountainMix = 0.85f;
+    fp.ridgeSoft = 0.25f;
+    FieldParams sharp = fp;
+    sharp.ridgeSoft = 0.0f;
+    const TerrainField soft(fp), hard(sharp);
+
+    GpuGrass::Params p;
+    p.field = fp;
+    p.seed = fp.seed;
+    p.heightM = fp.heightM;
+    p.featureM = fp.featureM;
+    p.macroM = fp.macroM;
+    p.octaves = fp.octaves;
+    p.lacunarity = fp.lacunarity;
+    p.gain = fp.gain;
+    p.mountainMix = fp.mountainMix;
+    p.ridgeSoft = fp.ridgeSoft;
+    p.cell = 0.2f;
+    p.grid = 256;
+    p.asyncMask = false;
+    p.slopeLo = 0.0f;
+    p.slopeHi = 0.01f; // slope gate out of the way: this tests the heights
+    p.grassMaxFrac = 100.0f;
+    GpuGrass g;
+    g.setParams(p);
+    if (!g.init(&gl))
+      QSKIP("compute shaders unavailable on this GL");
+    const float radius = 25.0f;
+    // A mountain spot (the macro field leaves most places flat): where the
+    // softened and the sharp field differ most over the view.
+    float cx = 0.0f, cy = 0.0f;
+    double best = -1.0;
+    for (int j = -12; j <= 12; ++j)
+      for (int i = -12; i <= 12; ++i) {
+        const float x = 200.0f * float(i), y = 200.0f * float(j);
+        double d = 0.0;
+        for (int v = -2; v <= 2; ++v)
+          for (int u = -2; u <= 2; ++u)
+            d += std::fabs(double(soft.height(x + 10.0f * u, y + 10.0f * v)) -
+                           double(hard.height(x + 10.0f * u, y + 10.0f * v)));
+        if (d > best) {
+          best = d;
+          cx = x;
+          cy = y;
+        }
+      }
+    qInfo("view centred at (%.0f, %.0f)", double(cx), double(cy));
+    QMatrix4x4 proj, view;
+    view.translate(-cx, -cy);
+    proj.ortho(-radius, radius, -radius, radius, -1000.0f, 1000.0f);
+    g.render(&gl, proj, view, QVector3D(cx, cy, 0.0f),
+             QVector3D(0.3f, 0.3f, -1.0f), 0.0f);
+    gl.glFinish();
+    const std::vector<GpuGrass::Blade> blades = g.readBlades(&gl, 0);
+    qInfo("blades: %zu", blades.size());
+    QVERIFY2(blades.size() > 500, "too few blades to say anything");
+    double dSoft = 0.0, dHard = 0.0;
+    for (const GpuGrass::Blade &b : blades) {
+      dSoft += std::fabs(double(-b.negH) - double(soft.height(b.x, b.y)));
+      dHard += std::fabs(double(-b.negH) - double(hard.height(b.x, b.y)));
+    }
+    dSoft /= double(blades.size());
+    dHard /= double(blades.size());
+    qInfo("%zu blades: mean |GPU - CPU| %.3f m with the softened field, %.3f m "
+          "against the sharp one",
+          blades.size(), dSoft, dHard);
+    QVERIFY2(dHard > 0.5, "the soft and sharp fields barely differ here: the "
+                          "test says nothing");
+    QVERIFY2(dSoft < 0.3, "GLSL ridged() does not match the CPU one");
+    g.release(&gl);
+    ctx.doneCurrent();
+  }
 };
 
 QTEST_MAIN(TstGpuGrass)
