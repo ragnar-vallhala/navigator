@@ -129,11 +129,40 @@ float reliefHeight(float wx,float wy){
   return u_reliefM*clamp(0.5+0.6*n,0.,1.);
 }
 float withRelief(float h,float r){ return min(h+r,max(h,u_heightM)); }
-float terrainHeight(float wx,float wy){
+float baseTerrainHeight(float wx,float wy){
   float h=rawHeight(wx,wy);
   if(u_flatR<=0.) return withRelief(h,reliefHeight(wx,wy));
   float t=ss(u_flatR,2.5*u_flatR,length(vec2(wx,wy)));
   return withRelief(u_padH+(h-u_padH)*t,t*reliefHeight(wx,wy));
+}
+// Mirrors WaterField::carve. The ponds themselves come from the CPU (their rim
+// sampling is too heavy per texel): one record per world cell, 3 vec4 each,
+// laid out row by row from cell u_wOrg: {cx,cy,shore radius,bank},
+// {level,depth,amp2,amp3}, {phase2,phase3,present,0}.
+layout(std430, binding=5) readonly buffer WaterBuf { vec4 wb[]; };
+uniform ivec2 u_wOrg, u_wDim; uniform float u_wCellM;
+float carveWater(float wx,float wy,float hb){
+  if(u_wDim.x<=0||u_wDim.y<=0) return hb;
+  ivec2 c=ivec2(floor(vec2(wx,wy)/u_wCellM))-u_wOrg;
+  if(c.x<0||c.y<0||c.x>=u_wDim.x||c.y>=u_wDim.y) return hb;
+  int k=(c.y*u_wDim.x+c.x)*3;
+  vec4 C=wb[k+2];
+  if(C.z<0.5) return hb;
+  vec4 A=wb[k], B=wb[k+1];
+  vec2 dv=vec2(wx,wy)-A.xy;
+  float d=length(dv);
+  float ang=(d>1e-6)?atan(dv.y,dv.x):0.0;
+  float R=A.z*(1.0+B.z*sin(2.0*ang+C.x)+B.w*sin(3.0*ang+C.y));
+  if(d>=R+A.w) return hb;
+  float q=d/R;
+  float bowl=q<1.0?1.0-q*q:0.0;
+  float target=B.x-B.y*bowl;
+  float s=1.0-ss(R,R+A.w,d);
+  float h=hb+(target-hb)*s;
+  return d>=R?max(h,B.x):h;
+}
+float terrainHeight(float wx,float wy){
+  return carveWater(wx,wy,baseTerrainHeight(wx,wy));
 }
 void main(){
   ivec2 id=ivec2(gl_GlobalInvocationID.xy);
@@ -463,6 +492,7 @@ bool GpuGrass::init(QOpenGLExtraFunctions *gl) {
   gl->glGenBuffers(kNumRings, ssbo_);
   gl->glGenBuffers(kNumRings, indirect_);
   gl->glGenBuffers(kNumRings, counter_);
+  gl->glGenBuffers(1, &waterBuf_);
 
   // Each ring owns a buffer holding up to one grid's worth of blades (a candidate
   // appends at most once). Allocate it BEFORE wiring its vertex attributes (some
@@ -502,7 +532,8 @@ void GpuGrass::setParams(const Params &p) {
   // Spawn-pad level the fill shader flattens toward: the mesh's own height at
   // the origin (ponds keep clear of it, so no basin is in it).
   const procgen::FieldParams f = maskField();
-  padH_ = procgen::TerrainField(f).height(0.0f, 0.0f);
+  cpuField_ = std::make_unique<procgen::TerrainField>(f);
+  padH_ = cpuField_->height(0.0f, 0.0f);
   ++maskGen_; // field / palette may have changed: rebuild the cover tiles
 }
 
@@ -656,8 +687,39 @@ std::vector<GpuGrass::Blade> GpuGrass::readBlades(QOpenGLExtraFunctions *gl,
   return out;
 }
 
+GpuGrass::WaterGrid GpuGrass::waterGrid(float x0, float y0, float x1,
+                                        float y1) const {
+  WaterGrid g;
+  if (!cpuField_ || !cpuField_->water().enabled())
+    return g;
+  const procgen::WaterField &w = cpuField_->water();
+  const float cm = w.params().cellM;
+  g.cellM = cm;
+  g.orgX = int(std::floor(x0 / cm));
+  g.orgY = int(std::floor(y0 / cm));
+  g.nx = std::clamp(int(std::floor(x1 / cm)) - g.orgX + 1, 0, kMaxWaterCells);
+  g.ny = std::clamp(int(std::floor(y1 / cm)) - g.orgY + 1, 0, kMaxWaterCells);
+  g.data.assign(size_t(g.nx) * size_t(g.ny) * 12u, 0.0f);
+  for (int j = 0; j < g.ny; ++j)
+    for (int i = 0; i < g.nx; ++i) {
+      procgen::WaterBody b;
+      // (the cell's centre: a body never leaves its own cell)
+      if (!w.bodyAt(cpuField_->heightSource(), (float(g.orgX + i) + 0.5f) * cm,
+                    (float(g.orgY + j) + 0.5f) * cm, b))
+        continue;
+      float *r = &g.data[(size_t(j) * size_t(g.nx) + size_t(i)) * 12u];
+      r[0] = b.cx; r[1] = b.cy; r[2] = b.radiusM; r[3] = b.bankM;
+      r[4] = b.level; r[5] = b.depthM; r[6] = b.amp[0]; r[7] = b.amp[1];
+      r[8] = b.phase[0]; r[9] = b.phase[1]; r[10] = 1.0f; r[11] = 0.0f;
+    }
+  return g;
+}
+
 void GpuGrass::release(QOpenGLExtraFunctions *gl) {
   ready_ = false;
+  if (waterBuf_)
+    gl->glDeleteBuffers(1, &waterBuf_);
+  waterBuf_ = 0;
   fill_.reset();
   nodes_.reset();
   erode_.reset();
@@ -695,7 +757,7 @@ void GpuGrass::release(QOpenGLExtraFunctions *gl) {
 
 int GpuGrass::liveObjects() const {
   int n = (fill_ ? 1 : 0) + (comp_ ? 1 : 0) + (draw_ ? 1 : 0) +
-          (heightTex_ ? 1 : 0);
+          (heightTex_ ? 1 : 0) + (waterBuf_ ? 1 : 0);
   for (int i = 0; i < kNumRings; ++i)
     n += (mask_[i].tex ? 1 : 0) + (ssbo_[i] ? 1 : 0) + (indirect_[i] ? 1 : 0) + (counter_[i] ? 1 : 0) +
          (bladeVbo_[i].isCreated() ? 1 : 0) + (vao_[i].isCreated() ? 1 : 0);
@@ -883,6 +945,32 @@ void GpuGrass::render(QOpenGLExtraFunctions *gl, const QMatrix4x4 &proj,
       continue;
     const MaskTile &mk = mask_[i];
 
+    // Ponds over this ring's region (plus the node apron): the height shaders
+    // carve them in, as TerrainField::height() does for the mesh.
+    {
+      const float pad = float(kNodeApron + 4) * std::max(params_.meshStepM, 1.0f);
+      const WaterGrid wg = waterGrid(regionMin.x() - pad, regionMin.y() - pad,
+                                     regionMin.x() + regionSize + pad,
+                                     regionMin.y() + regionSize + pad);
+      waterDim_[0] = wg.nx;
+      waterDim_[1] = wg.ny;
+      waterOrg_[0] = wg.orgX;
+      waterOrg_[1] = wg.orgY;
+      waterCellM_ = wg.cellM > 0.0f ? wg.cellM : 1.0f;
+      const size_t bytes = std::max<size_t>(wg.data.size() * sizeof(float), 48u);
+      std::vector<float> pad48;
+      const float *src = wg.data.data();
+      if (wg.data.empty()) {
+        pad48.assign(12, 0.0f); // the buffer must not be empty
+        src = pad48.data();
+      }
+      gl->glBindBuffer(GL_SHADER_STORAGE_BUFFER, waterBuf_);
+      gl->glBufferData(GL_SHADER_STORAGE_BUFFER, GLsizeiptr(bytes), src,
+                       GL_DYNAMIC_DRAW);
+      gl->glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, waterBuf_);
+      gl->glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    }
+
     // The terrain-field uniforms both the node pass and the fill pass read.
     auto setTerrain = [&](QOpenGLShaderProgram *pr) {
       gl->glUniform1ui(pr->uniformLocation("u_seed"), params_.seed);
@@ -898,6 +986,9 @@ void GpuGrass::render(QOpenGLExtraFunctions *gl, const QMatrix4x4 &proj,
       pr->setUniformValue("u_reliefM", params_.field.shape == 1 ? 0.0f : params_.field.reliefM);
       pr->setUniformValue("u_gain", params_.gain);
       pr->setUniformValue("u_mountainMix", params_.mountainMix);
+      gl->glUniform2i(pr->uniformLocation("u_wOrg"), waterOrg_[0], waterOrg_[1]);
+      gl->glUniform2i(pr->uniformLocation("u_wDim"), waterDim_[0], waterDim_[1]);
+      pr->setUniformValue("u_wCellM", waterCellM_);
     };
 
     // --- pass 0: the slope-capped mesh surface on its own node lattice ---
