@@ -44,6 +44,7 @@
 #include "Atmosphere.h"
 #include "ShadowCascades.h"
 #include "procgen/Flora.h" // procgen::GrassLook
+#include "procgen/TerrainField.h"
 
 #include <cstdint>
 #include <future>
@@ -91,6 +92,14 @@ public:
     float x, y, negH, yaw, height, flower, bend, pad0, r, g, b, pad1;
   };
   // How many slope-cap node grids have been built (cache misses): tests.
+  // Pond records over a world rectangle, as the height shaders read them (see
+  // kFill): `dim` cells from cell `org`, 3 vec4 per cell. Tests.
+  struct WaterGrid {
+    int orgX = 0, orgY = 0, nx = 0, ny = 0;
+    float cellM = 0.0f;
+    std::vector<float> data;
+  };
+  WaterGrid waterGrid(float x0, float y0, float x1, float y1) const;
   int nodeGridBuilds() const { return nodeBuilds_; }
   // Blades the last render() put in `ring`'s buffer (debug readback, stalls the
   // GPU: tests only). Empty if not ready.
@@ -183,6 +192,11 @@ private:
   int texSize_ = 512;
   int maskSize_ = 512; // texels per mask tile side
   unsigned int ssbo_[kRings] = {0};     // per-ring blade instances
+  int waterOrg_[2] = {0, 0}, waterDim_[2] = {0, 0}; // this ring's pond cells
+  float waterCellM_ = 1.0f;
+  static constexpr int kMaxWaterCells = 48; // per side
+  unsigned int waterBuf_ = 0;           // pond records the height shaders carve with
+  std::unique_ptr<procgen::TerrainField> cpuField_; // the field the ponds come from
   unsigned int indirect_[kRings] = {0}; // per-ring DrawArraysIndirectCommand
   unsigned int counter_[kRings] = {0};  // per-ring atomic counter (-> indirect)
   QOpenGLBuffer bladeVbo_[kRings];      // per-ring LOD blade geometry

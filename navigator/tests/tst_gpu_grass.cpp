@@ -333,6 +333,103 @@ private slots:
   // The alpine preset has terms the plain field test above leaves at 0:
   // mountainBias, the flattened spawn pad and the relief hummocks. Blades must
   // sit on the mesh's own height there too (todo 81).
+  // Ponds are carved into TerrainField::height() (WaterField), so a blade on a
+  // bank must sit on the carved ground, not the bare field (the shore would
+  // otherwise show floating or sunken blades).
+  void gpuHeightFollowsWaterCarve() {
+    if (QGuiApplication::platformName() == "offscreen")
+      QSKIP("needs a real GL platform: QT_QPA_PLATFORM=xcb on an Xvfb with "
+            "LIBGL_ALWAYS_SOFTWARE=1");
+    QSurfaceFormat fmt;
+    fmt.setVersion(4, 3);
+    fmt.setProfile(QSurfaceFormat::CoreProfile);
+    QOpenGLContext ctx;
+    ctx.setFormat(fmt);
+    if (!ctx.create())
+      QSKIP("no GL 4.3 context");
+    QOffscreenSurface surf;
+    surf.setFormat(ctx.format());
+    surf.create();
+    QVERIFY(ctx.makeCurrent(&surf));
+    QOpenGLExtraFunctions gl(&ctx);
+
+    int measured = 0;
+    for (const char *id : {"meadow", "hills", "forest", "flat"}) {
+      procgen::PresetData pd;
+      if (!procgen::buildWorldPreset(id, 5u, pd))
+        continue;
+      FieldParams fp = pd.field;
+      const TerrainField cpu(fp);
+      if (!cpu.water().enabled())
+        continue;
+      // A pond: the first body on a lattice around the origin.
+      procgen::WaterBody body;
+      bool found = false;
+      for (int j = -6; j <= 6 && !found; ++j)
+        for (int i = -6; i <= 6 && !found; ++i)
+          found = cpu.water().bodyAt(cpu.heightSource(), 170.0f * float(i), 170.0f * float(j), body);
+      if (!found)
+        continue;
+
+      GpuGrass::Params p;
+      p.field = fp;
+      p.seed = fp.seed;
+      p.heightM = fp.heightM;
+      p.featureM = fp.featureM;
+      p.macroM = fp.macroM;
+      p.octaves = fp.octaves;
+      p.lacunarity = fp.lacunarity;
+      p.gain = fp.gain;
+      p.mountainMix = fp.mountainMix;
+      p.ridgeSoft = fp.ridgeSoft;
+      p.meshStepM = procgen::kStreamChunkM / float(procgen::kStreamChunkRes);
+      p.cell = 0.2f;
+      p.grid = 384;
+      p.asyncMask = false;
+      p.slopeLo = 0.0f;
+      p.slopeHi = 0.01f;
+      p.grassMaxFrac = 100.0f;
+      GpuGrass g;
+      g.setParams(p);
+      if (!g.init(&gl))
+        QSKIP("compute shaders unavailable on this GL");
+
+      const float reach = body.radiusM + body.bankM + 2.0f;
+      const float half = std::min(40.0f, reach + 6.0f);
+      QMatrix4x4 proj, view;
+      view.translate(-body.cx, -body.cy);
+      proj.ortho(-half, half, -half, half, -1000.0f, 1000.0f);
+      g.render(&gl, proj, view, QVector3D(body.cx, body.cy, 0.0f),
+               QVector3D(0.3f, 0.3f, -1.0f), 0.0f);
+      gl.glFinish();
+      const std::vector<GpuGrass::Blade> blades = g.readBlades(&gl, 0);
+      double sum = 0.0, worst = 0.0;
+      int n = 0;
+      for (const GpuGrass::Blade &b : blades) {
+        if (std::hypot(b.x - body.cx, b.y - body.cy) > reach)
+          continue; // only the pond and its bank
+        const double d = std::fabs(double(-b.negH) - double(cpu.height(b.x, b.y)));
+        sum += d;
+        worst = std::max(worst, d);
+        ++n;
+      }
+      qInfo("%s: pond r %.1f m, bank %.1f m, depth %.1f m: %d blades on the "
+            "pond/bank, mean |GPU - CPU| %.3f m, worst %.3f m",
+            id, double(body.radiusM), double(body.bankM), double(body.depthM), n,
+            n ? sum / n : 0.0, worst);
+      if (n >= 50) {
+        ++measured;
+        QVERIFY2(sum / n < 0.1, "blades on a pond bank do not follow the carved "
+                                "ground");
+        QVERIFY2(worst < 0.5, "a blade floats or sinks at the shore");
+      }
+      g.release(&gl);
+    }
+    ctx.doneCurrent();
+    if (measured == 0)
+      QSKIP("no preset gave a pond with blades on it");
+  }
+
   void gpuHeightFollowsAlpineTerms() {
     if (QGuiApplication::platformName() == "offscreen")
       QSKIP("needs a real GL platform: QT_QPA_PLATFORM=xcb on an Xvfb with "
