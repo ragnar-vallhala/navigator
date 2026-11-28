@@ -41,6 +41,7 @@
 #include "core/BatteryAlert.h"
 #include "core/BatteryEstimator.h"
 #include "core/FailsafeStatus.h"
+#include "core/GpsStatus.h"
 #include <QPointer>
 #include "Drone3DWidget.h"   // Added
 #include "TelemetryEngine.h" // owns DroneProtocol + the VehicleState store

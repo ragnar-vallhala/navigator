@@ -53,6 +53,7 @@ DroneProtocol::DroneProtocol(QObject *parent) : QObject(parent) {
   m_v2Router.onFailsafeStatus = [this](const FailsafeStatusData &d) {
     emit failsafeStatusReceived(d);
   };
+  m_v2Router.onGpsRaw = [this](const GpsRawData &d) { emit gpsRawReceived(d); };
   m_v2Router.onVerticalState = [this](const VerticalStateData &d) {
     emit verticalStateReceived(d);
   };

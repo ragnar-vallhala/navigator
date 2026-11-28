@@ -58,6 +58,7 @@ public:
   std::function<void(const BaroData &)> onBaro;
   std::function<void(const BatteryData &)> onBattery;
   std::function<void(const FailsafeStatusData &)> onFailsafeStatus;
+  std::function<void(const GpsRawData &)> onGpsRaw;
   std::function<void(const VerticalStateData &)> onVerticalState;
   std::function<void(const NotchStatusData &)> onNotchStatus;
   std::function<void(const HslStatusData &)> onHslStatus;

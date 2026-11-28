@@ -42,6 +42,9 @@ struct VehicleState {
   // FAILSAFE_STATUS (msgid 1051): the FC's own safety decisions. lastFailsafeMs
   // stays 0 until the first one arrives: that is "unknown", never "OK".
   FailsafeStatusData failsafe{};
+  // GPS_RAW (msgid 1052): the receiver's report. lastGpsMs stays 0 until the
+  // first one: "no GPS", never a fix.
+  GpsRawData gps{};
   VerticalStateData
       vertical{}; // fused VERT estimate (VERTICAL_STATE, msgid 1040)
 
@@ -61,6 +64,7 @@ struct VehicleState {
   qint64 lastBaroMs = 0;
   qint64 lastBatteryMs = 0;
   qint64 lastFailsafeMs = 0;
+  qint64 lastGpsMs = 0;
   qint64 lastVerticalMs = 0;
 
   // Rolling attitude std-devs (deg), computed by the engine on each attitude

@@ -37,6 +37,9 @@ public:
   // The Power group's Failsafe field: what the flight controller's own safety
   // logic says (core/FailsafeStatus.h). `alarm` colours it for attention.
   void setFailsafe(const QString &text, bool alarm);
+  // The Power group's GPS field: the receiver's fix and satellites
+  // (core/GpsStatus.h). `alarm` colours it when there is no usable position.
+  void setGps(const QString &text, bool alarm);
 
 signals:
   void backToHomeRequested();
@@ -55,6 +58,8 @@ private:
   QLabel *m_battery = nullptr;
   QLabel *m_failsafe = nullptr;
   QString m_failsafeBaseStyle;
+  QLabel *m_gps = nullptr;
+  QString m_gpsBaseStyle;
   QLabel *m_current = nullptr;
   QLabel *m_escTemp = nullptr;
   QLabel *m_mahUsed = nullptr;

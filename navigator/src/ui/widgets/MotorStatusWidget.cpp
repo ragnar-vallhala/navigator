@@ -332,6 +332,10 @@ MotorStatusWidget::MotorStatusWidget(QWidget *parent) : QWidget(parent) {
   m_failsafe->setWordWrap(true);
   m_failsafeBaseStyle = m_failsafe->styleSheet();
   m_failsafe->setText(tr("unknown"));
+  m_gps = addPowerField(powerGrid, 7, tr("GPS"));
+  m_gps->setWordWrap(true);
+  m_gpsBaseStyle = m_gps->styleSheet();
+  m_gps->setText(tr("no GPS"));
   // Current / ESC-temp / mAh have no telemetry source yet → they stay "-" (set
   // by addPowerField) so absent data isn't mistaken for a real value. Battery
   // reads "-" too until BATTERY telemetry arrives (setBattery).
@@ -370,6 +374,19 @@ void MotorStatusWidget::setMotorSpeeds(const QVector<float> &speeds) {
 void MotorStatusWidget::setBattery(const QString &text) {
   if (m_battery && m_battery->text() != text)
     m_battery->setText(text);
+}
+
+void MotorStatusWidget::setGps(const QString &text, bool alarm) {
+  if (!m_gps)
+    return;
+  if (m_gps->text() != text) {
+    m_gps->setText(text);
+    m_gps->setToolTip(text);
+  }
+  const QString style =
+      alarm ? m_gpsBaseStyle + QStringLiteral("color: #E06C75;") : m_gpsBaseStyle;
+  if (m_gps->styleSheet() != style)
+    m_gps->setStyleSheet(style);
 }
 
 void MotorStatusWidget::setFailsafe(const QString &text, bool alarm) {
